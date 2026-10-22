@@ -374,7 +374,7 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
   </div>
 }
 
-function StorageLab({ scanId, setError }) {
+function StorageLab({ scanId, setError, activeVolume, setActiveVolume }) {
   const [data, setData] = useState(null)
   const [path, setPath] = useState('')
   const [roots, setRoots] = useState([])
@@ -486,7 +486,15 @@ function StorageLab({ scanId, setError }) {
 
     <Card title="NTFS Extents + read benchmark">
       <label>Локальный том</label>
-      <select value="" onChange={e => e.target.value && setPath(e.target.value)}>
+      <select
+        value={roots.some(item => path.startsWith(item.path)) ? roots.find(item => path.startsWith(item.path))?.path || activeVolume : activeVolume}
+        onChange={e => {
+          const value = e.target.value
+          if (!value) return
+          setActiveVolume(value)
+          setPath(value)
+        }}
+      >
         <option value="">Выбрать том / корень…</option>
         {roots.map(item => <option key={item.path} value={item.path}>{item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}</option>)}
       </select>

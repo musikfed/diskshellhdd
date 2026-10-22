@@ -41,7 +41,16 @@ def format_plan(
         "confirmation": f"FORMAT DISK {disk_number}",
         "allowed": write_state_for_disk(disk)["allowed"],
         "warning": "This operation destroys all existing partitions and data on the selected disk.",
-        "recommended_for_mixed_storage": allocation_unit == 4096,
+        "allocation_profile": (
+            "universal"
+            if allocation_unit == 4096
+            else "mixed_large_storage"
+            if allocation_unit == 16384
+            else "large_sequential"
+            if allocation_unit == 65536
+            else "manual"
+        ),
+        "recommended_for_mixed_storage": allocation_unit in {4096, 16384},
     }
 
 

@@ -1,114 +1,152 @@
-# Развёртывание DiskShell 0.5.2.1 на Windows 11
+# Развёртывание DiskShell 0.6.0
 
-## Чистая установка / восстановление
+DiskShell 0.6.0 — первая зафиксированная рабочая admin baseline. GitHub `main` считается источником истины.
 
-GitHub `main` — источник истины.
+## Важно про права администратора
+
+Для обычного просмотра файлов часть функций может работать без повышения прав, но **DiskShell как storage-admin приложение рекомендуется запускать backend из elevated shell**, если используются physical disks, Surface Diagnostics, Recovery raw probes, Initialize/Partition/Format или NTFS extent diagnostics.
+
+Backend по умолчанию слушает только `127.0.0.1:8765`. Не меняй `DS_HOST` на `0.0.0.0` для elevated/root процесса, пока не включена полноценная удалённая аутентификация.
+
+`DS_DEBUG=0` — рекомендуемый режим. При нём `python -m backend.app` использует Waitress. Flask debugger предназначен только для локальной разработки.
+
+## Windows 11 — установка / обновление
+
+Установку зависимостей и frontend build можно выполнять в обычном PowerShell:
 
 ```powershell
-Set-Location F:\
-Remove-Item F:\diskshellhdd -Recurse -Force -ErrorAction SilentlyContinue
-git clone "https://github.com/musikfed/diskshellhdd.git" "F:\diskshellhdd"
 Set-Location "F:\diskshellhdd"
-Copy-Item .env.example .env
+
+git fetch origin
+git reset --hard origin/main
+
+if (-not (Test-Path .env)) {
+    Copy-Item .env.example .env
+}
+
 uv sync --group dev
 uv run ruff check backend tests
 uv run pytest -v
+
 npm run ui:install
 npm run build
-uv run python -m backend.app
 ```
 
-Открыть `http://127.0.0.1:8765/`.
+### ОБЯЗАТЕЛЬНЫЙ admin CLI запуск backend
 
-Если нужны старые scan history / Vault runtime files, заранее сохрани `data` и верни его до первого запуска backend. SQLite migrations выполняются автоматически.
+Закрой старый backend. Затем открой **Windows PowerShell / Windows Terminal → Запуск от имени администратора**.
 
-## Disk write в 0.5
-
-Оставлять рекомендуется:
-
-```text
-DS_ALLOW_DISK_WRITES=0
-```
-
-Это отключает **global override**, но не блокирует администраторский workflow. На странице Disks:
-
-1. выбери physical disk;
-2. проверь model / serial / UniqueId / size;
-3. нажми «Разблокировать только этот диск»;
-4. введи точную фразу;
-5. runtime unlock действует 15 минут;
-6. после работы нажми «Заблокировать запись».
-
-System / Boot / Application disk разблокировать нельзя.
-
-`DS_ALLOW_DISK_WRITES=1` — глобальный override для контролируемой лаборатории/automation и для обычной эксплуатации не рекомендуется.
-
-## Partition / Volume Manager
-
-0.5 умеет:
-
-- initialize RAW disk как GPT или MBR;
-- создать partition в unallocated space;
-- использовать максимальный free extent или заданный размер;
-- форматировать новый volume в NTFS/exFAT;
-- выбрать cluster 4/8/16/32/64 KiB;
-- назначить drive letter;
-- destructive whole-disk workflow Clear → Initialize GPT → one maximum partition → Format.
-
-Все write-операции требуют per-disk unlock и typed confirmation.
-
-## Stop buttons
-
-Stop доступен для Quick Index, Placement Executor, двухпанельных Files Copy/Move и Security Scan. Отмена cooperative: уже завершённая атомарная операция не отменяется молча.
-
-## Recovery
-
-Recovery page пока read-only: topology snapshots сохраняются в SQLite, raw signature probe читает MBR/GPT и boot sectors. Это диагностическая основа для будущего recovery engine, а не обещание автоматического восстановления данных.
-
-## Security
-
-Используются локальные Microsoft Defender или ClamAV. DiskShell запускает scan без remediation. Если ни один engine не найден, UI это показывает.
-
-## Extras
-
-Preview PDF/7Z/ISO: `uv sync --group dev --extra preview`.
-
-Photos/People: `uv sync --group dev --extra vision`, затем задать локальные YuNet/SFace ONNX paths.
-
-До появления remote-auth оставлять `DS_HOST=127.0.0.1`.
-
-См. также [SAFETY.ru.md](SAFETY.ru.md).
-
-## Разметка и размер томов в 0.5.2
-
-На RAW-диске значение free extent до Initialize не используется как размер будущего тома. Сначала можно:
-
-- выполнить только Initialize GPT, затем через «+ Раздел / том» создать один или несколько томов нужного размера;
-- либо открыть destructive wizard «Очистить + первый том», указать размер первого тома и оставить остаток Unallocated.
-
-Поддерживаемые через текущий Windows Storage adapter FS: NTFS, exFAT, ReFS, FAT32, FAT. Конкретную применимость ReFS и legacy FS окончательно определяет установленная Windows.
-
-`NTFS 16 KiB` остаётся нормальным mixed-large-storage выбором для WD Purple 4 TB.
-
-## Progress semantics
-
-Не считать движущуюся полоску процентом, если total неизвестен. UI явно подписывает такие операции как «процент неизвестен». Реальный `%` показывается только там, где backend знает total bytes/items.
-
-## Administrator privileges для разметки
-
-Просмотр/сканирование можно выполнять обычным пользователем. Initialize GPT, partition, format и изменение drive letter требуют elevated PowerShell/Terminal.
-
-Проверка теперь встроена в DiskShell. Если backend не elevated, на странице Disks появится предупреждение, а write-кнопки будут disabled.
-
-Пример запуска:
+Можно открыть elevated PowerShell командой:
 
 ```powershell
 Start-Process powershell -Verb RunAs
 ```
 
-В открывшемся elevated PowerShell:
+В новом окне с правами Administrator:
 
 ```powershell
 Set-Location "F:\diskshellhdd"
+
 uv run python -m backend.app
 ```
+
+Открыть UI:
+
+```text
+http://127.0.0.1:8765/
+```
+
+В нормальном admin runtime при `DS_DEBUG=0` backend работает через Waitress.
+
+## Linux — bash
+
+Linux может запускать Web UI, SQLite index, Analytics, Commander, SFTP/FTP и другие переносимые части. Windows Storage cmdlets, Windows physical-drive paths и NTFS/fsutil-specific функции остаются Windows-specific и на Linux могут быть недоступны.
+
+Зависимости и frontend собирай **обычным пользователем**:
+
+```bash
+cd /path/to/diskshellhdd
+
+git fetch origin
+git reset --hard origin/main
+
+test -f .env || cp .env.example .env
+
+uv sync --group dev
+uv run ruff check backend tests
+uv run pytest -v
+
+npm run ui:install
+npm run build
+```
+
+### Admin/root CLI запуск backend
+
+Не запускай `sudo uv sync` или `sudo npm`. Повышай права только у backend-процесса:
+
+```bash
+cd /path/to/diskshellhdd
+sudo -E "$(pwd)/.venv/bin/python" -m backend.app
+```
+
+UI:
+
+```text
+http://127.0.0.1:8765/
+```
+
+Если root создал файлы в `data/`, учитывай их ownership при последующих запусках обычным пользователем.
+
+## Safety gates 0.6.0
+
+Рекомендуемый `.env`:
+
+```text
+DS_HOST=127.0.0.1
+DS_DEBUG=0
+
+DS_ALLOW_FILE_WRITES=0
+DS_ALLOW_VAULT_WRITES=0
+DS_ALLOW_DISK_WRITES=0
+DS_ALLOW_EXTENT_MOVES=0
+```
+
+- `DS_ALLOW_FILE_WRITES=0`: global override выключен. В Files/Storage Brain есть RAM-тумблер `FILE WRITE LOCKED ⇄ ENABLED`; он действует до ручного выключения или restart backend.
+- `DS_ALLOW_DISK_WRITES=0`: global disk override выключен. Для конкретного non-protected physical disk WRITE включается отдельным identity-bound тумблером.
+- System / Boot / Application disks остаются backend-protected.
+- `DS_ALLOW_EXTENT_MOVES=0`: реальное принудительное перемещение NTFS extents отключено.
+
+## Первый рабочий цикл
+
+1. **Диски** — проверь identity диска, topology, filesystem и Health.
+2. **Diagnostics** — Quick surface scan выбранного physical disk.
+3. **Обследование** — выбери локальный том и создай Quick Index.
+4. **Analytics** — проверь размеры/категории.
+5. **Storage Brain** — выбери HDD volume/root, Source scope и построй plan.
+6. Plan создаётся **без выбранных items**. Поставь галочки только на нужные файлы или используй фильтр + «Выбрать все в фильтре».
+7. Включи `FILE WRITE ENABLED`.
+8. Выбери integrity mode: Size или SHA-256.
+9. Примени выбранный batch.
+10. После publish DiskShell проверяет фактические **NTFS logical extents** и показывает `layout OK / drift / unavailable`.
+
+## Что означает проверка “нарезки”
+
+Текущая 0.6.0 **не принуждает NTFS писать файл шахматными macro-bands**. Она:
+
+- рассчитывает lane + target band policy;
+- переносит выбранные данные;
+- проверяет целостность;
+- читает фактические NTFS extents через Windows;
+- сравнивает actual extent count с ожидаемым macro-band профилем.
+
+Это проверка логического NTFS layout. HDD firmware не открывает DiskShell точное физическое расположение по platter/head/angular position.
+
+Принудительный Managed Interleave writer / rebalancer остаётся следующим experimental этапом и не включается, пока `DS_ALLOW_EXTENT_MOVES=0`.
+
+## Данные и миграции
+
+SQLite находится в `data/diskshell.db` по умолчанию. Миграции выполняются автоматически при запуске.
+
+Если база и история важны, перед жёстким reset репозитория сделай копию `data/`.
+
+См. также [SAFETY.ru.md](SAFETY.ru.md) и [ARCHITECTURE.ru.md](ARCHITECTURE.ru.md).

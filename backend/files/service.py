@@ -87,3 +87,18 @@ def trash_item(path: str | Path) -> dict:
     target = _resolved(path)
     send2trash(str(target))
     return {"status": "trashed", "path": str(target)}
+
+
+def rename_item(source: str | Path, destination: str | Path) -> dict:
+    _require_writes()
+    src = _resolved(source)
+    dst = Path(destination).expanduser().resolve()
+    if dst.exists():
+        raise FileExistsError(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dst)
+    return {
+        "status": "renamed",
+        "source": str(src),
+        "destination": str(dst),
+    }

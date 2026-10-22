@@ -464,7 +464,9 @@ def _run_batch_job(
                             100.0,
                             job["bytes"] * 100.0 / total,
                         )
-            except (CommanderCancelled, Exception):
+            except Exception:
+                # Roll back only the current incomplete destination. Previous
+                # batch items were already verified and remain completed.
                 if created_target:
                     try:
                         _delete_endpoint(destination)

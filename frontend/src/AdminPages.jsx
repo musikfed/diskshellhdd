@@ -508,10 +508,14 @@ export function DisksAdmin({ setError }) {
 
 export function ScanAdmin({ scanId, setScanId, setError }) {
   const [path, setPath] = useState(localStorage.getItem('scanPath') || 'F:\\')
+  const [roots, setRoots] = useState([])
   const [jobId, setJobId] = useState(localStorage.getItem('scanJobId') || '')
   const [job, setJob] = useState(null)
 
   useEffect(() => { localStorage.setItem('scanPath', path) }, [path])
+  useEffect(() => {
+    api('/api/files/roots').then(x => setRoots(x.roots || [])).catch(() => {})
+  }, [])
   useEffect(() => {
     if (!jobId) return undefined
     localStorage.setItem('scanJobId', jobId)
@@ -571,6 +575,11 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
       <div className="workbench-hero">
         <div className="hero-symbol">⌕</div>
         <div className="grow">
+          <label>Том / диск для обследования</label>
+          <select value={roots.some(item => item.path === path) ? path : ''} onChange={e => e.target.value && setPath(e.target.value)}>
+            <option value="">Выбрать локальный том…</option>
+            {roots.map(item => <option key={item.path} value={item.path}>{item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}</option>)}
+          </select>
           <label>Папка или корень тома</label>
           <input value={path} onChange={e => setPath(e.target.value)} />
           <div className="actions">
@@ -1169,6 +1178,7 @@ export function SecurityAdmin({ setError }) {
   const [engines, setEngines] = useState([])
   const [engine, setEngine] = useState('auto')
   const [path, setPath] = useState(localStorage.getItem('securityPath') || 'F:\\')
+  const [roots, setRoots] = useState([])
   const [jobId, setJobId] = useState(localStorage.getItem('securityJobId') || '')
   const [job, setJob] = useState(null)
   const [results, setResults] = useState([])
@@ -1176,9 +1186,14 @@ export function SecurityAdmin({ setError }) {
   const terminal = useMemo(() => new Set(['clean', 'threats_found', 'error', 'cancelled']), [])
 
   const refresh = async () => {
-    const [caps, history] = await Promise.all([api('/api/security/engines'), api('/api/security/results')])
+    const [caps, history, rootData] = await Promise.all([
+      api('/api/security/engines'),
+      api('/api/security/results'),
+      api('/api/files/roots'),
+    ])
     setEngines(caps.engines || [])
     setResults(history.results || [])
+    setRoots(rootData.roots || [])
   }
 
   useEffect(() => { refresh().catch(e => setError(e.message)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1229,6 +1244,11 @@ export function SecurityAdmin({ setError }) {
     <Panel title="Local malware scan · no remediation">
       <p>DiskShell использует установленный Microsoft Defender или ClamAV. Облако не требуется; этот раздел только сканирует и не удаляет найденные файлы.</p>
       <div className="engine-grid">{engines.map(e => <div key={e.id} className={e.available ? 'available' : 'unavailable'}><b>{e.title}</b><span>{e.available ? 'available' : 'not installed'}</span><small>{e.path || '—'}</small></div>)}</div>
+      <label>Локальный том</label>
+      <select value={roots.some(item => item.path === path) ? path : ''} onChange={e => e.target.value && setPath(e.target.value)}>
+        <option value="">Выбрать том…</option>
+        {roots.map(item => <option key={item.path} value={item.path}>{item.path} · {item.filesystem || 'FS'}</option>)}
+      </select>
       <label>Файл или каталог</label>
       <input value={path} onChange={e => setPath(e.target.value)} />
       <select value={engine} onChange={e => setEngine(e.target.value)}>

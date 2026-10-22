@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import ftplib
 import io
 import posixpath
@@ -356,7 +357,9 @@ class SFTPSession(RemoteSession):
         try:
             attr = self.sftp.stat(normalized)
         except OSError as exc:
-            raise RemoteNotFound(normalized) from exc
+            if getattr(exc, "errno", None) == errno.ENOENT:
+                raise RemoteNotFound(normalized) from exc
+            raise RemoteConnectionError(str(exc)) from exc
         is_dir = statmod.S_ISDIR(attr.st_mode)
         mtime = getattr(attr, "st_mtime", None)
         return RemoteEntry(

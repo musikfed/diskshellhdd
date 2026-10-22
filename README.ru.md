@@ -1,4 +1,4 @@
-# DiskShell HDD 0.5.3
+# DiskShell HDD 0.5.6
 
 Русский · [English](README.md)
 
@@ -18,7 +18,7 @@
 - Placement Executor запускается background-job, имеет Stop; cross-volume copy идёт chunks и удаляет partial-файл при отмене.
 - Recovery / Forensics: persistent topology snapshots и read-only raw signature probe MBR/GPT/NTFS/exFAT/FAT32/BitLocker.
 - Security: локальный scan через Microsoft Defender или ClamAV, без remediation, с Stop и историей результатов.
-- Analytics, Files, Preview/Archives, Photos/People, Vault и Storage Lab остаются частью приложения.
+- Analytics, Commander Files, Photos/People, Vault и Storage Lab остаются частью приложения.
 - Python backend only; Rust не используется.
 
 ## Для кого
@@ -54,8 +54,6 @@ uv run python -m backend.app
 
 Открыть: `http://127.0.0.1:8765/`.
 
-Дополнительные preview providers: `uv sync --group dev --extra preview`.
-
 Локальный Photos/People engine: `uv sync --group dev --extra vision` и задать пути YuNet/SFace ONNX в `.env`.
 
 ## WD Purple / основной storage
@@ -64,7 +62,7 @@ uv run python -m backend.app
 
 Подробнее: [архитектура](docs/ARCHITECTURE.ru.md) · [развёртывание](docs/DEPLOYMENT.ru.md) · [безопасность](docs/SAFETY.ru.md).
 
-## Storage wizard 0.5.3
+## Storage wizard 0.5.6
 
 DiskShell различает три операции:
 
@@ -84,7 +82,7 @@ Cluster sizes показываются по выбранной FS. Backend до�
 - Defender/ClamAV: indeterminate, потому что движок не отдаёт надёжный общий объём.
 - Initialize/partition/format: activity indicator без фиктивного процента; принудительный Stop во время изменения partition table намеренно не предлагается.
 
-## Adaptive Macro Interleave 0.5.3
+## Adaptive Macro Interleave 0.5.6
 
 Storage Lab больше не моделирует одинаковые фиксированные куски. Вместо этого используется bounded macro-interleave:
 
@@ -100,7 +98,7 @@ Storage Lab больше не моделирует одинаковые фикс
 
 Симулятор показывает tiny/oversized split extents, max extents per file и итоговый quality. Реальное NTFS extent relocation всё ещё выключено и остаётся отдельным experimental этапом.
 
-## RAW disk workflow 0.5.4
+## RAW disk workflow 0.5.6
 
 Для RAW-диска DiskShell больше не предлагает основной shortcut «GPT + первый том». Безопасный путь разделён на стадии:
 
@@ -113,3 +111,23 @@ Storage Lab больше не моделирует одинаковые фикс
 UI показывает stepper и фиксированный activity-status поверх окна. Внутри Initialize-Disk / New-Partition / Format-Volume честного процента Windows не предоставляет, поэтому DiskShell показывает этап, а не выдуманный процент.
 
 Destructive Windows Storage operations требуют запуска backend от имени Administrator. Страница Disks теперь показывает это явно и блокирует write-кнопки, если процесс не elevated.
+
+## Commander 0.5.6
+
+`Files` теперь является единым двухпанельным Commander. Отдельная вкладка Preview / Archives удалена.
+
+- каждая панель: Local, SFTP/SSH, FTP или FTPS;
+- локальные панели имеют выбор диска/root и текущего пути;
+- remote credentials живут только в RAM backend и не записываются в SQLite/localStorage;
+- F2 Rename, F3 View, F5 Copy, F6 Move, F7 MkDir, F8 Trash/Delete, F9 Archive, Esc Stop;
+- локальный delete использует Recycle Bin; remote delete является явным необратимым удалением;
+- Preview и Archive/ISO browser встроены в Commander;
+- ZIP/TAR/TAR.GZ/7Z создаются из Commander; ZIP/TAR/7Z безопасно распаковываются; RAR/CAB/WIM используют 7-Zip CLI, если он установлен;
+- SFTP работает через Paramiko; FTP/FTPS — через Python ftplib;
+- transfer jobs поддерживают Local↔Local, Local↔Remote и Remote↔Remote с size verification и cooperative Stop.
+
+### Direct и Smart transfer
+
+`Smart placement` выключен по умолчанию. В Direct-режиме файл попадает ровно в открытую папку второй панели. В Smart-режиме при переносе в локальный HDD root DiskShell выбирает Storage Class (`Media/Photos/Archive/...`) и сохраняет lane/target-band hint. Сами байты всё равно передаются тем же проверяемым Commander job.
+
+Реальное принудительное перемещение NTFS extents пока не включено. Будущий Smart Fragmentation Verifier должен сравнивать фактические extents после переноса с lane/band policy и только диагностировать drift, пока `DS_ALLOW_EXTENT_MOVES=0`.

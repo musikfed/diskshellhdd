@@ -8,6 +8,7 @@ from backend.services.storage.filesystem_profiles import (
     filesystem_names,
     filesystem_profile,
     validate_allocation_unit,
+    validate_volume_size,
 )
 from backend.services.storage.windows_disks import list_windows_disks
 from backend.services.storage.write_authorization import (
@@ -57,6 +58,7 @@ def format_plan(
     use_maximum = size_bytes in {None, 0}
     requested = None if use_maximum else int(size_bytes)
     disk_size = int(disk.get("size") or 0)
+    target_size = disk_size if requested is None else requested
     if requested is not None:
         if requested < _MIN_CUSTOM_PARTITION_BYTES:
             raise ValueError("Custom partition must be at least 16 MiB")
@@ -65,6 +67,7 @@ def format_plan(
                 "Custom partition size must be smaller than the physical disk; "
                 "leave size empty to use the maximum available space"
             )
+    validate_volume_size(fs, cluster, target_size)
 
     warnings = [
         "This operation destroys all existing partitions and data on the selected disk.",

@@ -337,7 +337,10 @@ def _ensure_zero_length_destination(endpoint: dict[str, Any]) -> None:
             raise OSError(f"Expected empty target, got {entry.size} bytes")
 
 
-def _endpoint_state(endpoint: dict[str, Any]) -> dict[str, Any]:
+def _endpoint_state(
+    endpoint: dict[str, Any],
+    connect_remote: bool = True,
+) -> dict[str, Any]:
     if endpoint["kind"] == "local":
         return local_endpoint_state(endpoint)
 
@@ -360,6 +363,14 @@ def _endpoint_state(endpoint: dict[str, Any]) -> dict[str, Any]:
                 "expected_identity": expected,
                 "current_identity": current,
             }
+
+    if not connect_remote:
+        return {
+            "available": True,
+            "reason": None,
+            "expected_identity": expected,
+            "current_identity": current,
+        }
 
     try:
         with open_session(endpoint["connection_id"]):
@@ -390,10 +401,11 @@ def _endpoint_state(endpoint: dict[str, Any]) -> dict[str, Any]:
 def _unavailable_endpoints(
     source: dict[str, Any],
     destination: dict[str, Any],
+    connect_remote: bool = True,
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for role, endpoint in (("source", source), ("destination", destination)):
-        state = _endpoint_state(endpoint)
+        state = _endpoint_state(endpoint, connect_remote=connect_remote)
         if not state.get("available"):
             result.append(
                 {
@@ -435,7 +447,7 @@ def _wait_for_endpoints(
 ) -> None:
     while True:
         _check_cancel(event)
-        unavailable = _unavailable_endpoints(source, destination)
+        unavailable = _unavailable_endpoints(source, destination, connect_remote=True)
         if not unavailable:
             wait_status(False, [], current_path, error)
             return
@@ -453,20 +465,30 @@ def _run_endpoint_operation(
     current_path: str,
 ):
     while True:
-        _wait_for_endpoints(
+        unavailable = _unavailable_endpoints(
             source,
             destination,
-            event,
-            wait_status,
-            current_path,
-            "endpoint unavailable",
+            connect_remote=False,
         )
+        if unavailable:
+            _wait_for_endpoints(
+                source,
+                destination,
+                event,
+                wait_status,
+                current_path,
+                "endpoint unavailable",
+            )
         try:
             return action()
         except CommanderCancelled:
             raise
         except Exception as exc:
-            unavailable = _unavailable_endpoints(source, destination)
+            unavailable = _unavailable_endpoints(
+                source,
+                destination,
+                connect_remote=True,
+            )
             if unavailable or _looks_like_endpoint_loss(exc):
                 _wait_for_endpoints(
                     source,
@@ -525,7 +547,11 @@ def _copy_file(
 
     while True:
         _check_cancel(event)
-        unavailable = _unavailable_endpoints(source, destination)
+        unavailable = _unavailable_endpoints(
+            source,
+            destination,
+            connect_remote=False,
+        )
         if unavailable:
             _wait_for_endpoints(
                 source,
@@ -603,7 +629,11 @@ def _copy_file(
         except CommanderCancelled:
             raise
         except Exception as exc:
-            unavailable = _unavailable_endpoints(source, destination)
+            unavailable = _unavailable_endpoints(
+                source,
+                destination,
+                connect_remote=True,
+            )
             if unavailable:
                 _wait_for_endpoints(
                     source,

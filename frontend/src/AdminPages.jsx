@@ -1268,6 +1268,20 @@ function paneTarget(pane, item = null) {
   return { kind: 'remote', connection_id: pane.connectionId, path }
 }
 
+function paneSelectedItems(pane) {
+  const items = pane.data?.items || []
+  const paths = new Set(pane.selectedPaths || [])
+  if (paths.size) return items.filter(item => paths.has(item.path))
+  return pane.selected ? [pane.selected] : []
+}
+
+function selectedItemsBytes(items) {
+  return items.reduce((total, item) => {
+    if (item.is_dir && !item.size_known) return total
+    return total + Number(item.size || 0)
+  }, 0)
+}
+
 function isArchiveName(name = '') {
   return /\.(zip|7z|rar|tar|tgz|gz|bz2|xz|cab|iso|wim)$/i.test(name)
 }
@@ -1287,12 +1301,20 @@ function CommanderPane({
   busy,
   load,
   choose,
+  selectAll,
+  clearSelection,
   connectRemote,
   disconnectRemote,
 }) {
   const remote = state.sourceType !== 'local'
   const profile = connections.find(item => item.id === state.connectionId)
   const form = state.remoteForm || {}
+  const selectedItems = paneSelectedItems(state)
+  const selectedPaths = new Set(state.selectedPaths || [])
+  const selectedBytes = selectedItemsBytes(selectedItems)
+  const unknownDirectorySizes = selectedItems.filter(
+    item => item.is_dir && !item.size_known,
+  ).length
 
   function patchForm(values) {
     setState(current => ({
@@ -1314,6 +1336,8 @@ function CommanderPane({
             connectionId: sourceType === 'local' ? '' : current.connectionId,
             data: null,
             selected: null,
+            selectedPaths: [],
+            anchorPath: null,
             path: sourceType === 'local' ? (roots[0]?.path || current.path || 'C:\\') : '/',
             remoteForm: {
               ...(current.remoteForm || {}),
@@ -1367,12 +1391,24 @@ function CommanderPane({
       <button disabled={busy || (remote && !state.connectionId)} onClick={() => load(side, state.path)}>↻</button>
     </div>
 
+    <div className="commander-selection-toolbar">
+      <div>
+        <button disabled={busy || !(state.data?.items?.length)} onClick={() => selectAll(side)}>☑ Select all</button>
+        <button disabled={busy || selectedItems.length === 0} onClick={() => clearSelection(side)}>☐ Clear</button>
+      </div>
+      <span>
+        {selectedItems.length} selected · {fmtBytes(selectedBytes)}
+        {unknownDirectorySizes ? ` + ${unknownDirectorySizes} folder(s) without indexed size` : ''}
+      </span>
+      <small>Ctrl+Click · Shift+Click · Ctrl+A</small>
+    </div>
+
     <div className="commander-columns"><span>Name</span><span>Size</span><span>Modified</span></div>
     <div className="file-list commander-list">
       {(state.data?.items || []).slice(0, 4000).map(item => <button
         key={item.path}
-        className={state.selected?.path === item.path ? 'selected' : ''}
-        onClick={() => choose(side, item)}
+        className={selectedPaths.has(item.path) ? 'selected' : ''}
+        onClick={event => choose(side, item, event)}
         onDoubleClick={() => item.is_dir && !busy && load(side, item.path)}
       >
         <span title={item.path}>{item.is_dir ? '📁' : '📄'} {item.name}</span>
@@ -1384,10 +1420,8 @@ function CommanderPane({
     </div>
     <div className="pane-status">
       <span>{state.data?.items?.length || 0} items</span>
-      <span>{state.selected
-        ? `${state.selected.name} · ${state.selected.is_dir
-          ? (state.selected.size_known ? fmtBytes(state.selected.size) : 'size not indexed')
-          : fmtBytes(state.selected.size)}`
+      <span>{selectedItems.length
+        ? `${selectedItems.length} selected · ${fmtBytes(selectedBytes)}${unknownDirectorySizes ? ' + unknown folder sizes' : ''}`
         : 'nothing selected'}</span>
     </div>
   </Panel>
@@ -1427,6 +1461,8 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     path: localStorage.getItem(`file${side}Path`) || 'F:\\',
     data: null,
     selected: null,
+    selectedPaths: [],
+    anchorPath: null,
     connectionId: '',
     remoteForm: {
       protocol: 'sftp',
@@ -1500,7 +1536,14 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
       const data = pane.sourceType === 'local'
         ? await api(`/api/files?path=${encodeURIComponent(path)}${scanQuery}`)
         : await api(`/api/commander/remote?connection_id=${encodeURIComponent(pane.connectionId)}&path=${encodeURIComponent(path)}`)
-      const next = { ...pane, path: data.path, data, selected: null }
+      const next = {
+        ...pane,
+        path: data.path,
+        data,
+        selected: null,
+        selectedPaths: [],
+        anchorPath: null,
+      }
       if (side === 'left') {
         setLeft(next)
         if (next.sourceType === 'local') localStorage.setItem('fileLeftPath', data.path)
@@ -1511,13 +1554,81 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     } catch (e) { setError(e.message) }
   }
 
-  function choose(side, item) {
+  function choose(side, item, event = null) {
+    const ctrl = Boolean(event?.ctrlKey || event?.metaKey)
+    const shift = Boolean(event?.shiftKey)
     setActiveSide(side)
     setPreview(null)
     setArchive(null)
     setRemoteOrigin('')
-    if (side === 'left') setLeft(current => ({ ...current, selected: item }))
-    else setRight(current => ({ ...current, selected: item }))
+
+    const setter = side === 'left' ? setLeft : setRight
+    setter(current => {
+      const items = current.data?.items || []
+      const existing = new Set(current.selectedPaths || [])
+      let nextPaths = []
+      let anchorPath = current.anchorPath
+
+      if (shift && anchorPath) {
+        const anchorIndex = items.findIndex(row => row.path === anchorPath)
+        const currentIndex = items.findIndex(row => row.path === item.path)
+        if (anchorIndex >= 0 && currentIndex >= 0) {
+          const [from, to] = anchorIndex <= currentIndex
+            ? [anchorIndex, currentIndex]
+            : [currentIndex, anchorIndex]
+          const range = items.slice(from, to + 1).map(row => row.path)
+          nextPaths = ctrl
+            ? Array.from(new Set([...existing, ...range]))
+            : range
+        } else {
+          nextPaths = [item.path]
+          anchorPath = item.path
+        }
+      } else if (ctrl) {
+        if (existing.has(item.path)) existing.delete(item.path)
+        else existing.add(item.path)
+        nextPaths = Array.from(existing)
+        anchorPath = item.path
+      } else {
+        nextPaths = [item.path]
+        anchorPath = item.path
+      }
+
+      const nextSelected = nextPaths.includes(item.path)
+        ? item
+        : items.find(row => nextPaths.includes(row.path)) || null
+
+      return {
+        ...current,
+        selected: nextSelected,
+        selectedPaths: nextPaths,
+        anchorPath,
+      }
+    })
+  }
+
+  function selectAll(side) {
+    setActiveSide(side)
+    const setter = side === 'left' ? setLeft : setRight
+    setter(current => {
+      const items = current.data?.items || []
+      return {
+        ...current,
+        selected: items[0] || null,
+        selectedPaths: items.map(item => item.path),
+        anchorPath: items[0]?.path || null,
+      }
+    })
+  }
+
+  function clearSelection(side) {
+    const setter = side === 'left' ? setLeft : setRight
+    setter(current => ({
+      ...current,
+      selected: null,
+      selectedPaths: [],
+      anchorPath: null,
+    }))
   }
 
   useEffect(() => {
@@ -1587,6 +1698,8 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
         path: profile.root || '/',
         data: null,
         selected: null,
+        selectedPaths: [],
+        anchorPath: null,
         remoteForm: { ...form, password: '' },
       }
       if (side === 'left') setLeft(next)
@@ -1599,7 +1712,15 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     try {
       if (pane.connectionId) await api(`/api/commander/connections/${pane.connectionId}`, { method: 'DELETE' })
       setConnections(current => current.filter(item => item.id !== pane.connectionId))
-      const next = { ...pane, connectionId: '', data: null, selected: null, path: '/' }
+      const next = {
+        ...pane,
+        connectionId: '',
+        data: null,
+        selected: null,
+        selectedPaths: [],
+        anchorPath: null,
+        path: '/',
+      }
       if (side === 'left') setLeft(next)
       else setRight(next)
     } catch (e) { setError(e.message) }

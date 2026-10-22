@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.9
+# DiskShell HDD 0.7.0
 
 Русский · [English](README.md)
 
@@ -264,7 +264,7 @@ Resume работает пока жив backend job. Полный restart backen
 Commander теперь корректно создаёт файлы размером 0 байт при Copy/Move между томами и в remote-transfer workflow. Раньше такой файл ошибочно считался уже полностью переданным при `offset == expected_size == 0`, хотя target ещё не существовал; последующий size verification завершался `FileNotFoundError`. Также `current_path` обновляется до начала каждого файла, включая пустые файлы.
 
 
-## Commander conflicts / resume / missing sources 0.6.9
+## Commander conflicts / resume / missing sources 0.7.0
 
 Copy/Move больше не использует правило «destination уже существует → весь job падает». Перед записью Commander возвращает структурированный конфликт и UI требует явное решение:
 
@@ -283,3 +283,31 @@ Cancel            — ничего не писать
 Если выбранный source исчез между отображением списка и фактическим стартом, batch больше не падает целиком: элемент получает counters `missing/skipped`, warning и обработка остальных элементов продолжается. То же применяется к отдельному файлу, который исчез уже во время обхода каталога.
 
 Для Move source удаляется только после завершения и size verification соответствующего transfer. Replace повторно проверяет наличие source **до удаления destination**, чтобы stale selection не уничтожил существующий target.
+
+
+## Resilient endpoints / backend transfer manager 0.7.0
+
+Copy/Move окончательно перенесён в модель backend transfer manager. React/UI не владеет потоком данных: закрытие вкладки, refresh или render-error не останавливают живой backend job.
+
+При hot-unplug локального диска или длительном обрыве SSH/SFTP:
+
+```text
+running
+  ↓ endpoint lost
+waiting_endpoint
+  ↓ endpoint + identity снова доступны
+running
+  ↓
+completed
+```
+
+- локальный volume проверяется по стабильной identity (Windows Volume GUID/serial fallback), а не только по букве `W:`;
+- другой носитель, случайно получивший ту же букву, не используется для автоматического resume;
+- backend сохраняет partial target и пересчитывает фактический размер перед продолжением;
+- SSH использует keepalive + быстрые reconnect attempts, затем переходит в длительное `waiting_endpoint` вместо немедленного failed;
+- Stop остаётся доступным в waiting-state и сохраняет partial;
+- короткие операции вокруг transfer — mkdir, verify, rename и удаление source после Move — тоже ждут возврата endpoint;
+- root/drive inventory опрашивается заново, offline volume показывается как OFFLINE, а hot-unplug не должен ронять страницу «Диски»;
+- local Commander pane автоматически перечитывается после возврата тома.
+
+Граница 0.7.0: сам backend-процесс должен оставаться живым. Persistent transfer journal для автоматического восстановления job после restart backend — отдельный следующий слой. Для remote после restart всё равно потребуется безопасно восстановить/rebind SSH profile, потому что пароль и private-key path не пишутся в SQLite/localStorage.

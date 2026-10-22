@@ -1403,20 +1403,31 @@ function CommanderPane({
       <small>Ctrl+Click · Shift+Click · Ctrl+A</small>
     </div>
 
-    <div className="commander-columns"><span>Name</span><span>Size</span><span>Modified</span></div>
+    <div className="commander-columns"><span>Sel</span><span>Name</span><span>Size</span><span>Modified</span></div>
     <div className="file-list commander-list">
-      {(state.data?.items || []).slice(0, 4000).map(item => <button
-        key={item.path}
-        className={selectedPaths.has(item.path) ? 'selected' : ''}
-        onClick={event => choose(side, item, event)}
-        onDoubleClick={() => item.is_dir && !busy && load(side, item.path)}
-      >
-        <span title={item.path}>{item.is_dir ? '📁' : '📄'} {item.name}</span>
-        <span title={item.is_dir && item.size_known ? `indexed by scan ${item.indexed_scan_id}` : ''}>
-          {item.is_dir ? (item.size_known ? fmtBytes(item.size) : '—') : fmtBytes(item.size)}
-        </span>
-        <span>{item.modified_ns ? new Date(item.modified_ns / 1e6).toLocaleString() : ''}</span>
-      </button>)}
+      {(state.data?.items || []).slice(0, 4000).map(item => {
+        const checked = selectedPaths.has(item.path)
+        return <button
+          key={item.path}
+          className={checked ? 'selected' : ''}
+          onClick={event => choose(side, item, event)}
+          onDoubleClick={() => item.is_dir && !busy && load(side, item.path)}
+        >
+          <span
+            className="commander-select-mark"
+            title={checked ? 'Убрать из выделения' : 'Добавить к выделению'}
+            onClick={event => {
+              event.stopPropagation()
+              choose(side, item, { ctrlKey: true })
+            }}
+          >{checked ? '☑' : '☐'}</span>
+          <span title={item.path}>{item.is_dir ? '📁' : '📄'} {item.name}</span>
+          <span title={item.is_dir && item.size_known ? `indexed by scan ${item.indexed_scan_id}` : ''}>
+            {item.is_dir ? (item.size_known ? fmtBytes(item.size) : '—') : fmtBytes(item.size)}
+          </span>
+          <span>{item.modified_ns ? new Date(item.modified_ns / 1e6).toLocaleString() : ''}</span>
+        </button>
+      })}
     </div>
     <div className="pane-status">
       <span>{state.data?.items?.length || 0} items</span>

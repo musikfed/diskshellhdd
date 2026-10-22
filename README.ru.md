@@ -1,10 +1,10 @@
-# DiskShell HDD 0.5.7
+# DiskShell HDD 0.6.0
 
 Русский · [English](README.md)
 
 **DiskShell — локальный Admin Storage Workbench для Windows 11.** Это не оболочка над PowerShell: пользователь работает с физическими дисками, разделами, томами, файлами, Storage Classes, placement plans, аналитикой, Recovery, Security, Vault и Storage Lab. PowerShell спрятан только внутри Windows storage adapter.
 
-## Главное в 0.5
+## Первая рабочая baseline 0.6.0
 
 - React/Vite интерфейс переработан под системного администратора / storage engineer.
 - System / Boot / Application disk всегда backend-protected.
@@ -40,19 +40,30 @@ DS_ALLOW_EXTENT_MOVES=0
 
 ## Быстрый запуск Windows 11
 
+Синхронизацию/сборку можно выполнить обычным пользователем:
+
 ```powershell
-git clone "https://github.com/musikfed/diskshellhdd.git" "F:\diskshellhdd"
 Set-Location "F:\diskshellhdd"
-Copy-Item .env.example .env
+git fetch origin
+git reset --hard origin/main
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 uv sync --group dev
 uv run ruff check backend tests
 uv run pytest -v
 npm run ui:install
 npm run build
+```
+
+**Backend для storage-admin функций запускай из PowerShell / Windows Terminal «От имени администратора»:**
+
+```powershell
+Set-Location "F:\diskshellhdd"
 uv run python -m backend.app
 ```
 
-Открыть: `http://127.0.0.1:8765/`.
+При `DS_DEBUG=0` используется Waitress. Открыть: `http://127.0.0.1:8765/`.
+
+Linux/root запуск и подробная инструкция: [docs/DEPLOYMENT.ru.md](docs/DEPLOYMENT.ru.md).
 
 Локальный Photos/People engine: `uv sync --group dev --extra vision` и задать пути YuNet/SFace ONNX в `.env`.
 
@@ -62,7 +73,7 @@ uv run python -m backend.app
 
 Подробнее: [архитектура](docs/ARCHITECTURE.ru.md) · [развёртывание](docs/DEPLOYMENT.ru.md) · [безопасность](docs/SAFETY.ru.md).
 
-## Storage wizard 0.5.7
+## Storage wizard 0.6.0
 
 DiskShell различает три операции:
 
@@ -82,7 +93,7 @@ Cluster sizes показываются по выбранной FS. Backend до�
 - Defender/ClamAV: indeterminate, потому что движок не отдаёт надёжный общий объём.
 - Initialize/partition/format: activity indicator без фиктивного процента; принудительный Stop во время изменения partition table намеренно не предлагается.
 
-## Adaptive Macro Interleave 0.5.7
+## Adaptive Macro Interleave 0.6.0
 
 Storage Lab больше не моделирует одинаковые фиксированные куски. Вместо этого используется bounded macro-interleave:
 
@@ -98,7 +109,7 @@ Storage Lab больше не моделирует одинаковые фикс
 
 Симулятор показывает tiny/oversized split extents, max extents per file и итоговый quality. Реальное NTFS extent relocation всё ещё выключено и остаётся отдельным experimental этапом.
 
-## RAW disk workflow 0.5.7
+## RAW disk workflow 0.6.0
 
 Для RAW-диска DiskShell больше не предлагает основной shortcut «GPT + первый том». Безопасный путь разделён на стадии:
 
@@ -112,7 +123,7 @@ UI показывает stepper и фиксированный activity-status п
 
 Destructive Windows Storage operations требуют запуска backend от имени Administrator. Страница Disks теперь показывает это явно и блокирует write-кнопки, если процесс не elevated.
 
-## Commander 0.5.7
+## Commander 0.6.0
 
 `Files` теперь является единым двухпанельным Commander. Отдельная вкладка Preview / Archives удалена.
 
@@ -128,12 +139,12 @@ Destructive Windows Storage operations требуют запуска backend о�
 
 ### Direct и Smart transfer
 
-`Smart placement` выключен по умолчанию. В Direct-режиме файл попадает ровно в открытую папку второй панели. В Smart-режиме при переносе в локальный HDD root DiskShell выбирает Storage Class (`Media/Photos/Archive/...`) и сохраняет lane/target-band hint. Сами байты всё равно передаются тем же проверяемым Commander job.
+`Smart folders` выключен по умолчанию. Direct-режим переносит ровно в открытую папку второй панели. Smart folders меняет только папку назначения по Storage Class; он **не** обещает принудительную NTFS-нарезку.
 
-Реальное принудительное перемещение NTFS extents пока не включено. Будущий Smart Fragmentation Verifier должен сравнивать фактические extents после переноса с lane/band policy и только диагностировать drift, пока `DS_ALLOW_EXTENT_MOVES=0`.
+Storage Brain 0.6.0 после managed transfer уже выполняет read-only проверку фактических NTFS extents и показывает `layout OK / drift / unavailable` относительно lane/band policy. Реальное принудительное перемещение extents остаётся выключенным при `DS_ALLOW_EXTENT_MOVES=0`.
 
 
-## Per-disk WRITE toggle 0.5.7
+## Per-disk WRITE toggle 0.6.0
 
 Разблокировка диска больше не использует фразу вида `UNLOCK DISK ...` и не имеет 15-минутного TTL.
 
@@ -146,3 +157,19 @@ WRITE LOCKED  ⇄  WRITE ENABLED
 Состояние хранится только в памяти backend и действует до ручного выключения или restart backend. Разрешение жёстко связано с Number + UniqueId + Serial + Size: если identity на этом номере изменилась, write enable автоматически сбрасывается.
 
 System / Boot / Application disk остаются backend-protected и тумблером не открываются. Typed confirmation у конкретных destructive действий (Initialize / Format / Create partition) остаётся отдельным уровнем подтверждения операции.
+
+
+## Что зафиксировано в 0.6.0
+
+- выбор локального тома добавлен в Examine, Security, Storage Brain, Storage Lab и обе панели Commander;
+- Commander показывает размер папки из активного SQLite scan вместо пустого `<DIR>`, если папка индексирована;
+- направления Copy/Move видны явно: LEFT → RIGHT и RIGHT → LEFT;
+- FILE WRITE — отдельный RAM-тумблер, не требующий редактировать `.env`;
+- Placement Plan отдаётся страницами и не пытается отправить браузеру сотни тысяч строк одним JSON;
+- новый plan создаётся **без выбранных items**: оператор отмечает галочками только нужный batch;
+- Select all/none работает по текущему фильтру;
+- cross-volume managed copy проверяется по Size или SHA-256;
+- после publish выполняется read-only проверка реальных NTFS logical extents относительно target macro-band;
+- принудительный Managed Interleave writer/rebalancer в 0.6.0 ещё не включён.
+
+**Admin CLI:** для Windows physical disk / Surface Diagnostics / Recovery raw / NTFS extent функций backend запускается из elevated PowerShell. На Linux — из root shell, но Windows Storage/NTFS-specific функции там недоступны. Полные команды: [DEPLOYMENT.ru.md](docs/DEPLOYMENT.ru.md).

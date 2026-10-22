@@ -12,6 +12,7 @@ from backend.storage_brain.service import (
     get_latest_plan,
     get_plan,
     list_storage_classes,
+    update_plan_selection,
 )
 
 
@@ -154,3 +155,21 @@ def rollback(plan_id: int):
         return jsonify({"error": "plan_rollback_blocked", "message": str(exc)}), 403
     except (KeyError, ValueError, FileNotFoundError, FileExistsError, OSError) as exc:
         return jsonify({"error": "plan_rollback_failed", "message": str(exc)}), 400
+
+
+@bp.post("/plans/<int:plan_id>/selection")
+def selection(plan_id: int):
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(
+            update_plan_selection(
+                plan_id,
+                selected=bool(payload.get("selected", True)),
+                item_ids=[int(item) for item in (payload.get("item_ids") or [])],
+                all_items=bool(payload.get("all_items", False)),
+            )
+        )
+    except KeyError:
+        return jsonify({"error": "plan_not_found"}), 404
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": "selection_failed", "message": str(exc)}), 400

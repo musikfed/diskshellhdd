@@ -1,6 +1,6 @@
-# Развёртывание DiskShell 0.6.6
+# Развёртывание DiskShell 0.6.7
 
-DiskShell 0.6.6 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
+DiskShell 0.6.7 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
 
 ## Важно про права администратора
 
@@ -263,3 +263,22 @@ SQLite находится в `data/diskshell.db` по умолчанию. Миг
 Рекомендуемый дефолт остаётся `DS_ALLOW_VAULT_WRITES=0`. На странице **Vault** включи `VAULT WRITE ENABLED`, когда собираешься создать Vault, импортировать/шифровать или экспортировать файл. Разрешение живёт только в RAM backend и после restart снова становится `LOCKED`.
 
 `DS_ALLOW_VAULT_WRITES=1` нужен только как постоянный environment override; для обычной локальной работы редактировать `.env` больше не требуется.
+
+
+## SFTP / SSH и крупные файлы
+
+Для Commander SFTP ничего отдельно включать не нужно. В 0.6.7 backend автоматически использует:
+
+```text
+SSH keepalive:       30 s
+SFTP I/O timeout:   120 s
+Reconnect attempts:   4
+Backoff:           1/2/4/8 s
+Resume:            from target size
+```
+
+При кратковременном обрыве Wi‑Fi/LAN/VPN или SSH channel Commander переподключается и продолжает текущий файл с уже подтверждённого offset. Прогресс при этом корректируется по фактическому размеру partial target. После полного копирования выполняется size verification.
+
+Если все reconnect attempts исчерпаны, job становится failed и DiskShell пытается удалить текущий incomplete target. Уже полностью завершённые и проверенные items batch не откатываются.
+
+Важно: credentials/profile живут только в RAM backend. Поэтому reconnect работает в рамках текущего backend-процесса; restart backend не является persistent resume.

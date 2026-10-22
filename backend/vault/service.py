@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import struct
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -20,6 +21,8 @@ OBJECT_CHUNK_SIZE = 4 * 1024 * 1024
 OBJECT_MAGIC = b"DSVO1\0"
 VAULT_LOCATION_FILE = "vault-location.json"
 _sessions: dict[str, dict] = {}
+_write_lock = threading.Lock()
+_runtime_writes_enabled = False
 
 
 class VaultError(RuntimeError):
@@ -28,6 +31,29 @@ class VaultError(RuntimeError):
 
 class VaultLocked(VaultError):
     pass
+
+
+def vault_write_state() -> dict:
+    with _write_lock:
+        runtime_enabled = bool(_runtime_writes_enabled)
+    global_override = bool(settings.allow_vault_writes)
+    return {
+        "allowed": bool(global_override or runtime_enabled),
+        "runtime_enabled": runtime_enabled,
+        "global_override": global_override,
+        "mode": "manual_until_restart" if runtime_enabled and not global_override else "environment",
+    }
+
+
+def vault_writes_allowed() -> bool:
+    return bool(vault_write_state()["allowed"])
+
+
+def set_runtime_vault_writes(enabled: bool) -> dict:
+    global _runtime_writes_enabled
+    with _write_lock:
+        _runtime_writes_enabled = bool(enabled)
+    return vault_write_state()
 
 
 def _vault_location_path() -> Path | None:
@@ -100,7 +126,9 @@ def vault_status() -> dict:
         "location_mode": location_mode,
         "location_editable": bool(not initialized and location_mode != "environment"),
         "location_file": str(locator) if locator is not None else None,
-        "writes_allowed": settings.allow_vault_writes,
+        "writes_allowed": vault_write_state()["allowed"],
+        "writes_runtime": vault_write_state()["runtime_enabled"],
+        "writes_global_override": vault_write_state()["global_override"],
         "session_ttl_seconds": SESSION_TTL_SECONDS,
         "encryption": "AES-256-GCM chunked objects + encrypted catalog",
         "kdf": "Argon2id",
@@ -145,7 +173,7 @@ def _unb64(value: str) -> bytes:
 
 
 def create_vault(identity: str, secret: str, root: str | Path | None = None) -> dict:
-    if not settings.allow_vault_writes:
+    if not vault_writes_allowed():
         raise VaultError("DS_ALLOW_VAULT_WRITES is disabled")
     if not identity.strip():
         raise VaultError("Vault identity is required")
@@ -373,7 +401,7 @@ def import_path(token: str, source: str | Path) -> dict:
     Directory import is catalog-atomic: encrypted objects created by a failed
     batch are removed and the catalog is left unchanged.
     """
-    if not settings.allow_vault_writes:
+    if not vault_writes_allowed():
         raise VaultError("DS_ALLOW_VAULT_WRITES is disabled")
 
     master_key = _session_key(token)
@@ -453,7 +481,7 @@ def import_file(token: str, source: str | Path) -> dict:
 
 
 def export_file(token: str, object_id: str, destination: str | Path) -> dict:
-    if not settings.allow_vault_writes:
+    if not vault_writes_allowed():
         raise VaultError("DS_ALLOW_VAULT_WRITES is disabled")
     master_key = _session_key(token)
     catalog = _load_catalog(master_key)

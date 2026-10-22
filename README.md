@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.5
+# DiskShell HDD 0.6.6
 
 [Русская версия](README.ru.md) · English
 
@@ -187,3 +187,8 @@ First-time Vault creation now selects the storage location explicitly in the UI:
 ## Vault create diagnostics 0.6.5
 
 When **Create Vault** is disabled, the UI now lists the exact blockers: Vault WRITE gate, selected storage path, non-empty identity, and a secret phrase of at least 8 characters.
+
+
+## Vault WRITE RAM toggle 0.6.6
+
+`DS_ALLOW_VAULT_WRITES=0` remains the safe default, but normal Vault use no longer requires editing `.env`. The Vault page exposes a RAM-only `VAULT WRITE LOCKED ⇄ ENABLED` toggle controlling Create, Import/Encrypt, and Export. It resets after backend restart. `DS_ALLOW_VAULT_WRITES=1` remains a persistent environment override.

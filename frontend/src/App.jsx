@@ -395,7 +395,7 @@ function VaultPathBrowser({
   </div>
 }
 
-function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
+function Vault({ setError, roots, activeVolume, setActiveVolume, refreshHealth }) {
   const [status, setStatus] = useState(null)
   const [identity, setIdentity] = useState('')
   const [secret, setSecret] = useState('')
@@ -428,13 +428,32 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
     ? (vaultVolume && folderName ? joinPath(vaultVolume, folderName) : '')
     : (status?.root || '')
   const createBlockers = [
-    health && !health.safety?.vault_writes
-      ? 'Vault WRITE заблокирован: установи DS_ALLOW_VAULT_WRITES=1 и перезапусти backend.'
+    !status ? 'Проверяю состояние Vault WRITE…' : '',
+    status && !status.writes_allowed
+      ? 'VAULT WRITE LOCKED — включи RAM-тумблер ниже.'
       : '',
     !createRoot ? 'Выбери том и папку Vault.' : '',
     !identity.trim() ? 'Заполни идентификатор.' : '',
     secret.length < 8 ? 'Секретная фраза должна содержать минимум 8 символов.' : '',
   ].filter(Boolean)
+
+  async function toggleVaultWrites() {
+    try {
+      const next = await api('/api/vault/write-access', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: !status?.writes_allowed }),
+      })
+      setStatus(current => current ? {
+        ...current,
+        writes_allowed: next.allowed,
+        writes_runtime: next.runtime_enabled,
+        writes_global_override: next.global_override,
+      } : current)
+      if (refreshHealth) await refreshHealth()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
 
   async function loadItems() {
     try {
@@ -529,6 +548,23 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
           </small>
         </div>
       </div>
+      <label className={`disk-write-toggle ${status?.writes_allowed ? 'enabled' : 'locked'}`}>
+        <input
+          type="checkbox"
+          checked={Boolean(status?.writes_allowed)}
+          disabled={Boolean(status?.writes_global_override)}
+          onChange={toggleVaultWrites}
+        />
+        <span className="toggle-track"><i /></span>
+        <span className="toggle-copy">
+          <b>{status?.writes_allowed ? 'VAULT WRITE ENABLED' : 'VAULT WRITE LOCKED'}</b>
+          <small>
+            {status?.writes_global_override
+              ? 'DS_ALLOW_VAULT_WRITES=1 · environment override'
+              : 'RAM toggle · сбросится после restart backend'}
+          </small>
+        </span>
+      </label>
     </Card>
 
     {!status?.initialized && <Card title="Создать Vault">
@@ -567,6 +603,7 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
       {status?.location_mode === 'environment' && <p className="muted">
         Место хранения задано через <code>DS_VAULT_ROOT</code>; выбор в UI заблокирован до изменения .env и перезапуска backend.
       </p>}
+
 
       <label>Идентификатор</label>
       <input
@@ -643,7 +680,7 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
       </div>
       <div className="actions">
         <button onClick={lock}>Lock now</button>
-        <button disabled={!health?.safety?.vault_writes || !source} onClick={importItem}>
+        <button disabled={!status?.writes_allowed || !source} onClick={importItem}>
           Encrypt file / folder
         </button>
       </div>
@@ -654,7 +691,7 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
       <div className="vault-list">{items.map(i => <div key={i.id}>
         <span>🔒 {i.relative_path || i.name}</span>
         <span>{fmtBytes(i.size)}</span>
-        <button disabled={!health?.safety?.vault_writes || !destination} onClick={() => exportItem(i)}>Export</button>
+        <button disabled={!status?.writes_allowed || !destination} onClick={() => exportItem(i)}>Export</button>
       </div>)}</div>
     </Card>}
   </div>

@@ -1,6 +1,6 @@
-# Развёртывание DiskShell 0.6.4
+# Развёртывание DiskShell 0.6.6
 
-DiskShell 0.6.4 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
+DiskShell 0.6.6 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
 
 ## Важно про права администратора
 
@@ -256,3 +256,10 @@ SQLite находится в `data/diskshell.db` по умолчанию. Миг
 ### Commander 0.6.4
 
 После обновления frontend поддерживает групповое выделение `Ctrl+Click`, `Shift+Click`, `Ctrl+A`, Select all / Clear. Copy/Move выполняются одним batch job с общим прогрессом. Rename/View/Extract намеренно остаются single-item операциями.
+
+
+## Vault WRITE gate
+
+Рекомендуемый дефолт остаётся `DS_ALLOW_VAULT_WRITES=0`. На странице **Vault** включи `VAULT WRITE ENABLED`, когда собираешься создать Vault, импортировать/шифровать или экспортировать файл. Разрешение живёт только в RAM backend и после restart снова становится `LOCKED`.
+
+`DS_ALLOW_VAULT_WRITES=1` нужен только как постоянный environment override; для обычной локальной работы редактировать `.env` больше не требуется.

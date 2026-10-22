@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.5
+# DiskShell HDD 0.6.6
 
 Русский · [English](README.md)
 
@@ -231,3 +231,14 @@ System / Boot / Application disk остаются backend-protected и тумб�
 ## Vault create diagnostics 0.6.5
 
 Если кнопка **Создать Vault** недоступна, UI теперь показывает точные блокирующие условия: Vault WRITE gate, выбранный путь, непустой идентификатор и секретная фраза минимум 8 символов. Серую кнопку без объяснения больше не нужно диагностировать вручную.
+
+
+## Vault WRITE RAM toggle 0.6.6
+
+`DS_ALLOW_VAULT_WRITES=0` теперь остаётся безопасным дефолтом, но больше не требует редактировать `.env` для обычной работы. На странице **Vault** есть отдельный переключатель:
+
+```text
+VAULT WRITE LOCKED ⇄ VAULT WRITE ENABLED
+```
+
+Включение хранится только в RAM backend и автоматически сбрасывается после restart backend. Этот gate управляет **Create Vault**, Import/Encrypt и Export. Если `DS_ALLOW_VAULT_WRITES=1`, это постоянный environment override и UI-toggle отключён как избыточный.

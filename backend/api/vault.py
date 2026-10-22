@@ -14,6 +14,8 @@ from backend.vault.service import (
     unlock,
     unlock_recovery,
     vault_status,
+    vault_write_state,
+    set_runtime_vault_writes,
 )
 
 
@@ -117,3 +119,16 @@ def export_item():
         return jsonify(export_file(_token(), str(payload["object_id"]), str(payload["destination"])))
     except (KeyError, FileNotFoundError, FileExistsError, VaultError, VaultLocked, OSError) as exc:
         return jsonify({"error": "vault_export_failed", "message": str(exc)}), 400
+
+
+@bp.get("/write-access")
+def get_write_access():
+    return jsonify(vault_write_state())
+
+
+@bp.post("/write-access")
+def set_write_access():
+    payload = request.get_json(silent=True) or {}
+    if "enabled" not in payload:
+        return jsonify({"error": "missing_enabled"}), 400
+    return jsonify(set_runtime_vault_writes(bool(payload["enabled"])))

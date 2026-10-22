@@ -20,9 +20,10 @@ from backend.config import settings
 from backend.core.database import init_database
 from backend.files.write_authorization import file_write_state
 from backend.storage_brain.service import ensure_defaults
+from backend.vault.service import vault_write_state
 
 
-VERSION = "0.6.5"
+VERSION = "0.6.6"
 
 
 def create_app() -> Flask:
@@ -58,7 +59,9 @@ def create_app() -> Flask:
                     "file_writes": file_write_state()["allowed"],
                     "file_writes_runtime": file_write_state()["runtime_enabled"],
                     "file_writes_global_override": file_write_state()["global_override"],
-                    "vault_writes": settings.allow_vault_writes,
+                    "vault_writes": vault_write_state()["allowed"],
+                    "vault_writes_runtime": vault_write_state()["runtime_enabled"],
+                    "vault_writes_global_override": vault_write_state()["global_override"],
                     "disk_writes": settings.allow_disk_writes,
                     "disk_writes_global_override": settings.allow_disk_writes,
                     "selected_disk_unlocks": True,

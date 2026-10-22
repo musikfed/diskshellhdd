@@ -24,6 +24,12 @@ class CommanderCancelled(RuntimeError):
     pass
 
 
+class CommanderConflict(RuntimeError):
+    def __init__(self, conflicts: list[dict[str, Any]]):
+        super().__init__(f"{len(conflicts)} destination conflict(s)")
+        self.conflicts = conflicts
+
+
 _lock = threading.Lock()
 _jobs: dict[str, dict[str, Any]] = {}
 _cancel_events: dict[str, threading.Event] = {}
@@ -143,15 +149,57 @@ def _source_manifest(endpoint: dict[str, Any]):
         return True, directories, files
 
 
-def _destination_exists(endpoint: dict[str, Any]) -> bool:
+def _destination_info(endpoint: dict[str, Any]) -> dict[str, Any]:
     if endpoint["kind"] == "local":
-        return _local_path(endpoint).exists()
+        path = _local_path(endpoint)
+        if not path.exists():
+            return {"exists": False, "is_dir": False, "size": None}
+        return {
+            "exists": True,
+            "is_dir": path.is_dir(),
+            "size": None if path.is_dir() else int(path.stat().st_size),
+        }
+
     try:
         with open_session(endpoint["connection_id"]) as session:
-            session.stat(_remote_path(endpoint))
-        return True
+            entry = session.stat(_remote_path(endpoint))
     except RemoteNotFound:
-        return False
+        return {"exists": False, "is_dir": False, "size": None}
+    return {
+        "exists": True,
+        "is_dir": bool(entry.is_dir),
+        "size": None if entry.is_dir else int(entry.size),
+    }
+
+
+def _destination_exists(endpoint: dict[str, Any]) -> bool:
+    return bool(_destination_info(endpoint)["exists"])
+
+
+def _indexed_destination(
+    endpoint: dict[str, Any],
+    reserved: set[tuple[str, str, str]] | None = None,
+) -> dict[str, Any]:
+    reserved = reserved or set()
+    if endpoint["kind"] == "local":
+        path = _local_path(endpoint)
+        suffix = path.suffix if path.suffix and path.name != path.suffix else ""
+        base = path.name[:-len(suffix)] if suffix else path.name
+        for index in range(1, 10000):
+            candidate = path.with_name(f"{base} ({index}){suffix}")
+            result = {**endpoint, "path": str(candidate)}
+            if not _destination_exists(result) and _endpoint_key(result) not in reserved:
+                return result
+    else:
+        path = PurePosixPath(_remote_path(endpoint))
+        suffix = path.suffix if path.suffix and path.name != path.suffix else ""
+        base = path.name[:-len(suffix)] if suffix else path.name
+        for index in range(1, 10000):
+            candidate = path.with_name(f"{base} ({index}){suffix}")
+            result = {**endpoint, "path": str(candidate)}
+            if not _destination_exists(result) and _endpoint_key(result) not in reserved:
+                return result
+    raise RuntimeError("Could not allocate indexed destination name")
 
 
 def _join_endpoint(root: dict[str, Any], relative: str) -> dict[str, Any]:
@@ -412,24 +460,120 @@ def _endpoint_key(endpoint: dict[str, Any]) -> tuple[str, str, str]:
 def _prepare_transfer(raw: dict[str, Any]) -> dict[str, Any]:
     src = _validate_endpoint(dict(raw["source"]))
     dst = _validate_endpoint(dict(raw["destination"]))
-    if _destination_exists(dst):
-        raise FileExistsError(dst["path"])
+    try:
+        is_dir, directories, files = _source_manifest(src)
+        missing_source = False
+    except (FileNotFoundError, RemoteNotFound):
+        is_dir, directories, files = False, [], []
+        missing_source = True
 
-    is_dir, directories, files = _source_manifest(src)
+    destination_info = _destination_info(dst)
+    same_as_source = _endpoint_key(src) == _endpoint_key(dst)
+    source_size = (
+        None
+        if is_dir or missing_source
+        else int(files[0][1]) if files else 0
+    )
+    can_resume = bool(
+        destination_info["exists"]
+        and not same_as_source
+        and (
+            (is_dir and destination_info["is_dir"])
+            or (
+                not is_dir
+                and not destination_info["is_dir"]
+                and source_size is not None
+                and destination_info["size"] is not None
+                and int(destination_info["size"]) <= int(source_size)
+            )
+        )
+    )
     return {
         "source": src,
         "destination": dst,
+        "original_destination": dict(dst),
         "is_dir": is_dir,
         "directories": directories,
         "files": files,
         "total_files": len(files),
         "total_bytes": sum(size for _relative, size in files),
+        "missing_source": missing_source,
+        "destination_info": destination_info,
+        "same_as_source": same_as_source,
+        "can_resume": can_resume,
+        "skip_before_run": False,
+        "replace_existing": False,
+        "resume_existing": False,
+        "conflict_resolution": None,
     }
+
+
+def _conflict_payload(item: dict[str, Any]) -> dict[str, Any]:
+    info = item["destination_info"]
+    return {
+        "source": _public_endpoint(item["source"]),
+        "destination": _public_endpoint(item["destination"]),
+        "is_dir": bool(item["is_dir"]),
+        "source_size": None if item["is_dir"] else int(item["total_bytes"]),
+        "destination_size": info["size"],
+        "destination_is_dir": bool(info["is_dir"]),
+        "can_resume": bool(item["can_resume"]),
+        "same_as_source": bool(item["same_as_source"]),
+    }
+
+
+def _apply_conflict_policy(
+    prepared: list[dict[str, Any]],
+    policy: str,
+) -> list[dict[str, Any]]:
+    conflicts = [
+        item
+        for item in prepared
+        if item["destination_info"]["exists"] and not item["missing_source"]
+    ]
+    if policy == "ask" and conflicts:
+        raise CommanderConflict([_conflict_payload(item) for item in conflicts[:200]])
+
+    reserved: set[tuple[str, str, str]] = set()
+    for item in prepared:
+        if item["missing_source"]:
+            continue
+        exists = bool(item["destination_info"]["exists"])
+        if not exists:
+            reserved.add(_endpoint_key(item["destination"]))
+            continue
+        if policy == "skip":
+            item["skip_before_run"] = True
+            item["conflict_resolution"] = "skip"
+            continue
+        if policy == "keep_both":
+            item["destination"] = _indexed_destination(item["destination"], reserved)
+            item["conflict_resolution"] = "keep_both"
+            reserved.add(_endpoint_key(item["destination"]))
+            continue
+        if policy == "replace":
+            if item["same_as_source"]:
+                raise ValueError("Cannot replace a destination that is the source itself")
+            item["replace_existing"] = True
+            item["conflict_resolution"] = "replace"
+            reserved.add(_endpoint_key(item["destination"]))
+            continue
+        if policy == "resume":
+            if not item["can_resume"]:
+                raise CommanderConflict([_conflict_payload(item)])
+            item["resume_existing"] = True
+            item["conflict_resolution"] = "resume"
+            reserved.add(_endpoint_key(item["destination"]))
+            continue
+        raise ValueError(f"Unsupported conflict policy: {policy}")
+
+    return prepared
 
 
 def start_commander_batch_job(
     operation: str,
     transfers: list[dict[str, Any]],
+    conflict_policy: str = "ask",
 ) -> dict[str, Any]:
     if not file_writes_allowed():
         raise FileWriteBlocked("File writes are locked")
@@ -442,9 +586,20 @@ def start_commander_batch_job(
     if len(transfers) > 4000:
         raise ValueError("too many transfer items; maximum is 4000")
 
-    prepared = [_prepare_transfer(dict(item)) for item in transfers]
+    policy = str(conflict_policy or "ask").casefold()
+    if policy not in {"ask", "replace", "keep_both", "resume", "skip"}:
+        raise ValueError("conflict_policy must be ask, replace, keep_both, resume or skip")
 
-    destination_keys = [_endpoint_key(item["destination"]) for item in prepared]
+    prepared = _apply_conflict_policy(
+        [_prepare_transfer(dict(item)) for item in transfers],
+        policy,
+    )
+
+    destination_keys = [
+        _endpoint_key(item["destination"])
+        for item in prepared
+        if not item["skip_before_run"] and not item["missing_source"]
+    ]
     if len(set(destination_keys)) != len(destination_keys):
         raise ValueError("batch contains duplicate destination paths")
 
@@ -471,6 +626,8 @@ def start_commander_batch_job(
                 "is_dir": bool(item["is_dir"]),
                 "total_files": int(item["total_files"]),
                 "total_bytes": int(item["total_bytes"]),
+                "missing_source": bool(item["missing_source"]),
+                "conflict_resolution": item["conflict_resolution"],
             }
             for item in prepared
         ],
@@ -489,6 +646,12 @@ def start_commander_batch_job(
         "retry_limit": TRANSFER_RETRY_LIMIT,
         "resume_offset": 0,
         "last_retry_error": None,
+        "conflict_policy": policy,
+        "skipped": 0,
+        "missing": 0,
+        "partial_retained": False,
+        "partial_path": None,
+        "warnings": [],
         "started_at": None,
         "finished_at": None,
         "error": None,
@@ -511,11 +674,13 @@ def start_commander_job(
     operation: str,
     source: dict[str, Any],
     destination: dict[str, Any],
+    conflict_policy: str = "ask",
 ) -> dict[str, Any]:
     """Backward-compatible single-object Commander job."""
     return start_commander_batch_job(
         operation,
         [{"source": source, "destination": destination}],
+        conflict_policy=conflict_policy,
     )
 
 

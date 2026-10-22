@@ -11,8 +11,19 @@ bp = Blueprint("storage_lab", __name__, url_prefix="/api/storage-lab")
 @bp.get("/simulate/<int:scan_id>")
 def simulate(scan_id: int):
     try:
-        chunk_size = int(request.args.get("chunk_size", 8 * 1024 * 1024))
-        return jsonify(simulate_interleave(scan_id, chunk_size=chunk_size))
+        sequential_mib_s = float(request.args.get("sequential_mib_s", 150))
+        seek_ms = float(request.args.get("seek_ms", 10))
+        target_seek_overhead = float(request.args.get("target_seek_overhead", 0.02))
+        max_layout_extents = int(request.args.get("max_layout_extents", 50000))
+        return jsonify(
+            simulate_interleave(
+                scan_id,
+                sequential_mib_s=sequential_mib_s,
+                seek_ms=seek_ms,
+                target_seek_overhead=target_seek_overhead,
+                max_layout_extents=max_layout_extents,
+            )
+        )
     except ValueError as exc:
         return jsonify({"error": "simulation_failed", "message": str(exc)}), 400
 

@@ -122,7 +122,7 @@ export function DisksAdmin({ setError }) {
   const [initializeConfirm, setInitializeConfirm] = useState('')
   const [letterDraft, setLetterDraft] = useState(null)
   const [letterConfirm, setLetterConfirm] = useState('')
-  const [diskBusy, setDiskBusy] = useState('')
+  const [diskBusy, setDiskBusy] = useState(null)
 
   const reload = () => api('/api/disks').then(setData).catch(e => setError(e.message))
   useEffect(() => {
@@ -181,7 +181,7 @@ export function DisksAdmin({ setError }) {
   }
 
   async function executeFormat() {
-    setDiskBusy('Очистка / GPT / создание раздела / форматирование. Не отключай диск.')
+    setDiskBusy({ diskNumber: formatPlan.disk.number, phase: 'format', label: 'Форматирование тома. Не отключай диск.' })
     try {
       await api(`/api/disks/${formatPlan.disk.number}/format`, {
         method: 'POST',
@@ -198,7 +198,7 @@ export function DisksAdmin({ setError }) {
       setFormatDirty(false)
       await reload()
     } catch (e) { setError(e.message) }
-    finally { setDiskBusy('') }
+    finally { setDiskBusy(null) }
   }
 
   async function prepareInitialize(number) {
@@ -213,16 +213,18 @@ export function DisksAdmin({ setError }) {
   }
 
   async function executeInitialize() {
-    setDiskBusy('Windows создаёт таблицу разделов GPT. Не отключай диск.')
+    setDiskBusy({ diskNumber: initializePlan.disk.number, phase: 'initialize', label: 'Windows создаёт таблицу разделов GPT. Не отключай диск.' })
     try {
       await api(`/api/disks/${initializePlan.disk.number}/initialize`, {
         method: 'POST',
         body: JSON.stringify({ partition_style: 'GPT', confirmation: initializeConfirm }),
       })
       setInitializePlan(null)
+      setFormatPlan(null)
+      setPartitionPlan(null)
       await reload()
     } catch (e) { setError(e.message) }
-    finally { setDiskBusy('') }
+    finally { setDiskBusy(null) }
   }
 
   function newPartition(disk) {
@@ -257,7 +259,7 @@ export function DisksAdmin({ setError }) {
   }
 
   async function executePartition() {
-    setDiskBusy('Windows создаёт и форматирует новый том. Не отключай диск.')
+    setDiskBusy({ diskNumber: partitionDraft.diskNumber, phase: 'partition', label: 'Windows создаёт раздел и форматирует том. Не отключай диск.' })
     try {
       await api(`/api/disks/${partitionDraft.diskNumber}/partitions`, {
         method: 'POST',
@@ -274,7 +276,7 @@ export function DisksAdmin({ setError }) {
       setPartitionPlan(null)
       await reload()
     } catch (e) { setError(e.message) }
-    finally { setDiskBusy('') }
+    finally { setDiskBusy(null) }
   }
 
   function prepareLetter(disk, partition) {
@@ -289,7 +291,7 @@ export function DisksAdmin({ setError }) {
   async function executeLetter() {
     const letter = letterDraft.driveLetter.trim().toUpperCase().replace(':', '')
     const expected = `ASSIGN ${letter}: DISK ${letterDraft.diskNumber} PARTITION ${letterDraft.partitionNumber}`
-    setDiskBusy('Windows назначает букву тома.')
+    setDiskBusy({ diskNumber: letterDraft.diskNumber, phase: 'letter', label: 'Windows назначает букву тома.' })
     try {
       await api(
         `/api/disks/${letterDraft.diskNumber}/partitions/${letterDraft.partitionNumber}/drive-letter`,
@@ -301,15 +303,16 @@ export function DisksAdmin({ setError }) {
       setLetterDraft(null)
       await reload()
     } catch (e) { setError(e.message) }
-    finally { setDiskBusy('') }
+    finally { setDiskBusy(null) }
     return expected
   }
 
   return <div className="stack admin-workbench">
-    {diskBusy && <Panel title="Disk operation">
-      <JobProgress running label={diskBusy} />
-      <p className="muted">Для Initialize / partition / format Windows Storage API не отдаёт DiskShell надёжный общий процент. Принудительный Stop здесь намеренно не предлагается.</p>
-    </Panel>}
+    {diskBusy && <div className="disk-operation-toast">
+      <b>Disk {diskBusy.diskNumber} · storage operation</b>
+      <JobProgress running label={diskBusy.label} />
+      <small>Внутренний процент Windows не сообщает. Не отключай диск и не закрывай backend до завершения этапа.</small>
+    </div>}
     <div className="admin-banner">
       <div className="admin-icon">⚠</div>
       <div>
@@ -339,6 +342,17 @@ export function DisksAdmin({ setError }) {
           <span>Largest free extent: <b>{String(d.partition_style).toUpperCase() === 'RAW' ? 'после Initialize' : fmtBytes(d.largest_free_extent)}</b></span>
         </div>
         <DiskLayoutBar disk={d} />
+        {!d.protected && <div className="raw-stepper">
+          <div className={write.allowed ? 'done' : 'current'}>
+            <b>1</b><span><strong>Разблокировать запись</strong><small>{write.allowed ? 'Готово' : 'Нужно временно разблокировать выбранный диск'}</small></span>
+          </div>
+          <div className={String(d.partition_style).toUpperCase() !== 'RAW' ? 'done' : (write.allowed ? 'current' : '')}>
+            <b>2</b><span><strong>Initialize GPT</strong><small>{String(d.partition_style).toUpperCase() !== 'RAW' ? 'GPT создан' : 'Создать только таблицу разделов'}</small></span>
+          </div>
+          <div className={(d.partitions || []).length > 0 ? 'done' : (String(d.partition_style).toUpperCase() !== 'RAW' ? 'current' : '')}>
+            <b>3</b><span><strong>Раздел + файловая система</strong><small>{(d.partitions || []).length > 0 ? 'Том создан' : 'Выбрать размер, NTFS и cluster size'}</small></span>
+          </div>
+        </div>}
 
         {d.protected
           ? <p className="protected">🔒 {d.protection_reasons.join(', ')}</p>
@@ -347,9 +361,9 @@ export function DisksAdmin({ setError }) {
               {write.allowed && <button disabled={Boolean(diskBusy)} onClick={() => lock(d.number)}>🔒 Заблокировать запись</button>}
               {String(d.partition_style).toUpperCase() === 'RAW' && <button disabled={Boolean(diskBusy)} onClick={() => prepareInitialize(d.number)}>Инициализировать GPT</button>}
               {Number(d.largest_free_extent || 0) > 0 && String(d.partition_style).toUpperCase() !== 'RAW' && <button disabled={Boolean(diskBusy)} onClick={() => newPartition(d)}>+ Раздел / том</button>}
-              <button className="danger-outline" disabled={Boolean(diskBusy)} onClick={() => prepareFormat(d.number)}>
-                {String(d.partition_style).toUpperCase() === 'RAW' ? 'GPT + первый том' : 'Очистить + первый том'}
-              </button>
+              {String(d.partition_style).toUpperCase() !== 'RAW' && <button className="danger-outline" disabled={Boolean(diskBusy)} onClick={() => prepareFormat(d.number)}>
+                Очистить + первый том
+              </button>}
             </div>}
 
         <div className="partition-table">
@@ -391,10 +405,8 @@ export function DisksAdmin({ setError }) {
       <button className="danger-button" disabled={Boolean(diskBusy) || initializeConfirm !== initializePlan.confirmation || !diskByNumber(initializePlan.disk.number)?.write_access?.allowed} onClick={executeInitialize}>Initialize GPT</button>
     </Panel>}
 
-    {formatPlan && <Panel
-      title={String(formatPlan.disk.partition_style).toUpperCase() === 'RAW'
-        ? 'Подготовить RAW disk → GPT → первый том'
-        : 'Очистить диск → GPT → создать первый том'}
+    {formatPlan && String(formatPlan.disk.partition_style).toUpperCase() !== 'RAW' && <Panel
+      title="Очистить диск → GPT → создать первый том"
       className="danger-card"
     >
       <p className="warning">⚠ {formatPlan.warning}</p>

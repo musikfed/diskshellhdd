@@ -63,6 +63,46 @@ def list_profiles() -> list[dict[str, Any]]:
         return [_public_profile(profile) for profile in _profiles.values()]
 
 
+def profile_identity(profile_id: str) -> str:
+    profile = _profile(profile_id)
+    return "|".join(
+        [
+            str(profile["protocol"]),
+            str(profile["host"]).casefold(),
+            str(profile["port"]),
+            str(profile["username"]).casefold(),
+            str(profile.get("root") or "/"),
+        ]
+    )
+
+
+def remote_endpoint_state(profile_id: str) -> dict[str, Any]:
+    try:
+        identity = profile_identity(profile_id)
+    except KeyError:
+        return {
+            "available": False,
+            "reason": "remote_profile_missing",
+            "identity": None,
+        }
+
+    try:
+        with open_session(profile_id):
+            pass
+    except RemoteConnectionError as exc:
+        return {
+            "available": False,
+            "reason": "remote_offline",
+            "identity": identity,
+            "message": str(exc),
+        }
+    return {
+        "available": True,
+        "reason": None,
+        "identity": identity,
+    }
+
+
 def create_profile(
     protocol: str,
     host: str,

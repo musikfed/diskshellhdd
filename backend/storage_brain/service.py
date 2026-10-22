@@ -332,3 +332,19 @@ def get_plan(plan_id: int) -> dict:
     result["items"] = [dict(row) for row in items]
     result["confirmation"] = f"APPLY PLAN {plan_id}"
     return result
+
+
+def get_latest_plan(scan_id: int | None = None) -> dict:
+    with connect() as connection:
+        if scan_id is None:
+            row = connection.execute(
+                "SELECT id FROM placement_plans ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        else:
+            row = connection.execute(
+                "SELECT id FROM placement_plans WHERE scan_id = ? ORDER BY id DESC LIMIT 1",
+                (int(scan_id),),
+            ).fetchone()
+    if row is None:
+        raise KeyError("latest")
+    return get_plan(int(row["id"]))

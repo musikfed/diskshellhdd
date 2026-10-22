@@ -1,60 +1,49 @@
-# Архитектура DiskShell 0.4
-
-## Принцип
+# Архитектура DiskShell 0.5
 
 ```text
-React UI
-   ↓
-Application API
-   ↓
+React/Vite Admin Workbench
+        ↓
+Flask Application API
+        ↓
 Storage Brain ─ Analytics ─ Preview ─ People ─ Vault
-   ↓
-Placement Planner / Safe Executor
-   ↓
-Filesystem + Windows storage adapters
-   ↓
+        │             ├─ Recovery / Forensics (read-only)
+        │             └─ Security scanner adapters
+        ↓
+Cancelable Jobs / Safe Executors
+        ↓
+Filesystem + Windows Storage adapters
+        ↓
 NTFS / Windows / HDD
 ```
 
-PowerShell не является архитектурным центром. Это всего лишь один adapter для Windows Storage API.
+PowerShell — только Windows storage adapter, а не модель продукта.
 
-## Read side
+## Per-disk write authorization
 
-`Get-Disk/Get-Partition/Get-Volume`, Quick Index, Analytics, preview, archive/ISO browse, duplicates candidates/hashing, Photos/People, NTFS extent query и benchmark. Read side включён всегда.
+0.5 разделяет global override и runtime authorization. При `DS_ALLOW_DISK_WRITES=0` выбранный непротектед disk можно разблокировать на 15 минут. Authorization связан с physical identity; если Number/UniqueId/Serial/Size меняются, запись снова блокируется.
 
-## Write side
+System / Boot / Application disk блокируются до любого destructive executor.
 
-File workspace, Placement Executor, Vault writes, archive extraction, Partition Magic и будущий extent mover — независимые domains с независимыми gates.
+## Partition / Volume layer
 
-Placement Executor не делает обычный `Move-Item` вслепую:
+`volume_manager.py` отвечает за initialize, create partition + format volume и drive-letter assignment. Whole-disk Clear/Format остаётся отдельным explicit destructive workflow.
 
-- same volume: проверка исходника → atomic rename/move → verification → journal; возможен rollback;
-- cross volume: copy во временный target → verify size или SHA-256 → atomic publish target → исходник остаётся на месте для ручной проверки.
+## Jobs / Stop
 
-## Storage Brain
+Quick Index и Placement Executor cooperative-cancellable. Cross-volume placement copy идёт chunks с проверкой cancel и temporary partial target. Security scan запускается внешним local scanner process и может быть terminated.
 
-Storage Classes описывают назначение данных, а не физические разделы: Incoming, Active, Media, Photos, Documents, Images, Archive, Backups, Development, Temporary, Vault, Quarantine, Other.
+## Persistence
 
-Planner сопоставляет факты файла с правилами, строит target paths, предотвращает конфликты имён и считает projected free space. Перемещение данных внутри одного тома не считается дополнительным расходом места; cross-volume copy считается.
+Scan facts, placement plans, operation journal, Recovery snapshots и Security results хранятся в SQLite. UI хранит только active identifiers/settings в localStorage и восстанавливает plan после refresh из backend.
 
-## Vault
+## Recovery / Forensics
 
-Envelope encryption: identity+secret → Argon2id KEK → wrapped random 256-bit master key. Recovery key независимо wraps тот же master key. Catalog зашифрован AES-GCM. Большие objects пишутся chunked AES-GCM, поэтому терабайтный файл не загружается целиком в RAM. Unlock key хранится в памяти backend, browser использует HttpOnly SameSite cookie.
+Read-only raw probes распознают MBR `55AA`, GPT `EFI PART` и boot-sector identifiers NTFS/exFAT/FAT32/BitLocker. Это диагностический слой, не write-side recovery.
 
-## Photos / People
+## Security
 
-При установленном `vision` extra и локальных YuNet/SFace ONNX моделях DiskShell детектирует лица, получает embeddings, хранит их в SQLite и группирует в Persons. Запросы `alone` и `with_others` основаны на количестве лиц в фото. Никакого cloud API.
-
-## Partition Magic
-
-Любая разрушительная операция требует: включённый disk gate → повторное обнаружение disk identity → disk не protected → точная typed confirmation. Основной предполагаемый layout большого storage HDD: GPT + один NTFS/exFAT partition.
+Adapters: Microsoft Defender (`MpCmdRun.exe`) и ClamAV (`clamscan`). DiskShell не выдаёт себя за отдельный antivirus engine и не поставляет собственную сигнатурную базу.
 
 ## Storage Lab
 
-Три разных понятия не смешиваются:
-
-1. Allocation/extent map — фактические VCN→LCN extents, доступные ОС.
-2. Target layout — логическая модель Managed Interleave.
-3. HDD firmware geometry — скрыта и не контролируется DiskShell.
-
-0.4 умеет симулировать target layout, читать file extents и собирать read benchmark. Actual `FSCTL_MOVE_FILE` mover остаётся заблокированным до тестов на целевом HDD.
+Managed Interleave остаётся logical target-layout моделью поверх NTFS. Firmware geometry HDD не контролируется. Extent relocation остаётся отдельным заблокированным experimental domain.

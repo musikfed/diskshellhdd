@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 import subprocess
 
-from backend.config import settings
 from backend.services.storage.windows_disks import list_windows_disks
-
-
-class DiskWriteBlocked(RuntimeError):
-    pass
+from backend.services.storage.write_authorization import (
+    DiskWriteBlocked,
+    require_disk_write_authorized,
+    write_state_for_disk,
+)
 
 
 VALID_CLUSTER_SIZES = {4096, 8192, 16384, 32768, 65536}
@@ -39,9 +39,18 @@ def format_plan(
         "partition_style": "GPT",
         "layout": "single_partition",
         "confirmation": f"FORMAT DISK {disk_number}",
-        "allowed": settings.allow_disk_writes and not disk["protected"],
+        "allowed": write_state_for_disk(disk)["allowed"],
         "warning": "This operation destroys all existing partitions and data on the selected disk.",
-        "recommended_for_mixed_storage": allocation_unit == 4096,
+        "allocation_profile": (
+            "universal"
+            if allocation_unit == 4096
+            else "mixed_large_storage"
+            if allocation_unit == 16384
+            else "large_sequential"
+            if allocation_unit == 65536
+            else "manual"
+        ),
+        "recommended_for_mixed_storage": allocation_unit in {4096, 16384},
     }
 
 
@@ -53,10 +62,7 @@ def execute_format(
     allocation_unit: int = 4096,
 ) -> dict:
     plan = format_plan(disk_number, filesystem=filesystem, label=label, allocation_unit=allocation_unit)
-    if not settings.allow_disk_writes:
-        raise DiskWriteBlocked("DS_ALLOW_DISK_WRITES is disabled")
-    if plan["disk"]["protected"]:
-        raise DiskWriteBlocked("Protected system/boot/application disk")
+    require_disk_write_authorized(plan["disk"])
     if confirmation != plan["confirmation"]:
         raise DiskWriteBlocked("Typed confirmation does not match")
 
@@ -64,8 +70,7 @@ def execute_format(
     fresh = format_plan(disk_number, filesystem=filesystem, label=label, allocation_unit=allocation_unit)
     if fresh["disk"].get("unique_id") != plan["disk"].get("unique_id") or fresh["disk"].get("size") != plan["disk"].get("size"):
         raise DiskWriteBlocked("Disk identity changed between plan and execution")
-    if fresh["disk"]["protected"]:
-        raise DiskWriteBlocked("Disk became protected")
+    require_disk_write_authorized(fresh["disk"])
 
     script = r'''
 $ErrorActionPreference = "Stop"

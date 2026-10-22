@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
+import { DisksAdmin, RecoveryAdmin, ScanAdmin, SecurityAdmin, StorageBrainAdmin } from './AdminPages.jsx'
 
 const NAV = [
   ['dashboard', '🐙', 'Главная'],
@@ -11,6 +12,8 @@ const NAV = [
   ['content', '🐙', 'Preview / Archives'],
   ['people', '🦉', 'Photos / People'],
   ['vault', '🔐', 'Vault'],
+  ['recovery', '🧭', 'Recovery'],
+  ['security', '🛡️', 'Security'],
   ['lab', '🧪', 'Storage Lab'],
 ]
 
@@ -20,10 +23,13 @@ function Card({ title, children, className = '' }) {
 
 function Safety({ health }) {
   const s = health?.safety || {}
-  const rows = [
-    ['Файлы', s.file_writes], ['Vault', s.vault_writes], ['Разметка', s.disk_writes], ['Extents', s.extent_moves],
-  ]
-  return <div className="safety"><strong>Safety gates</strong>{rows.map(([label, on]) => <span key={label} className={on ? 'danger' : 'off'}>{label}: {on ? 'ON' : 'LOCKED'}</span>)}</div>
+  return <div className="safety">
+    <strong>Safety / admin mode</strong>
+    <span className={s.file_writes ? 'danger' : 'off'}>Файлы: {s.file_writes ? 'WRITE ON' : 'LOCKED'}</span>
+    <span className={s.vault_writes ? 'danger' : 'off'}>Vault: {s.vault_writes ? 'WRITE ON' : 'LOCKED'}</span>
+    <span className="off">Диски: {s.selected_disk_unlocks ? 'PER-DISK UNLOCK' : 'LOCKED'}</span>
+    <span className={s.extent_moves ? 'danger' : 'off'}>Extents: {s.extent_moves ? 'WRITE ON' : 'LOCKED'}</span>
+  </div>
 }
 
 export default function App() {
@@ -36,14 +42,16 @@ export default function App() {
   const context = useMemo(() => ({ scanId, setScanId, setError, health }), [scanId, health])
   const pages = {
     dashboard: <Dashboard {...context} setPage={setPage} />,
-    disks: <Disks {...context} />,
-    scan: <Scan {...context} />,
+    disks: <DisksAdmin {...context} />,
+    scan: <ScanAdmin {...context} />,
     analytics: <Analytics {...context} />,
-    storage: <StorageBrain {...context} />,
+    storage: <StorageBrainAdmin {...context} />,
     files: <Files {...context} />,
     content: <Content {...context} />,
     people: <People {...context} />,
     vault: <Vault {...context} />,
+    recovery: <RecoveryAdmin {...context} />,
+    security: <SecurityAdmin {...context} />,
     lab: <StorageLab {...context} />,
   }
   return <div className="app">
@@ -53,7 +61,7 @@ export default function App() {
       <Safety health={health} />
     </aside>
     <main>
-      <header><div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Локальное управление хранением · Python only</p></div><div className="scan-chip">Scan: {scanId || '—'}</div></header>
+      <header><div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Admin storage workbench · React + Python</p></div><div className="scan-chip">Scan: {scanId || '—'}</div></header>
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
       {pages[page]}
     </main>
@@ -62,11 +70,11 @@ export default function App() {
 
 function Dashboard({ health, scanId, setPage }) {
   return <div className="stack">
-    <Card title="DiskShell 0.4 · диск как система хранения"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
+    <Card title="DiskShell 0.5 · Admin Storage Workbench"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
     <div className="grid three">
       <Card title="Сейчас"><Metric label="Версия" value={health?.version || '...'} /><Metric label="Активный scan" value={scanId || 'нет'} /><Metric label="Режим" value="localhost / local-first" /></Card>
       <Card title="Правильный цикл"><ol><li>Обследовать</li><li>Понять Analytics</li><li>Построить placement plan</li><li>Сохранить резерв</li><li>Применить только нужное</li></ol></Card>
-      <Card title="Защита"><p>System / Boot / Application disk блокируются независимо от UI.</p><p>Опасные области имеют отдельные environment gates.</p></Card>
+      <Card title="Защита"><p>System / Boot / Application disk блокируются независимо от UI.</p><p>System/Boot/Application диски блокируются всегда. Для остальных дисков запись разблокируется только на выбранный physical disk и ограниченное время.</p></Card>
     </div>
   </div>
 }

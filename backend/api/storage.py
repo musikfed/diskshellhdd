@@ -5,7 +5,14 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request
 
 from backend.storage_brain.executor import PlanExecutionBlocked, apply_plan, rollback_plan
-from backend.storage_brain.service import capacity_policy, create_placement_plan, get_plan, list_storage_classes
+from backend.storage_brain.jobs import cancel_plan_job, get_plan_job, start_plan_job
+from backend.storage_brain.service import (
+    capacity_policy,
+    create_placement_plan,
+    get_latest_plan,
+    get_plan,
+    list_storage_classes,
+)
 
 
 bp = Blueprint("storage", __name__, url_prefix="/api/storage")
@@ -25,7 +32,17 @@ def capacity():
         policy = capacity_policy(Path(raw))
     except (FileNotFoundError, OSError, ValueError) as exc:
         return jsonify({"error": "capacity_failed", "message": str(exc)}), 400
-    return jsonify({"total": policy.total, "used": policy.used, "free": policy.free, "reserve": policy.reserve, "soft_limit": policy.soft_limit, "hard_limit": policy.hard_limit, "state": policy.state})
+    return jsonify(
+        {
+            "total": policy.total,
+            "used": policy.used,
+            "free": policy.free,
+            "reserve": policy.reserve,
+            "soft_limit": policy.soft_limit,
+            "hard_limit": policy.hard_limit,
+            "state": policy.state,
+        }
+    )
 
 
 @bp.post("/plans")
@@ -37,6 +54,16 @@ def create_plan():
         return jsonify(create_placement_plan(scan_id, root)), 201
     except (KeyError, TypeError, ValueError, FileNotFoundError, OSError) as exc:
         return jsonify({"error": "plan_failed", "message": str(exc)}), 400
+
+
+@bp.get("/plans/latest")
+def latest_plan():
+    raw_scan_id = request.args.get("scan_id")
+    try:
+        scan_id = int(raw_scan_id) if raw_scan_id else None
+        return jsonify(get_latest_plan(scan_id))
+    except (KeyError, ValueError):
+        return jsonify({"error": "plan_not_found"}), 404
 
 
 @bp.get("/plans/<int:plan_id>")
@@ -51,11 +78,51 @@ def plan(plan_id: int):
 def execute(plan_id: int):
     payload = request.get_json(silent=True) or {}
     try:
-        return jsonify(apply_plan(plan_id, str(payload.get("confirmation", "")), str(payload.get("verify", "size"))))
+        return jsonify(
+            apply_plan(
+                plan_id,
+                str(payload.get("confirmation", "")),
+                str(payload.get("verify", "size")),
+            )
+        )
     except PlanExecutionBlocked as exc:
         return jsonify({"error": "plan_execution_blocked", "message": str(exc)}), 403
     except (KeyError, ValueError, FileNotFoundError, FileExistsError, OSError) as exc:
         return jsonify({"error": "plan_execution_failed", "message": str(exc)}), 400
+
+
+@bp.post("/plans/<int:plan_id>/apply-job")
+def execute_job(plan_id: int):
+    payload = request.get_json(silent=True) or {}
+    try:
+        return (
+            jsonify(
+                start_plan_job(
+                    plan_id,
+                    str(payload.get("confirmation", "")),
+                    str(payload.get("verify", "size")),
+                )
+            ),
+            202,
+        )
+    except (KeyError, ValueError) as exc:
+        return jsonify({"error": "plan_job_failed", "message": str(exc)}), 400
+
+
+@bp.get("/jobs/<job_id>")
+def placement_job(job_id: str):
+    try:
+        return jsonify(get_plan_job(job_id))
+    except KeyError:
+        return jsonify({"error": "job_not_found"}), 404
+
+
+@bp.post("/jobs/<job_id>/cancel")
+def cancel_placement_job(job_id: str):
+    try:
+        return jsonify(cancel_plan_job(job_id))
+    except KeyError:
+        return jsonify({"error": "job_not_found"}), 404
 
 
 @bp.post("/plans/<int:plan_id>/rollback")

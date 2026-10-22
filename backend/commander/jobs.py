@@ -221,6 +221,35 @@ def _partial_destination_size(endpoint: dict[str, Any]) -> int:
     return int(entry.size)
 
 
+def _ensure_zero_length_destination(endpoint: dict[str, Any]) -> None:
+    if endpoint["kind"] == "local":
+        path = _local_path(endpoint)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            if not path.is_file():
+                raise IsADirectoryError(path)
+            if path.stat().st_size != 0:
+                raise OSError(f"Expected empty target, got {path.stat().st_size} bytes")
+            return
+        path.touch(exist_ok=False)
+        return
+
+    with open_session(endpoint["connection_id"]) as session:
+        path = _remote_path(endpoint)
+        try:
+            entry = session.stat(path)
+        except RemoteNotFound:
+            parent = str(PurePosixPath(path).parent)
+            session.makedirs(parent)
+            with session.open_write(path, offset=0):
+                pass
+            return
+        if entry.is_dir:
+            raise IsADirectoryError(endpoint["path"])
+        if int(entry.size) != 0:
+            raise OSError(f"Expected empty target, got {entry.size} bytes")
+
+
 def _retryable_transfer_error(exc: Exception) -> bool:
     if isinstance(
         exc,
@@ -267,6 +296,9 @@ def _copy_file(
         _check_cancel(event)
         try:
             offset = _partial_destination_size(destination)
+            if int(expected_size) == 0:
+                _ensure_zero_length_destination(destination)
+                return
             if offset > int(expected_size):
                 raise OSError(
                     f"Partial target is larger than source: {offset} > {expected_size}"
@@ -572,6 +604,8 @@ def _run_batch_job(
                             destination,
                             relative,
                         )
+                        with _lock:
+                            _jobs[job_id]["current_path"] = source_file["path"]
                         _copy_file(
                             source_file,
                             destination_file,

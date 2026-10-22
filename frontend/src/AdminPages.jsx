@@ -895,11 +895,12 @@ export function DiagnosticsAdmin({ setError }) {
       {elevated === false && <p className="warning">Backend не elevated — raw surface scan не запустится.</p>}
       <div className="diagnostic-controls">
         <div>
-          <label>Physical disk</label>
+          <label>Physical disk · найдено {disks.length}</label>
           <select value={diskNumber} onChange={e => setDiskNumber(e.target.value)} disabled={running || disks.length === 0}>
             {disks.length === 0 && <option value="">Нет доступных дисков</option>}
             {disks.map(d => <option key={d.number} value={d.number}>Disk {d.number} · {d.friendly_name} · {fmtBytes(d.size)} · {d.bus_type}</option>)}
           </select>
+          <button disabled={running} onClick={() => refreshBase().catch(e => setError(e.message))}>↻ Обновить список дисков</button>
           {disks.length === 0 && <small className="warning-inline">/api/disks не вернул физические диски. Проверь страницу «Диски» и backend console.</small>}
         </div>
         <div>

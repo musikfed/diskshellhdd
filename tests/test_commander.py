@@ -532,7 +532,16 @@ def test_commander_cancel_retains_partial_target_for_resume(tmp_path, monkeypatc
 
     original_copy_file = commander_jobs._copy_file
 
-    def interrupted_copy(source_ep, destination_ep, expected_size, event, progress, retry_status):
+    def interrupted_copy(
+        source_ep,
+        destination_ep,
+        expected_size,
+        event,
+        progress,
+        retry_status,
+        wait_status,
+    ):
+        del expected_size, event, retry_status, wait_status
         target = commander_jobs._local_path(destination_ep)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"abcd")

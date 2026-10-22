@@ -91,3 +91,72 @@ button:not(:disabled):active{transform:translateY(1px)}
   .planner-toolbar,.workbench-hero{display:block}
   .hero-symbol{margin-bottom:12px}
 }
+
+
+/* 0.5.2 storage wizard + truthful job progress */
+.wizard-grid{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(130px,1fr));
+  gap:10px;
+  align-items:end;
+}
+.wizard-grid label{display:block;color:#9bb0cf;font-size:12px;font-weight:700}
+.plan-stale{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:10px 12px;
+  margin:10px 0 14px;
+  border:1px solid rgba(255,190,103,.32);
+  background:rgba(128,84,25,.18);
+  color:#ffd89b;
+  border-radius:11px;
+}
+.plan-stale button{padding:7px 11px;white-space:nowrap}
+.job-progress{margin:12px 0}
+.progress-track{
+  position:relative;
+  height:10px;
+  overflow:hidden;
+  border-radius:999px;
+  background:#07111f;
+  border:1px solid rgba(111,150,209,.18);
+}
+.progress-track i{
+  display:block;
+  height:100%;
+  border-radius:inherit;
+  background:linear-gradient(90deg,#628cff,#58d7d0);
+  transition:width .18s ease;
+}
+.progress-track.determinate i{width:0}
+.progress-track.indeterminate i{
+  width:32%;
+  position:absolute;
+  left:-32%;
+}
+.progress-track.indeterminate i.running{
+  animation:indeterminate-slide 1.2s ease-in-out infinite;
+}
+.progress-caption{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  margin-top:6px;
+  color:#8fa6c8;
+  font-size:12px;
+}
+.progress-caption b{color:#cfe0fb;white-space:nowrap}
+@keyframes indeterminate-slide{
+  0%{left:-32%}
+  55%{left:45%}
+  100%{left:100%}
+}
+@media(max-width:1280px){
+  .wizard-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}
+}
+@media(max-width:860px){
+  .wizard-grid{grid-template-columns:1fr}
+  .plan-stale{align-items:flex-start;flex-direction:column}
+}

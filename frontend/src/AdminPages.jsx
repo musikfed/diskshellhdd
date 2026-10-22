@@ -551,17 +551,6 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
     } catch (e) { setError(e.message) }
   }
 
-  async function toggleFileWrites() {
-    try {
-      const next = await api('/api/files/write-access', {
-        method: 'POST',
-        body: JSON.stringify({ enabled: !fileWrite?.allowed }),
-      })
-      setFileWrite(next)
-      if (refreshHealth) await refreshHealth()
-    } catch (e) { setError(e.message) }
-  }
-
   async function stop() {
     try {
       const value = await api(`/api/scans/${jobId}/cancel`, { method: 'POST', body: '{}' })

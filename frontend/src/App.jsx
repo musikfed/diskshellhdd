@@ -309,6 +309,92 @@ function People({ scanId, setError }) {
     {selected && <Card title={selected.name}><div className="tabs">{['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}</div><div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div></Card>}</div>
 }
 
+
+function VaultPathBrowser({
+  title,
+  roots,
+  activeVolume,
+  setActiveVolume,
+  selectedPath,
+  onSelect,
+  allowFiles,
+}) {
+  const [path, setPath] = useState(activeVolume || roots[0]?.path || '')
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  async function load(nextPath) {
+    if (!nextPath) return
+    setLoading(true)
+    try {
+      const value = await api(`/api/files?path=${encodeURIComponent(nextPath)}`)
+      setData(value)
+      setPath(value.path)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!path && (activeVolume || roots[0]?.path)) {
+      load(activeVolume || roots[0]?.path)
+      return
+    }
+    if (path) load(path)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function chooseVolume(value) {
+    if (!value) return
+    setActiveVolume(value)
+    load(value)
+  }
+
+  return <div className="vault-browser">
+    <div className="vault-browser-head">
+      <div>
+        <b>{title}</b>
+        <small>{allowFiles ? 'Выбери файл или текущую папку целиком' : 'Выбери каталог назначения'}</small>
+      </div>
+      <select value={roots.find(item => path.startsWith(item.path))?.path || activeVolume || ''} onChange={e => chooseVolume(e.target.value)}>
+        <option value="">Выбрать логический том…</option>
+        {roots.map(item => <option key={item.path} value={item.path}>
+          {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+        </option>)}
+      </select>
+    </div>
+
+    <div className="vault-browser-toolbar">
+      <button disabled={!data?.parent} onClick={() => data?.parent && load(data.parent)}>↑</button>
+      <input value={path} onChange={e => setPath(e.target.value)} />
+      <button onClick={() => load(path)}>Open</button>
+      <button className="primary" disabled={!data?.path} onClick={() => onSelect(data.path)}>
+        {allowFiles ? 'Выбрать эту папку' : 'Использовать эту папку'}
+      </button>
+    </div>
+
+    <div className="vault-browser-list">
+      {loading && <div className="muted">Загрузка…</div>}
+      {!loading && data?.items?.map(item => {
+        if (!item.is_dir && !allowFiles) return null
+        return <button
+          key={item.path}
+          className={selectedPath === item.path ? 'selected' : ''}
+          onClick={() => item.is_dir ? undefined : onSelect(item.path)}
+          onDoubleClick={() => item.is_dir && load(item.path)}
+        >
+          <span>{item.is_dir ? '📁' : '📄'} {item.name}</span>
+          <span>{item.is_dir ? (item.size_known ? fmtBytes(item.size) : 'folder') : fmtBytes(item.size)}</span>
+        </button>
+      })}
+    </div>
+
+    <div className="vault-browser-selected">
+      <small>Выбрано</small>
+      <code>{selectedPath || '—'}</code>
+    </div>
+  </div>
+}
+
 function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
   const [status, setStatus] = useState(null)
   const [identity, setIdentity] = useState('')
@@ -339,50 +425,33 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
     {status?.initialized && !unlocked && <div className="grid two"><Card title="Unlock"><input placeholder="Идентификатор" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button className="primary" onClick={unlock}>Unlock</button></Card><Card title="Recovery"><input placeholder="Recovery key" value={recovery} onChange={e=>setRecovery(e.target.value)} /><button onClick={unlockRecovery}>Unlock recovery</button></Card></div>}
     {unlocked && <Card title="Vault objects">
       <div className="vault-path-grid">
-        <div>
-          <label>Import source volume</label>
-          <select
-            value={roots.some(item => source.startsWith(item.path)) ? roots.find(item => source.startsWith(item.path))?.path || '' : ''}
-            onChange={e => {
-              const value = e.target.value
-              if (!value) return
-              setActiveVolume(value)
-              setSource(value)
-            }}
-          >
-            <option value="">Выбрать том…</option>
-            {roots.map(item => <option key={item.path} value={item.path}>
-              {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
-            </option>)}
-          </select>
-          <label>Файл / путь для шифрования</label>
-          <input placeholder="Путь файла для импорта" value={source} onChange={e=>setSource(e.target.value)} />
-        </div>
-        <div>
-          <label>Export destination volume</label>
-          <select
-            value={roots.some(item => destination.startsWith(item.path)) ? roots.find(item => destination.startsWith(item.path))?.path || '' : ''}
-            onChange={e => {
-              const value = e.target.value
-              if (!value) return
-              setActiveVolume(value)
-              setDestination(value)
-            }}
-          >
-            <option value="">Выбрать том…</option>
-            {roots.map(item => <option key={item.path} value={item.path}>
-              {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
-            </option>)}
-          </select>
-          <label>Export destination</label>
-          <input value={destination} onChange={e=>setDestination(e.target.value)} />
-        </div>
+        <VaultPathBrowser
+          title="Что шифровать"
+          roots={roots}
+          activeVolume={activeVolume}
+          setActiveVolume={setActiveVolume}
+          selectedPath={source}
+          onSelect={setSource}
+          allowFiles
+        />
+        <VaultPathBrowser
+          title="Куда восстанавливать"
+          roots={roots}
+          activeVolume={activeVolume}
+          setActiveVolume={setActiveVolume}
+          selectedPath={destination}
+          onSelect={setDestination}
+          allowFiles={false}
+        />
       </div>
       <div className="actions">
         <button onClick={lock}>Lock now</button>
-        <button disabled={!health?.safety?.vault_writes || !source} onClick={importItem}>Encrypt + import</button>
+        <button disabled={!health?.safety?.vault_writes || !source} onClick={importItem}>
+          Encrypt file / folder
+        </button>
       </div>
-      <div className="vault-list">{items.map(i => <div key={i.id}><span>🔒 {i.name}</span><span>{fmtBytes(i.size)}</span><button disabled={!health?.safety?.vault_writes || !destination} onClick={()=>exportItem(i)}>Export</button></div>)}</div>
+      <p className="muted">Если выбрана папка, Vault шифрует все файлы рекурсивно и сохраняет относительные пути. При экспорте структура каталогов восстанавливается внутри выбранной папки назначения.</p>
+      <div className="vault-list">{items.map(i => <div key={i.id}><span>🔒 {i.relative_path || i.name}</span><span>{fmtBytes(i.size)}</span><button disabled={!health?.safety?.vault_writes || !destination} onClick={()=>exportItem(i)}>Export</button></div>)}</div>
     </Card>}
   </div>
 }

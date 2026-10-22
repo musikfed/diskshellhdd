@@ -117,6 +117,8 @@ CREATE TABLE IF NOT EXISTS placement_plan_items (
     size INTEGER NOT NULL,
     reason TEXT NOT NULL,
     action TEXT NOT NULL DEFAULT 'move',
+    layout_lane TEXT,
+    target_band_bytes INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
     verification TEXT,
     error TEXT,
@@ -282,6 +284,8 @@ def init_database() -> None:
                 ("status", "TEXT NOT NULL DEFAULT 'pending'"),
                 ("verification", "TEXT"),
                 ("error", "TEXT"),
+                ("layout_lane", "TEXT"),
+                ("target_band_bytes", "INTEGER"),
             ],
         )
         # Indexes that reference migrated columns must be created only after

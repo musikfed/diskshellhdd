@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.3
+# DiskShell HDD 0.6.4
 
 Русский · [English](README.md)
 
@@ -212,7 +212,7 @@ System / Boot / Application disk остаются backend-protected и тумб�
 - Существующий Vault автоматически не переносится; выбор location относится к первому созданию.
 - Recovery key после Create остаётся виден до явного подтверждения «Я сохранил recovery key».
 
-## Commander multi-selection 0.6.3
+## Commander multi-selection 0.6.4
 
 - обычный клик — выбрать один объект;
 - `Ctrl+Click` — добавить/убрать отдельный файл или папку;

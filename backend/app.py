@@ -19,7 +19,7 @@ from backend.core.database import init_database
 from backend.storage_brain.service import ensure_defaults
 
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 
 
 def create_app() -> Flask:

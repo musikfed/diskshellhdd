@@ -179,11 +179,16 @@ def _destination_exists(endpoint: dict[str, Any]) -> bool:
 def _indexed_destination(
     endpoint: dict[str, Any],
     reserved: set[tuple[str, str, str]] | None = None,
+    is_dir: bool = False,
 ) -> dict[str, Any]:
     reserved = reserved or set()
     if endpoint["kind"] == "local":
         path = _local_path(endpoint)
-        suffix = path.suffix if path.suffix and path.name != path.suffix else ""
+        suffix = (
+            ""
+            if is_dir
+            else path.suffix if path.suffix and path.name != path.suffix else ""
+        )
         base = path.name[:-len(suffix)] if suffix else path.name
         for index in range(1, 10000):
             candidate = path.with_name(f"{base} ({index}){suffix}")
@@ -192,7 +197,11 @@ def _indexed_destination(
                 return result
     else:
         path = PurePosixPath(_remote_path(endpoint))
-        suffix = path.suffix if path.suffix and path.name != path.suffix else ""
+        suffix = (
+            ""
+            if is_dir
+            else path.suffix if path.suffix and path.name != path.suffix else ""
+        )
         base = path.name[:-len(suffix)] if suffix else path.name
         for index in range(1, 10000):
             candidate = path.with_name(f"{base} ({index}){suffix}")
@@ -564,7 +573,11 @@ def _apply_conflict_policy(
             item["conflict_resolution"] = "skip"
             continue
         if policy == "keep_both":
-            item["destination"] = _indexed_destination(item["destination"], reserved)
+            item["destination"] = _indexed_destination(
+                item["destination"],
+                reserved,
+                is_dir=bool(item["is_dir"]),
+            )
             item["conflict_resolution"] = "keep_both"
             reserved.add(_endpoint_key(item["destination"]))
             continue

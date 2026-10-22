@@ -16,6 +16,7 @@ from backend.services.storage.windows_disks import (
     DiskDetectionError,
     list_windows_disks,
 )
+from backend.services.storage.windows_privileges import is_process_elevated
 from backend.services.storage.write_authorization import (
     DiskWriteBlocked,
     annotate_disks,
@@ -38,7 +39,10 @@ def _disk_by_number(disk_number: int) -> dict:
 
 @bp.get("/capabilities")
 def get_capabilities():
-    return jsonify(capabilities())
+    payload = capabilities()
+    payload["process_elevated"] = is_process_elevated()
+    payload["destructive_requires_elevation"] = True
+    return jsonify(payload)
 
 
 @bp.get("")

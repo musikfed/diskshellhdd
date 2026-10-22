@@ -328,6 +328,22 @@ def simulate_interleave(
         per_file[extent["path"]] += 1
 
     extent_lengths = [int(extent["length"]) for extent in extents if extent["length"] > 0]
+    split_extents = [
+        extent
+        for extent in extents
+        if int(extent.get("segments_total") or 1) > 1 and int(extent["length"]) > 0
+    ]
+    split_lengths = [int(extent["length"]) for extent in split_extents]
+    tiny_split_extents = 0
+    oversized_split_extents = 0
+    for extent in split_extents:
+        policy = policies[extent["lane"]]
+        length = int(extent["length"])
+        if length < int(policy["effective_min_band"]) * 0.75:
+            tiny_split_extents += 1
+        if length > int(policy["max_band"]):
+            oversized_split_extents += 1
+
     lane_stats = {}
     for lane in lane_names:
         lane_extents = [item for item in extents if item["lane"] == lane]
@@ -368,6 +384,17 @@ def simulate_interleave(
             ),
             "smallest_extent_bytes": min(extent_lengths, default=0),
             "largest_extent_bytes": max(extent_lengths, default=0),
+            "split_extents": len(split_extents),
+            "smallest_split_extent_bytes": min(split_lengths, default=0),
+            "largest_split_extent_bytes": max(split_lengths, default=0),
+            "tiny_split_extents": tiny_split_extents,
+            "oversized_split_extents": oversized_split_extents,
+            "whole_file_extents": len(extents) - len(split_extents),
+            "quality": (
+                "bounded"
+                if tiny_split_extents == 0 and oversized_split_extents == 0
+                else "review"
+            ),
             "truncated": truncated,
         },
         "extent_moves_allowed": settings.allow_extent_moves,

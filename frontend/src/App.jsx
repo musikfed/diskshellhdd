@@ -21,6 +21,37 @@ function Card({ title, children, className = '' }) {
   return <section className={`card ${className}`}><h3>{title}</h3>{children}</section>
 }
 
+
+class PageErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  componentDidCatch(error, info) {
+    console.error('DiskShell page render failed', error, info)
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.page !== this.props.page && this.state.error) {
+      this.setState({ error: null })
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    return <div className="error page-crash">
+      <b>Страница DiskShell упала при рендере.</b>
+      <span>{String(this.state.error?.message || this.state.error)}</span>
+      <small>Переключись на другую вкладку или обнови страницу. Ошибка больше не скрывается пустым фоном.</small>
+    </div>
+  }
+}
+
 function Safety({ health }) {
   const s = health?.safety || {}
   return <div className="safety">
@@ -33,8 +64,15 @@ function Safety({ health }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState('dashboard')
+  const [page, setPage] = useState(() => {
+    const saved = localStorage.getItem('activePage')
+    return NAV.some(([id]) => id === saved) ? saved : 'dashboard'
+  })
   const [health, setHealth] = useState(null)
+  const [roots, setRoots] = useState([])
+  const [activeVolume, setActiveVolume] = useState(
+    () => localStorage.getItem('activeVolume') || '',
+  )
   const [scanId, setScanId] = useState(localStorage.getItem('scanId') || '')
   const [error, setError] = useState('')
   const refreshHealth = async () => {
@@ -48,10 +86,35 @@ export default function App() {
     }
   }
   useEffect(() => { refreshHealth() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    api('/api/files/roots')
+      .then(value => {
+        const nextRoots = value.roots || []
+        setRoots(nextRoots)
+        setActiveVolume(current => {
+          if (current && nextRoots.some(item => item.path === current)) return current
+          return nextRoots[0]?.path || current
+        })
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(() => { localStorage.setItem('activePage', page) }, [page])
+  useEffect(() => {
+    if (activeVolume) localStorage.setItem('activeVolume', activeVolume)
+  }, [activeVolume])
   useEffect(() => { if (scanId) localStorage.setItem('scanId', scanId) }, [scanId])
   const context = useMemo(
-    () => ({ scanId, setScanId, setError, health, refreshHealth }),
-    [scanId, health],
+    () => ({
+      scanId,
+      setScanId,
+      setError,
+      health,
+      refreshHealth,
+      roots,
+      activeVolume,
+      setActiveVolume,
+    }),
+    [scanId, health, roots, activeVolume],
   )
   const pages = {
     dashboard: <Dashboard {...context} setPage={setPage} />,
@@ -74,9 +137,23 @@ export default function App() {
       <Safety health={health} />
     </aside>
     <main>
-      <header><div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Admin storage workbench · React + Python</p></div><div className="scan-chip">Scan: {scanId || '—'}</div></header>
+      <header>
+        <div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Admin storage workbench · React + Python</p></div>
+        <div className="header-context">
+          <label className="active-volume-select">
+            <span>Active volume</span>
+            <select value={activeVolume} onChange={e => setActiveVolume(e.target.value)}>
+              <option value="">—</option>
+              {roots.map(item => <option key={item.path} value={item.path}>
+                {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+              </option>)}
+            </select>
+          </label>
+          <div className="scan-chip">Scan: {scanId || '—'}</div>
+        </div>
+      </header>
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
-      {pages[page]}
+      <PageErrorBoundary page={page}>{pages[page]}</PageErrorBoundary>
     </main>
   </div>
 }

@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import ctypes
 import os
+import threading
 from pathlib import Path
 from typing import Any
+
+
+_known_lock = threading.Lock()
+_known_volume_identities: dict[str, str] = {}
 
 
 def _windows_volume_identity(root: Path) -> str | None:
@@ -56,6 +61,7 @@ def _local_root(path: str | Path) -> Path:
 
 def local_volume_probe(path: str | Path) -> dict[str, Any]:
     root = _local_root(path)
+    root_key = str(root).casefold()
     try:
         available = root.exists()
     except OSError:
@@ -71,10 +77,18 @@ def local_volume_probe(path: str | Path) -> dict[str, Any]:
             available = False
             identity = None
 
+    if identity:
+        with _known_lock:
+            _known_volume_identities[root_key] = identity
+    else:
+        with _known_lock:
+            identity = _known_volume_identities.get(root_key)
+
     return {
         "root": str(root),
         "available": bool(available),
         "identity": identity,
+        "identity_cached": bool(identity and not available),
     }
 
 

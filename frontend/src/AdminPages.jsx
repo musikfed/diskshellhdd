@@ -280,11 +280,11 @@ export function DisksAdmin({ setError }) {
         {d.protected
           ? <p className="protected">🔒 {d.protection_reasons.join(', ')}</p>
           : <div className="actions">
-              {!write.allowed && <button className="unlock-button" onClick={() => prepareUnlock(d)}>Разблокировать только этот диск</button>}
-              {write.allowed && <button onClick={() => lock(d.number)}>🔒 Заблокировать запись</button>}
-              {String(d.partition_style).toUpperCase() === 'RAW' && <button onClick={() => prepareInitialize(d.number)}>Инициализировать GPT</button>}
-              {Number(d.largest_free_extent || 0) > 0 && String(d.partition_style).toUpperCase() !== 'RAW' && <button onClick={() => newPartition(d)}>+ Раздел / том</button>}
-              <button className="danger-outline" onClick={() => prepareFormat(d.number)}>Очистить + один том</button>
+              {!write.allowed && <button className="unlock-button" disabled={Boolean(diskBusy)} onClick={() => prepareUnlock(d)}>Разблокировать только этот диск</button>}
+              {write.allowed && <button disabled={Boolean(diskBusy)} onClick={() => lock(d.number)}>🔒 Заблокировать запись</button>}
+              {String(d.partition_style).toUpperCase() === 'RAW' && <button disabled={Boolean(diskBusy)} onClick={() => prepareInitialize(d.number)}>Инициализировать GPT</button>}
+              {Number(d.largest_free_extent || 0) > 0 && String(d.partition_style).toUpperCase() !== 'RAW' && <button disabled={Boolean(diskBusy)} onClick={() => newPartition(d)}>+ Раздел / том</button>}
+              <button className="danger-outline" disabled={Boolean(diskBusy)} onClick={() => prepareFormat(d.number)}>Очистить + первый том</button>
             </div>}
 
         <div className="partition-table">
@@ -365,7 +365,7 @@ export function DisksAdmin({ setError }) {
       </div>
       {formatDirty && <div className="plan-stale">
         <span>Параметры изменены. Перед destructive execution пересчитай план.</span>
-        <button onClick={() => prepareFormat(formatPlan.disk.number)}>Пересчитать план</button>
+        <button disabled={Boolean(diskBusy)} onClick={() => prepareFormat(formatPlan.disk.number)}>Пересчитать план</button>
       </div>}
       <div className="metrics">
         <Metric label="Первый том" value={formatPlan.use_maximum ? 'максимальный доступный' : fmtBytes(formatPlan.size_bytes)} />

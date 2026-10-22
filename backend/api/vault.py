@@ -43,14 +43,23 @@ def _unlocked_response(payload: dict):
 
 @bp.get("/status")
 def status():
-    return jsonify(vault_status())
+    try:
+        return jsonify(vault_status())
+    except VaultError as exc:
+        return jsonify({"error": "vault_status_failed", "message": str(exc)}), 500
 
 
 @bp.post("/create")
 def create():
     payload = request.get_json(silent=True) or {}
     try:
-        return jsonify(create_vault(str(payload.get("identity", "")), str(payload.get("secret", "")))), 201
+        return jsonify(
+            create_vault(
+                str(payload.get("identity", "")),
+                str(payload.get("secret", "")),
+                root=payload.get("root"),
+            )
+        ), 201
     except VaultError as exc:
         return jsonify({"error": "vault_create_failed", "message": str(exc)}), 400
 

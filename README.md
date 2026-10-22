@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.2
+# DiskShell HDD 0.6.3
 
 [Русская версия](README.ru.md) · English
 
@@ -149,3 +149,19 @@ System / Boot / Application disks remain backend-protected. Typed confirmation f
 - folder import is recursive and preserves relative paths;
 - export selects a logical volume and destination directory, restoring nested paths;
 - physical disk selectors remain reserved for partitioning, raw access and surface diagnostics.
+
+
+## Commander multi-selection 0.6.3
+
+- normal click selects one item;
+- `Ctrl+Click` toggles individual files/folders;
+- `Shift+Click` selects a range;
+- `Ctrl+A` selects all items in the active pane;
+- each pane has explicit Select all / Clear controls;
+- pane status shows selection count and known selected size;
+- F5 Copy and F6 Move submit one background batch job for the selected set;
+- batch transfer supports Local↔Local, Local↔SFTP/FTP and Remote↔Remote;
+- Smart folders use one batch destination-classification request;
+- F8 Trash/Delete and F9 Archive accept the selected group;
+- F2 Rename, F3 View and Extract require exactly one selected item;
+- Stop removes only the current incomplete target while already verified batch items remain completed.

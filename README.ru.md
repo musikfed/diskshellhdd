@@ -1,4 +1,4 @@
-# DiskShell HDD 0.5.1
+# DiskShell HDD 0.5.2
 
 Русский · [English](README.md)
 
@@ -63,3 +63,23 @@ uv run python -m backend.app
 Для 4 TB storage HDD разумная базовая схема: GPT + один большой NTFS том. 4 KiB — универсальный вариант; 16 KiB — хороший вариант для смешанного хранилища с преобладанием крупных фото/video/archive/ISO; 64 KiB — специализированный вариант для почти исключительно крупных sequential-файлов. DiskShell не притворяется, что cluster size можно поменять без переформатирования.
 
 Подробнее: [архитектура](docs/ARCHITECTURE.ru.md) · [развёртывание](docs/DEPLOYMENT.ru.md) · [безопасность](docs/SAFETY.ru.md).
+
+## Storage wizard 0.5.2
+
+DiskShell различает три операции:
+
+1. **Initialize GPT** — создаёт только таблицу разделов. Том и файловая система ещё не создаются.
+2. **+ Раздел / том** — создаёт partition в уже существующем unallocated space. Можно задать размер GiB или оставить поле пустым для максимального extent.
+3. **Очистить + первый том** — destructive workflow для выбранного physical disk. После очистки создаёт GPT и первый том заданного размера; если размер меньше диска, остаток остаётся **Unallocated** для следующих томов.
+
+Windows Storage `Format-Volume` adapter предлагает: **NTFS, exFAT, ReFS, FAT32, FAT**. UDF сюда не включён, потому что PowerShell `Format-Volume` его не принимает; это отдельный backend через `format.exe`, если он когда-нибудь понадобится.
+
+Cluster sizes показываются по выбранной FS. Backend дополнительно проверяет cluster-count limits до destructive execution. Для основного WD Purple остаётся рекомендуемый профиль **NTFS 16 KiB**.
+
+### Progress
+
+- Files Copy/Move: реальный процент по байтам после этапа измерения source.
+- Placement Executor: реальный процент по объёму плана.
+- Quick Index: indeterminate, потому что заранее неизвестно число файлов.
+- Defender/ClamAV: indeterminate, потому что движок не отдаёт надёжный общий объём.
+- Initialize/partition/format: activity indicator без фиктивного процента; принудительный Stop во время изменения partition table намеренно не предлагается.

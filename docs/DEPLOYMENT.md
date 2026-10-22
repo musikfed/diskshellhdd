@@ -1,4 +1,4 @@
-# Deploying DiskShell 0.5.1.1 on Windows 11
+# Deploying DiskShell 0.5.2.1 on Windows 11
 
 ## Clean installation / recovery
 
@@ -55,3 +55,11 @@ DiskShell uses local Microsoft Defender or ClamAV and runs scans without remedia
 Keep `DS_HOST=127.0.0.1` until remote authentication is implemented.
 
 See [SAFETY.md](SAFETY.md).
+
+## Volume sizing and filesystems in 0.5.2
+
+A RAW disk can be initialized first and then partitioned into multiple explicitly sized volumes, or the destructive wizard can create a first custom-sized volume and leave the remainder unallocated.
+
+The current Windows Storage adapter exposes NTFS, exFAT, ReFS, FAT32, and FAT. ReFS availability and legacy filesystem feasibility still depend on the installed Windows edition/build and selected volume geometry.
+
+Progress percentages are shown only when the backend has a trustworthy total.

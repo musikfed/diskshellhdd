@@ -1508,6 +1508,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     () => localStorage.getItem('commanderArchiveFormat') || 'zip',
   )
   const [fileWrite, setFileWrite] = useState(null)
+  const [pendingConflict, setPendingConflict] = useState(null)
 
   const terminal = useMemo(() => new Set(['completed', 'failed', 'cancelled']), [])
   const activePane = activeSide === 'left' ? left : right
@@ -1737,6 +1738,53 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     } catch (e) { setError(e.message) }
   }
 
+  async function submitTransferRequest(request, conflictPolicy = 'ask') {
+    try {
+      const value = await api('/api/commander/jobs', {
+        method: 'POST',
+        body: JSON.stringify({ ...request, conflict_policy: conflictPolicy }),
+      })
+      setPendingConflict(null)
+      setJob(value)
+      setJobId(value.id)
+      return value
+    } catch (e) {
+      if (e.status === 409 && e.payload?.error === 'commander_conflict') {
+        setPendingConflict({
+          request,
+          conflicts: e.payload.conflicts || [],
+        })
+        return null
+      }
+      throw e
+    }
+  }
+
+  async function resolveConflict(policy) {
+    if (!pendingConflict) return
+    try {
+      await submitTransferRequest(pendingConflict.request, policy)
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  async function retryPartial() {
+    if (!job?.transfers?.length) return
+    const request = {
+      operation: job.operation,
+      transfers: job.transfers.map(item => ({
+        source: item.source,
+        destination: item.destination,
+      })),
+    }
+    try {
+      await submitTransferRequest(request, 'resume')
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   async function transfer(operation, sourceSide = activeSide) {
     const sourcePane = sourceSide === 'left' ? left : right
     const destinationPane = sourceSide === 'left' ? right : left
@@ -1795,12 +1843,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
         }
       })
 
-      const value = await api('/api/commander/jobs', {
-        method: 'POST',
-        body: JSON.stringify({ operation, transfers }),
-      })
-      setJob(value)
-      setJobId(value.id)
+      await submitTransferRequest({ operation, transfers }, 'ask')
     } catch (e) { setError(e.message) }
   }
 
@@ -2117,6 +2160,47 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
       </div>
     </div>
 
+    {pendingConflict && <Panel title="Destination conflict" className="danger-card">
+      <p className="warning">
+        Найдено совпадений: <b>{pendingConflict.conflicts.length}</b>. Автоматической перезаписи нет — выбери действие.
+      </p>
+      <div className="archive-list">
+        {pendingConflict.conflicts.slice(0, 12).map((item, index) => <div key={`${item.destination?.path || 'conflict'}-${index}`}>
+          <span>
+            {item.destination?.path}
+            {item.can_resume ? ' · partial/size resume available' : ''}
+            {item.same_as_source ? ' · source = destination' : ''}
+          </span>
+          <span>{item.destination_size == null ? '' : fmtBytes(item.destination_size)}</span>
+        </div>)}
+      </div>
+      {pendingConflict.conflicts.length > 12 && <p className="muted">
+        Ещё {pendingConflict.conflicts.length - 12} конфликтов. Выбранная политика применяется ко всему batch.
+      </p>}
+      <div className="actions">
+        <button
+          className="primary"
+          disabled={!pendingConflict.conflicts.length || pendingConflict.conflicts.some(item => !item.can_resume)}
+          onClick={() => resolveConflict('resume')}
+        >
+          Continue partial
+        </button>
+        <button className="danger-button" onClick={() => resolveConflict('replace')}>
+          Replace all
+        </button>
+        <button onClick={() => resolveConflict('keep_both')}>
+          Keep both · add (1)
+        </button>
+        <button onClick={() => resolveConflict('skip')}>
+          Skip conflicts
+        </button>
+        <button onClick={() => setPendingConflict(null)}>Cancel</button>
+      </div>
+      <p className="muted">
+        Continue использует фактический размер уже существующего target. Keep both создаёт следующий свободный индекс: name (1), name (2), …
+      </p>
+    </Panel>}
+
     {smartTransfer && <Panel title="Smart transfer policy">
       <p><b>Smart folders не означает шахматную фрагментацию.</b> Этот режим меняет только папку назначения по Storage Class. Direct transfer всегда остаётся доступным. Фактическую NTFS-нарезку проверяет Storage Brain / Storage Lab после managed transfer.</p>
       {smartHint && <div className="metrics">
@@ -2140,6 +2224,8 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
           <Metric label="Files" value={`${job.files || 0}/${job.total_files || 0}`} />
           <Metric label="Transferred" value={fmtBytes(job.bytes || 0)} />
           <Metric label="Reconnects" value={job.retries || 0} />
+          <Metric label="Missing" value={job.missing || 0} />
+          <Metric label="Skipped" value={job.skipped || 0} />
         </div>
         <JobProgress
           percent={job.progress_percent}
@@ -2152,6 +2238,13 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
           Resume from approximately {fmtBytes(job.resume_offset || 0)}; completed bytes are not restarted.
           {job.last_retry_error ? ` Last error: ${job.last_retry_error}` : ''}
         </p>}
+        {job.partial_retained && <div className="actions">
+          <button className="primary" disabled={busy} onClick={retryPartial}>
+            Continue partial
+          </button>
+          <small>Partial target сохранён: {job.partial_path}</small>
+        </div>}
+        {(job.warnings || []).slice(-8).map((item, index) => <p className="muted" key={`${item}-${index}`}>• {item}</p>)}
         {job.error && <p className="warning">{job.error}</p>}
       </>}
       {!fileWritesAllowed && <small>FILE WRITE LOCKED — Copy/Move/MkDir/Rename/Delete/Archive отключены. Включи тумблер сверху.</small>}

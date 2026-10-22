@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
+from backend.services.storage.filesystem_profiles import capabilities
 from backend.services.storage.partition_magic import execute_format, format_plan
 from backend.services.storage.volume_manager import (
     assign_drive_letter,
@@ -33,6 +34,11 @@ def _disk_by_number(disk_number: int) -> dict:
     if disk is None:
         raise ValueError("Disk not found")
     return disk
+
+
+@bp.get("/capabilities")
+def get_capabilities():
+    return jsonify(capabilities())
 
 
 @bp.get("")
@@ -99,11 +105,15 @@ def lock_disk(disk_number: int):
 def get_format_plan(disk_number: int):
     payload = request.get_json(silent=True) or {}
     try:
+        raw_size = payload.get("size_bytes")
+        size_bytes = None if raw_size in {None, "", 0} else int(raw_size)
         plan = format_plan(
             disk_number,
             filesystem=str(payload.get("filesystem", "NTFS")),
             label=str(payload.get("label", "Storage")),
             allocation_unit=int(payload.get("allocation_unit", 4096)),
+            size_bytes=size_bytes,
+            drive_letter=payload.get("drive_letter"),
         )
     except (ValueError, DiskDetectionError, DiskWriteBlocked) as exc:
         return jsonify({"error": "format_plan_failed", "message": str(exc)}), 400
@@ -114,12 +124,16 @@ def get_format_plan(disk_number: int):
 def format_disk(disk_number: int):
     payload = request.get_json(silent=True) or {}
     try:
+        raw_size = payload.get("size_bytes")
+        size_bytes = None if raw_size in {None, "", 0} else int(raw_size)
         result = execute_format(
             disk_number,
             confirmation=str(payload.get("confirmation", "")),
             filesystem=str(payload.get("filesystem", "NTFS")),
             label=str(payload.get("label", "Storage")),
             allocation_unit=int(payload.get("allocation_unit", 4096)),
+            size_bytes=size_bytes,
+            drive_letter=payload.get("drive_letter"),
         )
     except DiskWriteBlocked as exc:
         return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403

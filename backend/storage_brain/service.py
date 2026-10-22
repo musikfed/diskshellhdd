@@ -451,6 +451,73 @@ def get_plan(plan_id: int) -> dict:
     return _decorate_plan(result)
 
 
+def get_plan_for_execution(plan_id: int) -> dict:
+    """Return only explicitly selected plan items for the executor.
+
+    Large plans can contain hundreds of thousands of rows. Keeping API paging and
+    execution selection separate prevents an unchecked draft from being loaded
+    into memory just because the operator applies a small reviewed batch.
+    """
+    with connect() as connection:
+        plan = connection.execute(
+            "SELECT * FROM placement_plans WHERE id = ?",
+            (int(plan_id),),
+        ).fetchone()
+        if plan is None:
+            raise KeyError(plan_id)
+        items = connection.execute(
+            """
+            SELECT *
+            FROM placement_plan_items
+            WHERE plan_id=? AND selected=1
+            ORDER BY size DESC, source_path
+            """,
+            (int(plan_id),),
+        ).fetchall()
+
+    result = dict(plan)
+    result["warnings"] = json.loads(result["warnings"] or "[]")
+    result["items"] = [_decode_layout_verification(dict(row)) for row in items]
+    return result
+
+
+def plan_has_remaining_items(plan_id: int) -> bool:
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM placement_plan_items
+            WHERE plan_id=? AND status!='completed'
+            LIMIT 1
+            """,
+            (int(plan_id),),
+        ).fetchone()
+    return row is not None
+
+
+def get_plan_layout_summary(plan_id: int) -> dict:
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%conforming%' THEN 1 ELSE 0 END)
+                    AS conforming,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%"status": "drift"%' THEN 1 ELSE 0 END)
+                    AS drift,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%unavailable%' THEN 1 ELSE 0 END)
+                    AS unavailable
+            FROM placement_plan_items
+            WHERE plan_id=?
+            """,
+            (int(plan_id),),
+        ).fetchone()
+    return {
+        "conforming": int(row["conforming"] or 0),
+        "drift": int(row["drift"] or 0),
+        "unavailable": int(row["unavailable"] or 0),
+    }
+
+
 def _decode_layout_verification(item: dict) -> dict:
     raw_layout = item.get("layout_verification")
     if isinstance(raw_layout, str) and raw_layout:

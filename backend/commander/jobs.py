@@ -553,7 +553,7 @@ def _copy_file(
                 retries = 0
                 continue
 
-            retryable = _retryable_transfer_error(exc)
+            retryable = _retryable_transfer_error(exc) or _looks_like_endpoint_loss(exc)
             if not retryable or (not has_remote and not _looks_like_endpoint_loss(exc)):
                 raise
 

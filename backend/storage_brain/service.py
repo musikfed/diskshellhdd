@@ -144,6 +144,32 @@ def choose_storage_class(file_row: dict, rules: list[dict]) -> tuple[str, str]:
     return "other", "Fallback"
 
 
+def _scope_key(value: str | Path) -> str:
+    raw = str(value).strip()
+    if len(raw) >= 2 and raw[1] == ":":
+        return raw.replace("/", "\\").rstrip("\\").casefold()
+    normalized = os.path.normpath(str(Path(raw).expanduser().resolve()))
+    return os.path.normcase(normalized)
+
+
+def _is_under(path: str | Path, root: str | Path) -> bool:
+    child = _scope_key(path)
+    parent = _scope_key(root)
+    separator = "\\" if len(parent) >= 2 and parent[1] == ":" else os.sep
+    return child == parent or child.startswith(parent + separator)
+
+
+def _selected_by_scope(
+    path: str | Path,
+    source_roots: list[str],
+    excluded_roots: list[str],
+) -> bool:
+    return (
+        any(_is_under(path, root) for root in source_roots)
+        and not any(_is_under(path, root) for root in excluded_roots)
+    )
+
+
 def _same_volume(source: Path, target_root: Path) -> bool:
     if os.name == "nt":
         return source.drive.casefold() == target_root.drive.casefold()
@@ -197,10 +223,21 @@ def _unique_target(folder: Path, source: Path, reserved: set[str]) -> Path:
     return candidate
 
 
-def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
+def create_placement_plan(
+    scan_id: int,
+    storage_root: Path,
+    source_roots: list[str] | None = None,
+    excluded_roots: list[str] | None = None,
+    cross_volume_policy: str = "copy_keep_source",
+) -> dict:
     ensure_defaults()
     storage_root = storage_root.expanduser().resolve()
     policy = capacity_policy(storage_root)
+
+    if cross_volume_policy not in {"copy_keep_source", "move_after_verify"}:
+        raise ValueError(
+            "cross_volume_policy must be copy_keep_source or move_after_verify"
+        )
 
     with connect() as connection:
         session = connection.execute(
@@ -209,6 +246,26 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
         ).fetchone()
         if session is None:
             raise ValueError("Scan session not found or not completed")
+
+        effective_sources = [
+            str(Path(value).expanduser())
+            for value in (source_roots or [str(session["root_path"])])
+            if str(value).strip()
+        ]
+        if not effective_sources:
+            raise ValueError("At least one source root is required")
+
+        effective_excludes = [
+            str(Path(value).expanduser())
+            for value in (excluded_roots or [])
+            if str(value).strip()
+        ]
+        # Never reorganize DiskShell itself, its SQLite/runtime data, or an
+        # already-managed destination back into itself.
+        for automatic in (settings.project_root, settings.data_dir, storage_root):
+            value = str(automatic)
+            if value not in effective_excludes:
+                effective_excludes.append(value)
 
         classes = {
             row["key"]: dict(row)
@@ -229,8 +286,21 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
         items: list[tuple] = []
         reserved_targets: set[str] = set()
         additional_target_bytes = 0
+        same_volume_items = 0
+        cross_volume_items = 0
+        selected_files = 0
+        excluded_files = 0
 
         for file_row in files:
+            if not _selected_by_scope(
+                file_row["path"],
+                effective_sources,
+                effective_excludes,
+            ):
+                excluded_files += 1
+                continue
+            selected_files += 1
+
             target_class, reason = choose_storage_class(file_row, rules)
             class_row = classes.get(target_class, classes["other"])
             source = Path(file_row["path"])
@@ -252,8 +322,16 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
                 reserved_targets,
             )
             same_volume = _same_volume(source, storage_root)
-            action = "move_same_volume" if same_volume else "copy_cross_volume"
-            if not same_volume:
+            if same_volume:
+                action = "move_same_volume"
+                same_volume_items += 1
+            else:
+                action = (
+                    "move_cross_volume"
+                    if cross_volume_policy == "move_after_verify"
+                    else "copy_cross_volume"
+                )
+                cross_volume_items += 1
                 additional_target_bytes += int(file_row["size"])
 
             items.append(
@@ -274,18 +352,28 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
         projected_used = policy.used + additional_target_bytes
         projected_free = max(0, policy.total - projected_used)
         if projected_free < policy.reserve:
-            warnings.append("Projected free space is below the configured working reserve")
+            warnings.append(
+                "Projected free space is below the configured working reserve"
+            )
         if projected_used >= policy.soft_limit:
             warnings.append("Projected storage use is above the soft fill limit")
         if projected_used >= policy.hard_limit:
-            warnings.append("Projected storage use is above the hard fill limit; do not apply this plan")
+            warnings.append(
+                "Projected storage use is above the hard fill limit; do not apply this plan"
+            )
+        if cross_volume_policy == "move_after_verify" and cross_volume_items:
+            warnings.append(
+                "Cross-volume MOVE deletes the SSD source only after the HDD copy "
+                "has been published and verified. Use SHA-256 for the strongest check."
+            )
 
         cursor = connection.execute(
             """
             INSERT INTO placement_plans (
                 scan_id, storage_root, total_items, total_bytes, projected_used_bytes,
-                projected_free_bytes, reserve_bytes, warnings
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                projected_free_bytes, reserve_bytes, source_roots, excluded_roots,
+                cross_volume_policy, warnings
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 scan_id,
@@ -295,6 +383,9 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
                 projected_used,
                 projected_free,
                 policy.reserve,
+                json.dumps(effective_sources, ensure_ascii=False),
+                json.dumps(effective_excludes, ensure_ascii=False),
+                cross_volume_policy,
                 json.dumps(warnings, ensure_ascii=False),
             ),
         )
@@ -309,7 +400,15 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
         )
         connection.commit()
 
-    return get_plan(plan_id)
+    result = get_plan(plan_id)
+    result["scope_stats"] = {
+        "selected_files": selected_files,
+        "excluded_files": excluded_files,
+        "same_volume_items": same_volume_items,
+        "cross_volume_items": cross_volume_items,
+        "cross_volume_bytes": additional_target_bytes,
+    }
+    return result
 
 
 def get_plan(plan_id: int) -> dict:
@@ -329,7 +428,20 @@ def get_plan(plan_id: int) -> dict:
 
     result = dict(plan)
     result["warnings"] = json.loads(result["warnings"] or "[]")
+    result["source_roots"] = json.loads(result.get("source_roots") or "[]")
+    result["excluded_roots"] = json.loads(result.get("excluded_roots") or "[]")
     result["items"] = [dict(row) for row in items]
+    result["same_volume_items"] = sum(
+        1 for item in result["items"] if item["action"] == "move_same_volume"
+    )
+    result["cross_volume_items"] = sum(
+        1 for item in result["items"] if item["action"] != "move_same_volume"
+    )
+    result["cross_volume_bytes"] = sum(
+        int(item["size"])
+        for item in result["items"]
+        if item["action"] != "move_same_volume"
+    )
     result["confirmation"] = f"APPLY PLAN {plan_id}"
     return result
 

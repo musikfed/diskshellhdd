@@ -1,6 +1,6 @@
 # Deploying DiskShell 0.6.3
 
-DiskShell 0.6.3 builds on the first frozen admin baseline; GitHub `main` is the source of truth. GitHub `main` is the source of truth.
+DiskShell 0.6.3 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -45,6 +45,12 @@ Set-Location "F:\diskshellhdd"
 .\scripts\start-admin.ps1
 ```
 
+Equivalent workspace shortcut:
+
+```powershell
+npm run backend:admin:win
+```
+
 The script checks the current process token. If it is not elevated, Windows shows the standard UAC prompt and starts **only the backend** in an elevated PowerShell. This is safer than keeping the whole editor elevated.
 
 A cmd.exe / double-click wrapper is also available:
@@ -65,7 +71,7 @@ Ctrl+Shift+P
 
 The task calls `scripts/start-admin.ps1`; after the UAC prompt the backend is elevated while the original VS Code process can stay unprivileged.
 
-If you specifically want an **elevated integrated terminal**, use:
+If you specifically want an **elevated integrated terminal**, use the second task, or run `npm run vscode:admin:win`:
 
 ```text
 Ctrl+Shift+P
@@ -138,10 +144,24 @@ npm run build
 
 ### Administrator/root CLI launch
 
-Do not run `sudo uv sync` or `sudo npm`. Elevate only the backend process:
+Do not run `sudo uv sync` or `sudo npm`. Elevate only the backend process.
+
+Ready-made launcher:
 
 ```bash
 cd /path/to/diskshellhdd
+bash scripts/start-admin.sh
+```
+
+or the workspace shortcut:
+
+```bash
+npm run backend:admin:linux
+```
+
+Equivalent manual command:
+
+```bash
 sudo -E "$(pwd)/.venv/bin/python" -m backend.app
 ```
 

@@ -352,9 +352,9 @@ def create_placement_plan(
             INSERT INTO placement_plan_items
                 (
                     plan_id, source_path, target_path, target_class, size,
-                    reason, action, layout_lane, target_band_bytes
+                    reason, action, layout_lane, target_band_bytes, selected
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             """,
             [(plan_id, *item) for item in items],
         )

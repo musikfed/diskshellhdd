@@ -75,11 +75,11 @@ def get_unlock_plan(disk_number: int):
             {
                 "disk": disk,
                 "write_access": state,
-                "confirmation": state["confirmation"],
-                "expires_in_seconds": 900,
+                "confirmation": None,
+                "expires_in_seconds": None,
                 "warning": (
-                    "Unlocking authorizes destructive storage operations for this exact physical "
-                    "disk identity for a limited time. It does not bypass protected-disk checks."
+                    "Write access stays enabled for this exact physical disk identity until the "
+                    "operator disables it or the backend restarts. Protected disks remain blocked."
                 ),
             }
         )
@@ -91,10 +91,9 @@ def get_unlock_plan(disk_number: int):
 
 @bp.post("/<int:disk_number>/unlock")
 def unlock_disk(disk_number: int):
-    payload = request.get_json(silent=True) or {}
     try:
         disk = _disk_by_number(disk_number)
-        state = unlock_selected_disk(disk, str(payload.get("confirmation", "")))
+        state = unlock_selected_disk(disk)
         return jsonify({"disk_number": disk_number, "write_access": state})
     except DiskWriteBlocked as exc:
         return jsonify({"error": "disk_unlock_blocked", "message": str(exc)}), 403

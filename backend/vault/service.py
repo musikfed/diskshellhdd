@@ -278,6 +278,14 @@ def _encrypt_catalog_item(
     return item, object_path
 
 
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def import_path(token: str, source: str | Path) -> dict:
     """Encrypt one file or a complete directory tree.
 
@@ -289,7 +297,11 @@ def import_path(token: str, source: str | Path) -> dict:
 
     master_key = _session_key(token)
     source_path = Path(source).expanduser().resolve(strict=True)
+    vault_root = _vault_root().resolve()
     catalog = _load_catalog(master_key)
+
+    if _path_is_within(source_path, vault_root):
+        raise VaultError("Vault storage itself cannot be imported into Vault")
 
     if source_path.is_file():
         item, _object_path = _encrypt_catalog_item(master_key, source_path)
@@ -310,7 +322,11 @@ def import_path(token: str, source: str | Path) -> dict:
         (
             path
             for path in source_path.rglob("*")
-            if path.is_file() and not path.is_symlink()
+            if (
+                path.is_file()
+                and not path.is_symlink()
+                and not _path_is_within(path.resolve(), vault_root)
+            )
         ),
         key=lambda path: str(path).casefold(),
     )

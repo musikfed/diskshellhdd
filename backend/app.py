@@ -102,7 +102,23 @@ def main() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     init_database()
     ensure_defaults()
-    app.run(host=settings.host, port=settings.port, debug=settings.debug, use_reloader=False)
+
+    # DiskShell may be started from an elevated Administrator/root shell for
+    # raw-disk and storage operations. Never make the Flask interactive
+    # debugger the default for that process. DS_DEBUG=0 uses Waitress; debug
+    # mode is only for local development and should remain bound to loopback.
+    if settings.debug:
+        app.run(
+            host=settings.host,
+            port=settings.port,
+            debug=True,
+            use_reloader=False,
+        )
+        return
+
+    from waitress import serve
+
+    serve(app, host=settings.host, port=settings.port, threads=8)
 
 
 if __name__ == "__main__":

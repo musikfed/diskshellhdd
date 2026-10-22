@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from backend.config import settings
 from backend.files.service import FileWriteBlocked
+from backend.files.write_authorization import file_writes_allowed
 from backend.remote.service import RemoteNotFound, open_session
 
 
@@ -261,8 +261,8 @@ def start_commander_job(
     source: dict[str, Any],
     destination: dict[str, Any],
 ) -> dict[str, Any]:
-    if not settings.allow_file_writes:
-        raise FileWriteBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise FileWriteBlocked("File writes are locked")
 
     op = str(operation).casefold()
     if op not in {"copy", "move"}:

@@ -27,7 +27,7 @@ function Safety({ health }) {
     <strong>Safety / admin mode</strong>
     <span className={s.file_writes ? 'danger' : 'off'}>Файлы: {s.file_writes ? 'WRITE ON' : 'LOCKED'}</span>
     <span className={s.vault_writes ? 'danger' : 'off'}>Vault: {s.vault_writes ? 'WRITE ON' : 'LOCKED'}</span>
-    <span className="off">Диски: {s.selected_disk_unlocks ? 'PER-DISK UNLOCK' : 'LOCKED'}</span>
+    <span className="off">Диски: {s.selected_disk_unlocks ? 'PER-DISK WRITE' : 'LOCKED'}</span>
     <span className={s.extent_moves ? 'danger' : 'off'}>Extents: {s.extent_moves ? 'WRITE ON' : 'LOCKED'}</span>
   </div>
 }
@@ -37,9 +37,22 @@ export default function App() {
   const [health, setHealth] = useState(null)
   const [scanId, setScanId] = useState(localStorage.getItem('scanId') || '')
   const [error, setError] = useState('')
-  useEffect(() => { api('/api/health').then(setHealth).catch(e => setError(e.message)) }, [])
+  const refreshHealth = async () => {
+    try {
+      const value = await api('/api/health')
+      setHealth(value)
+      return value
+    } catch (e) {
+      setError(e.message)
+      return null
+    }
+  }
+  useEffect(() => { refreshHealth() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (scanId) localStorage.setItem('scanId', scanId) }, [scanId])
-  const context = useMemo(() => ({ scanId, setScanId, setError, health }), [scanId, health])
+  const context = useMemo(
+    () => ({ scanId, setScanId, setError, health, refreshHealth }),
+    [scanId, health],
+  )
   const pages = {
     dashboard: <Dashboard {...context} setPage={setPage} />,
     disks: <DisksAdmin {...context} />,
@@ -70,11 +83,11 @@ export default function App() {
 
 function Dashboard({ health, scanId, setPage }) {
   return <div className="stack">
-    <Card title="DiskShell 0.5 · Admin Storage Workbench"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
+    <Card title="DiskShell 0.6 · First Working Admin Baseline"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
     <div className="grid three">
       <Card title="Сейчас"><Metric label="Версия" value={health?.version || '...'} /><Metric label="Активный scan" value={scanId || 'нет'} /><Metric label="Режим" value="localhost / local-first" /></Card>
       <Card title="Правильный цикл"><ol><li>Обследовать</li><li>Понять Analytics</li><li>Построить placement plan</li><li>Сохранить резерв</li><li>Применить только нужное</li></ol></Card>
-      <Card title="Защита"><p>System / Boot / Application disk блокируются независимо от UI.</p><p>System/Boot/Application диски блокируются всегда. Для остальных дисков запись разблокируется только на выбранный physical disk и ограниченное время.</p></Card>
+      <Card title="Защита"><p>System / Boot / Application disk блокируются независимо от UI.</p><p>System/Boot/Application диски блокируются всегда. Для остальных physical disk WRITE включается отдельным identity-bound тумблером до ручного выключения или restart backend.</p></Card>
     </div>
   </div>
 }
@@ -235,11 +248,16 @@ function Vault({ health, setError }) {
 function StorageLab({ scanId, setError }) {
   const [data, setData] = useState(null)
   const [path, setPath] = useState('')
+  const [roots, setRoots] = useState([])
   const [extents, setExtents] = useState(null)
   const [bench, setBench] = useState(null)
   const [seqMiB, setSeqMiB] = useState(150)
   const [seekMs, setSeekMs] = useState(10)
   const [seekBudgetPct, setSeekBudgetPct] = useState(2)
+
+  useEffect(() => {
+    api('/api/files/roots').then(x => setRoots(x.roots || [])).catch(() => {})
+  }, [])
 
   async function run() {
     try {
@@ -338,6 +356,12 @@ function StorageLab({ scanId, setError }) {
     </Card>
 
     <Card title="NTFS Extents + read benchmark">
+      <label>Локальный том</label>
+      <select value="" onChange={e => e.target.value && setPath(e.target.value)}>
+        <option value="">Выбрать том / корень…</option>
+        {roots.map(item => <option key={item.path} value={item.path}>{item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}</option>)}
+      </select>
+      <label>Большой тестовый файл на выбранном томе</label>
       <input placeholder="Полный путь к большому тестовому файлу" value={path} onChange={e=>setPath(e.target.value)} />
       <div className="actions">
         <button onClick={queryExtents}>Query extents</button>

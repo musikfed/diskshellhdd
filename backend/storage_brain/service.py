@@ -295,6 +295,9 @@ def create_placement_plan(
             )
             same_volume = _same_volume(source, storage_root)
             action = "move_same_volume" if same_volume else "copy_cross_volume"
+            # This is a target logical layout policy only. The current writer does not
+            # force NTFS extent placement; executor verification later compares the
+            # actual NTFS-visible extent count with this macro-band target.
             layout_lane, target_band_bytes = _layout_hint(str(file_row["category"]))
             if not same_volume:
                 additional_target_bytes += int(file_row["size"])
@@ -349,15 +352,15 @@ def create_placement_plan(
             INSERT INTO placement_plan_items
                 (
                     plan_id, source_path, target_path, target_class, size,
-                    reason, action, layout_lane, target_band_bytes
+                    reason, action, layout_lane, target_band_bytes, selected
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             """,
             [(plan_id, *item) for item in items],
         )
         connection.commit()
 
-    result = get_plan(plan_id)
+    result = get_plan_page(plan_id)
     result["scope"] = {
         "source_roots": [str(path) for path in includes],
         "exclude_roots": [str(path) for path in excludes],
@@ -365,17 +368,65 @@ def create_placement_plan(
         "skipped_outside_scope": skipped_outside_scope,
         "skipped_excluded": skipped_excluded,
     }
+    return result
+
+
+def _decorate_plan(result: dict) -> dict:
+    items = result["items"]
+    for item in items:
+        raw_layout = item.get("layout_verification")
+        if isinstance(raw_layout, str) and raw_layout:
+            try:
+                item["layout_verification"] = json.loads(raw_layout)
+            except json.JSONDecodeError:
+                item["layout_verification"] = {
+                    "status": "unknown",
+                    "detail": raw_layout,
+                }
+
+    selected = [item for item in items if bool(item.get("selected", 1))]
     result["same_volume_items"] = sum(
-        1 for item in result["items"] if item["action"] == "move_same_volume"
+        1 for item in items if item["action"] == "move_same_volume"
     )
     result["cross_volume_items"] = sum(
-        1 for item in result["items"] if item["action"] == "copy_cross_volume"
+        1 for item in items if item["action"] == "copy_cross_volume"
     )
     result["additional_target_bytes"] = sum(
         int(item["size"])
-        for item in result["items"]
+        for item in items
         if item["action"] == "copy_cross_volume"
     )
+    result["selected_items"] = len(selected)
+    result["selected_bytes"] = sum(int(item["size"]) for item in selected)
+    result["selected_cross_volume_items"] = sum(
+        1 for item in selected if item["action"] == "copy_cross_volume"
+    )
+    result["selected_additional_target_bytes"] = sum(
+        int(item["size"])
+        for item in selected
+        if item["action"] == "copy_cross_volume"
+    )
+    result["layout_checks"] = {
+        "conforming": sum(
+            1
+            for item in selected
+            if isinstance(item.get("layout_verification"), dict)
+            and item["layout_verification"].get("status") == "conforming"
+        ),
+        "drift": sum(
+            1
+            for item in selected
+            if isinstance(item.get("layout_verification"), dict)
+            and item["layout_verification"].get("status") == "drift"
+        ),
+        "unavailable": sum(
+            1
+            for item in selected
+            if isinstance(item.get("layout_verification"), dict)
+            and item["layout_verification"].get("status") == "unavailable"
+        ),
+    }
+    result["confirmation"] = f"APPLY PLAN {result['id']}"
     return result
 
 
@@ -397,22 +448,255 @@ def get_plan(plan_id: int) -> dict:
     result = dict(plan)
     result["warnings"] = json.loads(result["warnings"] or "[]")
     result["items"] = [dict(row) for row in items]
-    result["same_volume_items"] = sum(
-        1 for item in result["items"] if item["action"] == "move_same_volume"
+    return _decorate_plan(result)
+
+
+def get_plan_for_execution(plan_id: int) -> dict:
+    """Return only explicitly selected plan items for the executor.
+
+    Large plans can contain hundreds of thousands of rows. Keeping API paging and
+    execution selection separate prevents an unchecked draft from being loaded
+    into memory just because the operator applies a small reviewed batch.
+    """
+    with connect() as connection:
+        plan = connection.execute(
+            "SELECT * FROM placement_plans WHERE id = ?",
+            (int(plan_id),),
+        ).fetchone()
+        if plan is None:
+            raise KeyError(plan_id)
+        items = connection.execute(
+            """
+            SELECT *
+            FROM placement_plan_items
+            WHERE plan_id=? AND selected=1
+            ORDER BY size DESC, source_path
+            """,
+            (int(plan_id),),
+        ).fetchall()
+
+    result = dict(plan)
+    result["warnings"] = json.loads(result["warnings"] or "[]")
+    result["items"] = [_decode_layout_verification(dict(row)) for row in items]
+    return result
+
+
+def plan_has_remaining_items(plan_id: int) -> bool:
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM placement_plan_items
+            WHERE plan_id=? AND status!='completed'
+            LIMIT 1
+            """,
+            (int(plan_id),),
+        ).fetchone()
+    return row is not None
+
+
+def get_plan_layout_summary(plan_id: int) -> dict:
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%conforming%' THEN 1 ELSE 0 END)
+                    AS conforming,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%"status": "drift"%' THEN 1 ELSE 0 END)
+                    AS drift,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%unavailable%' THEN 1 ELSE 0 END)
+                    AS unavailable
+            FROM placement_plan_items
+            WHERE plan_id=?
+            """,
+            (int(plan_id),),
+        ).fetchone()
+    return {
+        "conforming": int(row["conforming"] or 0),
+        "drift": int(row["drift"] or 0),
+        "unavailable": int(row["unavailable"] or 0),
+    }
+
+
+def _decode_layout_verification(item: dict) -> dict:
+    raw_layout = item.get("layout_verification")
+    if isinstance(raw_layout, str) and raw_layout:
+        try:
+            item["layout_verification"] = json.loads(raw_layout)
+        except json.JSONDecodeError:
+            item["layout_verification"] = {
+                "status": "unknown",
+                "detail": raw_layout,
+            }
+    return item
+
+
+def get_plan_page(
+    plan_id: int,
+    *,
+    limit: int = 250,
+    offset: int = 0,
+    query: str = "",
+) -> dict:
+    limit = max(1, min(int(limit), 1000))
+    offset = max(0, int(offset))
+    query = str(query or "").strip()
+
+    with connect() as connection:
+        plan = connection.execute(
+            "SELECT * FROM placement_plans WHERE id = ?",
+            (int(plan_id),),
+        ).fetchone()
+        if plan is None:
+            raise KeyError(plan_id)
+
+        aggregate = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS item_count,
+                SUM(CASE WHEN action='move_same_volume' THEN 1 ELSE 0 END) AS same_volume,
+                SUM(CASE WHEN action='copy_cross_volume' THEN 1 ELSE 0 END) AS cross_volume,
+                SUM(CASE WHEN action='copy_cross_volume' THEN size ELSE 0 END) AS extra_bytes,
+                SUM(CASE WHEN selected=1 THEN 1 ELSE 0 END) AS selected_items,
+                SUM(CASE WHEN selected=1 THEN size ELSE 0 END) AS selected_bytes,
+                SUM(CASE WHEN selected=1 AND action='copy_cross_volume' THEN 1 ELSE 0 END)
+                    AS selected_cross_volume,
+                SUM(CASE WHEN selected=1 AND action='copy_cross_volume' THEN size ELSE 0 END)
+                    AS selected_extra_bytes,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%conforming%' THEN 1 ELSE 0 END)
+                    AS layout_conforming,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%"status": "drift"%' THEN 1 ELSE 0 END)
+                    AS layout_drift,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%unavailable%' THEN 1 ELSE 0 END)
+                    AS layout_unavailable
+            FROM placement_plan_items
+            WHERE plan_id=?
+            """,
+            (int(plan_id),),
+        ).fetchone()
+
+        where = "plan_id=?"
+        params: list[object] = [int(plan_id)]
+        if query:
+            where += (
+                " AND (source_path LIKE ? COLLATE NOCASE"
+                " OR target_path LIKE ? COLLATE NOCASE"
+                " OR target_class LIKE ? COLLATE NOCASE)"
+            )
+            like = f"%{query}%"
+            params.extend([like, like, like])
+
+        filtered = connection.execute(
+            f"SELECT COUNT(*) AS count FROM placement_plan_items WHERE {where}",
+            params,
+        ).fetchone()
+        rows = connection.execute(
+            f"""
+            SELECT *
+            FROM placement_plan_items
+            WHERE {where}
+            ORDER BY size DESC, source_path
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+
+    result = dict(plan)
+    result["warnings"] = json.loads(result["warnings"] or "[]")
+    result["items"] = [_decode_layout_verification(dict(row)) for row in rows]
+    result["same_volume_items"] = int(aggregate["same_volume"] or 0)
+    result["cross_volume_items"] = int(aggregate["cross_volume"] or 0)
+    result["additional_target_bytes"] = int(aggregate["extra_bytes"] or 0)
+    result["selected_items"] = int(aggregate["selected_items"] or 0)
+    result["selected_bytes"] = int(aggregate["selected_bytes"] or 0)
+    result["selected_cross_volume_items"] = int(
+        aggregate["selected_cross_volume"] or 0
     )
-    result["cross_volume_items"] = sum(
-        1 for item in result["items"] if item["action"] == "copy_cross_volume"
+    result["selected_additional_target_bytes"] = int(
+        aggregate["selected_extra_bytes"] or 0
     )
-    result["additional_target_bytes"] = sum(
-        int(item["size"])
-        for item in result["items"]
-        if item["action"] == "copy_cross_volume"
-    )
+    result["layout_checks"] = {
+        "conforming": int(aggregate["layout_conforming"] or 0),
+        "drift": int(aggregate["layout_drift"] or 0),
+        "unavailable": int(aggregate["layout_unavailable"] or 0),
+    }
+    result["page"] = {
+        "limit": limit,
+        "offset": offset,
+        "returned": len(rows),
+        "filtered": int(filtered["count"] or 0),
+        "total": int(aggregate["item_count"] or 0),
+        "query": query,
+    }
     result["confirmation"] = f"APPLY PLAN {plan_id}"
     return result
 
 
-def get_latest_plan(scan_id: int | None = None) -> dict:
+def update_plan_selection(
+    plan_id: int,
+    *,
+    selected: bool,
+    item_ids: list[int] | None = None,
+    all_items: bool = False,
+    query: str = "",
+) -> dict:
+    with connect() as connection:
+        plan = connection.execute(
+            "SELECT status FROM placement_plans WHERE id = ?",
+            (int(plan_id),),
+        ).fetchone()
+        if plan is None:
+            raise KeyError(plan_id)
+        if plan["status"] == "running":
+            raise ValueError("Cannot change selection while the plan is running")
+
+        value = 1 if selected else 0
+        if all_items:
+            query = str(query or "").strip()
+            if query:
+                like = f"%{query}%"
+                connection.execute(
+                    """
+                    UPDATE placement_plan_items
+                    SET selected=?
+                    WHERE plan_id=?
+                      AND (
+                        source_path LIKE ? COLLATE NOCASE
+                        OR target_path LIKE ? COLLATE NOCASE
+                        OR target_class LIKE ? COLLATE NOCASE
+                      )
+                    """,
+                    (value, int(plan_id), like, like, like),
+                )
+            else:
+                connection.execute(
+                    "UPDATE placement_plan_items SET selected=? WHERE plan_id=?",
+                    (value, int(plan_id)),
+                )
+        else:
+            ids = [int(item_id) for item_id in (item_ids or [])]
+            if not ids:
+                raise ValueError("item_ids is required unless all_items=true")
+            placeholders = ",".join("?" for _ in ids)
+            connection.execute(
+                f"""
+                UPDATE placement_plan_items
+                SET selected=?
+                WHERE plan_id=? AND id IN ({placeholders})
+                """,
+                (value, int(plan_id), *ids),
+            )
+        connection.commit()
+    return get_plan_page(plan_id, query=query)
+
+
+def get_latest_plan(
+    scan_id: int | None = None,
+    *,
+    limit: int = 250,
+    offset: int = 0,
+    query: str = "",
+) -> dict:
     with connect() as connection:
         if scan_id is None:
             row = connection.execute(
@@ -425,7 +709,12 @@ def get_latest_plan(scan_id: int | None = None) -> dict:
             ).fetchone()
     if row is None:
         raise KeyError("latest")
-    return get_plan(int(row["id"]))
+    return get_plan_page(
+        int(row["id"]),
+        limit=limit,
+        offset=offset,
+        query=query,
+    )
 
 
 def suggest_managed_destination(

@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from backend.config import settings
 from backend.files.service import FileWriteBlocked
+from backend.files.write_authorization import file_writes_allowed
 
 
 class FileOperationCancelled(RuntimeError):
@@ -44,8 +44,8 @@ def _same_volume(source: Path, destination: Path) -> bool:
 
 
 def start_file_job(operation: str, source: str, destination: str) -> dict[str, Any]:
-    if not settings.allow_file_writes:
-        raise FileWriteBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise FileWriteBlocked("File writes are locked")
     if operation not in {"copy", "move"}:
         raise ValueError("operation must be copy or move")
 

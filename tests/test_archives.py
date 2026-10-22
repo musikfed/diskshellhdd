@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import backend.archives.service as archives
 
 
 def test_zip_create_list_and_extract(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        archives,
-        "settings",
-        SimpleNamespace(allow_file_writes=True),
-    )
+    monkeypatch.setattr(archives, "file_writes_allowed", lambda: True)
 
     source = tmp_path / "source"
     source.mkdir()

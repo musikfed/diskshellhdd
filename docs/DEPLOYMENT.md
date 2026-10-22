@@ -1,65 +1,140 @@
-# Deploying DiskShell 0.5.2.1 on Windows 11
+# Deploying DiskShell 0.6.0
 
-## Clean installation / recovery
+DiskShell 0.6.0 is the first frozen working admin baseline. GitHub `main` is the source of truth.
 
-GitHub `main` is the source of truth.
+## Administrator/root privileges
+
+Read-only filesystem features can run unprivileged, but **run the DiskShell backend from an elevated shell** when using physical disks, Surface Diagnostics, raw Recovery probes, Initialize/Partition/Format, or NTFS extent diagnostics.
+
+The default bind is `127.0.0.1:8765`. Do not expose an elevated/root backend on `0.0.0.0` until proper remote authentication is enabled.
+
+`DS_DEBUG=0` is the recommended runtime. In this mode `python -m backend.app` uses Waitress. Flask debug mode is for local development only.
+
+## Windows 11 — install/update
+
+Dependency installation and frontend build can run from a normal PowerShell:
 
 ```powershell
-Set-Location F:\
-Remove-Item F:\diskshellhdd -Recurse -Force -ErrorAction SilentlyContinue
-git clone "https://github.com/musikfed/diskshellhdd.git" "F:\diskshellhdd"
 Set-Location "F:\diskshellhdd"
-Copy-Item .env.example .env
+
+git fetch origin
+git reset --hard origin/main
+
+if (-not (Test-Path .env)) {
+    Copy-Item .env.example .env
+}
+
 uv sync --group dev
 uv run ruff check backend tests
 uv run pytest -v
+
 npm run ui:install
 npm run build
+```
+
+### REQUIRED administrator CLI launch
+
+Stop the previous backend. Open **Windows PowerShell / Windows Terminal → Run as Administrator**.
+
+You can open an elevated PowerShell with:
+
+```powershell
+Start-Process powershell -Verb RunAs
+```
+
+Inside the elevated shell:
+
+```powershell
+Set-Location "F:\diskshellhdd"
+
 uv run python -m backend.app
 ```
 
-Open `http://127.0.0.1:8765/`.
-
-Back up and restore `data` before the first backend start if previous scan/Vault runtime state must be retained. SQLite migrations are automatic.
-
-## Disk writes in 0.5
-
-Recommended default:
+Open:
 
 ```text
-DS_ALLOW_DISK_WRITES=0
+http://127.0.0.1:8765/
 ```
 
-This disables the global override but still allows the administrator to unlock one selected non-protected physical disk from the Disks page after identity review and exact typed confirmation. Runtime unlock expires after 15 minutes and can be manually locked earlier.
+With `DS_DEBUG=0`, the admin runtime is served by Waitress.
 
-System / Boot / Application disks cannot be unlocked.
+## Linux — bash
 
-`DS_ALLOW_DISK_WRITES=1` is a global override intended for controlled lab/automation scenarios.
+Linux can run the Web UI, SQLite index, Analytics, Commander, SFTP/FTP, and other portable components. Windows Storage cmdlets, Windows physical-drive paths, and NTFS/fsutil-specific functions are Windows-specific and may be unavailable on Linux.
 
-## Partition / Volume Manager
+Install/build as a **normal user**:
 
-0.5 supports RAW disk initialization, partition creation in unallocated space, NTFS/exFAT formatting, allocation-unit selection, drive-letter assignment, and the explicitly destructive whole-disk single-volume workflow.
+```bash
+cd /path/to/diskshellhdd
 
-## Stop buttons
+git fetch origin
+git reset --hard origin/main
 
-Quick Index, Placement Executor, two-pane Files Copy/Move, and Security Scan support cooperative cancellation.
+test -f .env || cp .env.example .env
 
-## Recovery
+uv sync --group dev
+uv run ruff check backend tests
+uv run pytest -v
 
-Recovery is currently read-only: SQLite topology snapshots plus raw MBR/GPT/filesystem-signature probing. It is groundwork for future recovery workflows, not an automatic data-recovery promise.
+npm run ui:install
+npm run build
+```
 
-## Security
+### Administrator/root CLI launch
 
-DiskShell uses local Microsoft Defender or ClamAV and runs scans without remediation.
+Do not run `sudo uv sync` or `sudo npm`. Elevate only the backend process:
 
-Keep `DS_HOST=127.0.0.1` until remote authentication is implemented.
+```bash
+cd /path/to/diskshellhdd
+sudo -E "$(pwd)/.venv/bin/python" -m backend.app
+```
 
-See [SAFETY.md](SAFETY.md).
+Open:
 
-## Volume sizing and filesystems in 0.5.2
+```text
+http://127.0.0.1:8765/
+```
 
-A RAW disk can be initialized first and then partitioned into multiple explicitly sized volumes, or the destructive wizard can create a first custom-sized volume and leave the remainder unallocated.
+If root creates files under `data/`, account for their ownership on later unprivileged runs.
 
-The current Windows Storage adapter exposes NTFS, exFAT, ReFS, FAT32, and FAT. ReFS availability and legacy filesystem feasibility still depend on the installed Windows edition/build and selected volume geometry.
+## Safety gates
 
-Progress percentages are shown only when the backend has a trustworthy total.
+Recommended defaults:
+
+```text
+DS_HOST=127.0.0.1
+DS_DEBUG=0
+
+DS_ALLOW_FILE_WRITES=0
+DS_ALLOW_VAULT_WRITES=0
+DS_ALLOW_DISK_WRITES=0
+DS_ALLOW_EXTENT_MOVES=0
+```
+
+- File writes have a RAM-only UI toggle until manual disable/backend restart.
+- Physical disk writes have a separate identity-bound per-disk toggle.
+- System / Boot / Application disks remain backend-protected.
+- Actual NTFS extent relocation remains disabled.
+
+## First working workflow
+
+1. Verify disk identity/topology in **Disks**.
+2. Run a **Quick** read-only Surface Diagnostic.
+3. Select a local volume in **Examine** and build a Quick Index.
+4. Review Analytics.
+5. In **Storage Brain**, select the target HDD volume/root and source scope.
+6. New plans start with **no items selected**. Check only the files to move, or filter and select the filtered set.
+7. Enable `FILE WRITE`.
+8. Choose Size or SHA-256 integrity verification.
+9. Apply the checked batch.
+10. After publish, DiskShell queries actual **NTFS logical extents** and reports layout `conforming / drift / unavailable`.
+
+## “Smart fragmentation” status
+
+0.6.0 does **not** force NTFS into a checkerboard macro-interleave layout. It calculates lane/band policy, transfers selected data, verifies integrity, reads actual NTFS extents, and compares those extents against the planned macro-band profile.
+
+This is logical NTFS layout verification. DiskShell cannot see exact hidden platter/head/angular geometry controlled by HDD firmware.
+
+The forced Managed Interleave writer/rebalancer remains a later experimental milestone and stays disabled while `DS_ALLOW_EXTENT_MOVES=0`.
+
+See [SAFETY.md](SAFETY.md) and [ARCHITECTURE.md](ARCHITECTURE.md).

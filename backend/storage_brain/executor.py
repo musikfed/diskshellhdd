@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import os
 import shutil
 import uuid
@@ -8,9 +10,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from backend.config import settings
 from backend.core.database import connect
-from backend.storage_brain.service import get_plan
+from backend.files.write_authorization import file_writes_allowed
+from backend.storage_brain.service import (
+    capacity_policy,
+    get_plan,
+    get_plan_for_execution,
+    get_plan_layout_summary,
+    plan_has_remaining_items,
+)
+from backend.storage_lab.service import query_file_extents
 
 
 class PlanExecutionBlocked(RuntimeError):
@@ -80,6 +89,47 @@ def _verify(
     return f"size:{actual_size}"
 
 
+def _verify_layout(item: dict[str, Any], target: Path) -> dict[str, Any]:
+    """Compare actual NTFS-visible extents with the planned macro-band target.
+
+    This does NOT inspect hidden platter/head/angular geometry and it does not
+    move extents. It is a read-only conformance check for the logical layout
+    policy that a future managed writer/rebalancer may enforce.
+    """
+    target_band = int(item.get("target_band_bytes") or 0)
+    if target_band <= 0:
+        return {
+            "status": "unavailable",
+            "reason": "No target band is defined for this item",
+        }
+
+    result = query_file_extents(target)
+    if not result.get("supported"):
+        return {
+            "status": "unavailable",
+            "reason": result.get("reason") or "NTFS extent query unavailable",
+        }
+
+    actual = int(result.get("extent_count") or 0)
+    size = max(0, int(item.get("size") or 0))
+    expected = max(1, int(round(size / target_band))) if size else 1
+    tolerance = max(1, int(math.ceil(expected * 0.25)))
+    delta = abs(actual - expected)
+    status = "conforming" if actual > 0 and delta <= tolerance else "drift"
+
+    return {
+        "status": status,
+        "actual_extents": actual,
+        "expected_extents": expected,
+        "tolerance": tolerance,
+        "target_band_bytes": target_band,
+        "layout_lane": item.get("layout_lane"),
+        "note": (
+            "NTFS logical extent check only; HDD firmware physical geometry is hidden."
+        ),
+    }
+
+
 def _journal(
     connection,
     plan_id: int,
@@ -122,18 +172,34 @@ def apply_plan(
     cancel_callback: CancelCallback | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> dict:
-    if not settings.allow_file_writes:
-        raise PlanExecutionBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise PlanExecutionBlocked("File writes are locked")
     if confirmation != f"APPLY PLAN {plan_id}":
         raise PlanExecutionBlocked("Typed confirmation does not match")
     if verify not in {"size", "sha256"}:
         raise ValueError("verify must be 'size' or 'sha256'")
 
-    plan = get_plan(plan_id)
-    if plan["projected_free_bytes"] < plan["reserve_bytes"]:
-        raise PlanExecutionBlocked("Plan violates the configured working-space reserve")
+    plan = get_plan_for_execution(plan_id)
     if plan["status"] not in {"draft", "failed", "partial", "cancelled"}:
         raise PlanExecutionBlocked(f"Plan status is {plan['status']}")
+
+    selected_items = plan["items"]
+    if not selected_items:
+        raise PlanExecutionBlocked("No placement items are selected")
+
+    # Capacity is checked against the current selected batch, not the whole
+    # draft plan. This lets an operator safely apply only a checked subset.
+    policy = capacity_policy(Path(plan["storage_root"]))
+    selected_target_bytes = sum(
+        int(item.get("size") or 0)
+        for item in selected_items
+        if item["action"] == "copy_cross_volume"
+        and item["status"] != "completed"
+    )
+    if policy.free - selected_target_bytes < policy.reserve:
+        raise PlanExecutionBlocked(
+            "Selected items violate the configured working-space reserve"
+        )
 
     with connect() as connection:
         connection.execute(
@@ -146,8 +212,8 @@ def apply_plan(
     failed = 0
     copied = 0
     moved = 0
-    total = len(plan["items"])
-    total_bytes = sum(int(item.get("size") or 0) for item in plan["items"])
+    total = len(selected_items)
+    total_bytes = sum(int(item.get("size") or 0) for item in selected_items)
     processed_bytes = 0
     active_item_bytes = 0
 
@@ -176,7 +242,7 @@ def apply_plan(
     report()
 
     try:
-        for item in plan["items"]:
+        for item in selected_items:
             _check_cancel(cancel_callback)
             active_item_bytes = 0
             if item["status"] == "completed":
@@ -191,14 +257,20 @@ def apply_plan(
                 if not source.exists():
                     if target.exists() and target.is_file() and target.stat().st_size == item["size"]:
                         verification = _verify(item["size"], target, None, cancel_callback)
+                        layout_verification = _verify_layout(item, target)
                         with connect() as connection:
                             connection.execute(
                                 """
                                 UPDATE placement_plan_items
-                                SET status='completed', verification=?, error=NULL
+                                SET status='completed', verification=?,
+                                    layout_verification=?, error=NULL
                                 WHERE id=?
                                 """,
-                                (verification, item["id"]),
+                                (
+                                    verification,
+                                    json.dumps(layout_verification, ensure_ascii=False),
+                                    item["id"],
+                                ),
                             )
                             _journal(
                                 connection,
@@ -275,14 +347,20 @@ def apply_plan(
                             partial.unlink(missing_ok=True)
                     copied += 1
 
+                layout_verification = _verify_layout(item, target)
                 with connect() as connection:
                     connection.execute(
                         """
                         UPDATE placement_plan_items
-                        SET status='completed', verification=?, error=NULL
+                        SET status='completed', verification=?,
+                            layout_verification=?, error=NULL
                         WHERE id=?
                         """,
-                        (verification, item["id"]),
+                        (
+                            verification,
+                            json.dumps(layout_verification, ensure_ascii=False),
+                            item["id"],
+                        ),
                     )
                     _journal(
                         connection,
@@ -327,7 +405,14 @@ def apply_plan(
         _set_plan_status(plan_id, "cancelled")
         raise
 
-    status = "completed" if failed == 0 else ("partial" if completed else "failed")
+    remaining = plan_has_remaining_items(plan_id)
+    status = (
+        "failed"
+        if failed and completed == 0
+        else "partial"
+        if failed or remaining
+        else "completed"
+    )
     _set_plan_status(plan_id, status)
 
     return {
@@ -338,13 +423,18 @@ def apply_plan(
         "same_volume_moves": moved,
         "verified_cross_volume_copies": copied,
         "cross_volume_source_policy": "kept",
-        "note": "Cross-volume originals are intentionally kept. Remove them only after review.",
+        "layout_verification": get_plan_layout_summary(plan_id),
+        "note": (
+            "Cross-volume originals are intentionally kept. Integrity is verified; "
+            "layout verification checks NTFS-visible extents against the planned "
+            "macro-band target and does not claim physical platter geometry."
+        ),
     }
 
 
 def rollback_plan(plan_id: int, confirmation: str) -> dict:
-    if not settings.allow_file_writes:
-        raise PlanExecutionBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise PlanExecutionBlocked("File writes are locked")
     if confirmation != f"ROLLBACK PLAN {plan_id}":
         raise PlanExecutionBlocked("Typed confirmation does not match")
 

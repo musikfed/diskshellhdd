@@ -10,8 +10,9 @@ from backend.storage_brain.service import (
     capacity_policy,
     create_placement_plan,
     get_latest_plan,
-    get_plan,
+    get_plan_page,
     list_storage_classes,
+    update_plan_selection,
 )
 
 
@@ -81,7 +82,17 @@ def latest_plan():
     raw_scan_id = request.args.get("scan_id")
     try:
         scan_id = int(raw_scan_id) if raw_scan_id else None
-        return jsonify(get_latest_plan(scan_id))
+        limit = int(request.args.get("limit", 250))
+        offset = int(request.args.get("offset", 0))
+        query = str(request.args.get("q", ""))
+        return jsonify(
+            get_latest_plan(
+                scan_id,
+                limit=limit,
+                offset=offset,
+                query=query,
+            )
+        )
     except (KeyError, ValueError):
         return jsonify({"error": "plan_not_found"}), 404
 
@@ -89,9 +100,18 @@ def latest_plan():
 @bp.get("/plans/<int:plan_id>")
 def plan(plan_id: int):
     try:
-        return jsonify(get_plan(plan_id))
+        return jsonify(
+            get_plan_page(
+                plan_id,
+                limit=int(request.args.get("limit", 250)),
+                offset=int(request.args.get("offset", 0)),
+                query=str(request.args.get("q", "")),
+            )
+        )
     except KeyError:
         return jsonify({"error": "plan_not_found"}), 404
+    except ValueError as exc:
+        return jsonify({"error": "invalid_pagination", "message": str(exc)}), 400
 
 
 @bp.post("/plans/<int:plan_id>/apply")
@@ -154,3 +174,22 @@ def rollback(plan_id: int):
         return jsonify({"error": "plan_rollback_blocked", "message": str(exc)}), 403
     except (KeyError, ValueError, FileNotFoundError, FileExistsError, OSError) as exc:
         return jsonify({"error": "plan_rollback_failed", "message": str(exc)}), 400
+
+
+@bp.post("/plans/<int:plan_id>/selection")
+def selection(plan_id: int):
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(
+            update_plan_selection(
+                plan_id,
+                selected=bool(payload.get("selected", True)),
+                item_ids=[int(item) for item in (payload.get("item_ids") or [])],
+                all_items=bool(payload.get("all_items", False)),
+                query=str(payload.get("query", "")),
+            )
+        )
+    except KeyError:
+        return jsonify({"error": "plan_not_found"}), 404
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": "selection_failed", "message": str(exc)}), 400

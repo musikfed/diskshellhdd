@@ -18,10 +18,11 @@ from backend.api.storage_lab import bp as storage_lab_bp
 from backend.api.vault import bp as vault_bp
 from backend.config import settings
 from backend.core.database import init_database
+from backend.files.write_authorization import file_write_state
 from backend.storage_brain.service import ensure_defaults
 
 
-VERSION = "0.5.7"
+VERSION = "0.6.0"
 
 
 def create_app() -> Flask:
@@ -54,7 +55,9 @@ def create_app() -> Flask:
                 "version": VERSION,
                 "python_only": True,
                 "safety": {
-                    "file_writes": settings.allow_file_writes,
+                    "file_writes": file_write_state()["allowed"],
+                    "file_writes_runtime": file_write_state()["runtime_enabled"],
+                    "file_writes_global_override": file_write_state()["global_override"],
                     "vault_writes": settings.allow_vault_writes,
                     "disk_writes": settings.allow_disk_writes,
                     "disk_writes_global_override": settings.allow_disk_writes,
@@ -99,7 +102,23 @@ def main() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     init_database()
     ensure_defaults()
-    app.run(host=settings.host, port=settings.port, debug=settings.debug, use_reloader=False)
+
+    # DiskShell may be started from an elevated Administrator/root shell for
+    # raw-disk and storage operations. Never make the Flask interactive
+    # debugger the default for that process. DS_DEBUG=0 uses Waitress; debug
+    # mode is only for local development and should remain bound to loopback.
+    if settings.debug:
+        app.run(
+            host=settings.host,
+            port=settings.port,
+            debug=True,
+            use_reloader=False,
+        )
+        return
+
+    from waitress import serve
+
+    serve(app, host=settings.host, port=settings.port, threads=8)
 
 
 if __name__ == "__main__":

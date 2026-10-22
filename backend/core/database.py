@@ -119,8 +119,10 @@ CREATE TABLE IF NOT EXISTS placement_plan_items (
     action TEXT NOT NULL DEFAULT 'move',
     layout_lane TEXT,
     target_band_bytes INTEGER,
+    selected INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'pending',
     verification TEXT,
+    layout_verification TEXT,
     error TEXT,
     FOREIGN KEY (plan_id) REFERENCES placement_plans(id) ON DELETE CASCADE
 );
@@ -305,6 +307,8 @@ def init_database() -> None:
                 ("error", "TEXT"),
                 ("layout_lane", "TEXT"),
                 ("target_band_bytes", "INTEGER"),
+                ("selected", "INTEGER NOT NULL DEFAULT 0"),
+                ("layout_verification", "TEXT"),
             ],
         )
         # Indexes that reference migrated columns must be created only after

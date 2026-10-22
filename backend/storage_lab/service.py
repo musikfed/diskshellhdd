@@ -425,8 +425,31 @@ def query_file_extents(path: str | Path) -> dict:
     for line in result.stdout.splitlines():
         match = pattern.search(line)
         if match:
-            extents.append({"vcn": int(match.group("vcn"), 16), "clusters": int(match.group("clusters"), 16), "lcn": int(match.group("lcn"), 16)})
-    return {"supported": True, "path": str(file_path), "extents": extents, "extent_count": len(extents), "raw": result.stdout}
+            extents.append(
+                {
+                    "vcn": int(match.group("vcn"), 16),
+                    "clusters": int(match.group("clusters"), 16),
+                    "lcn": int(match.group("lcn"), 16),
+                }
+            )
+
+    # fsutil output is localized on some Windows builds. An empty parse must not
+    # be reported as "zero extents", because that would look like real layout
+    # drift. Treat it as unavailable so the UI is explicit.
+    if file_path.stat().st_size > 0 and not extents:
+        return {
+            "supported": False,
+            "reason": "fsutil returned data but no NTFS extents could be parsed",
+            "raw": result.stdout,
+        }
+
+    return {
+        "supported": True,
+        "path": str(file_path),
+        "extents": extents,
+        "extent_count": len(extents),
+        "raw": result.stdout,
+    }
 
 
 def benchmark_file(path: str | Path, block_size: int = 4 * 1024 * 1024, samples: int = 48) -> dict:

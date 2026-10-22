@@ -508,10 +508,14 @@ export function DisksAdmin({ setError }) {
 
 export function ScanAdmin({ scanId, setScanId, setError }) {
   const [path, setPath] = useState(localStorage.getItem('scanPath') || 'F:\\')
+  const [roots, setRoots] = useState([])
   const [jobId, setJobId] = useState(localStorage.getItem('scanJobId') || '')
   const [job, setJob] = useState(null)
 
   useEffect(() => { localStorage.setItem('scanPath', path) }, [path])
+  useEffect(() => {
+    api('/api/files/roots').then(x => setRoots(x.roots || [])).catch(() => {})
+  }, [])
   useEffect(() => {
     if (!jobId) return undefined
     localStorage.setItem('scanJobId', jobId)
@@ -547,6 +551,17 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
     } catch (e) { setError(e.message) }
   }
 
+  async function toggleFileWrites() {
+    try {
+      const next = await api('/api/files/write-access', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: !fileWrite?.allowed }),
+      })
+      setFileWrite(next)
+      if (refreshHealth) await refreshHealth()
+    } catch (e) { setError(e.message) }
+  }
+
   async function stop() {
     try {
       const value = await api(`/api/scans/${jobId}/cancel`, { method: 'POST', body: '{}' })
@@ -560,6 +575,11 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
       <div className="workbench-hero">
         <div className="hero-symbol">⌕</div>
         <div className="grow">
+          <label>Том / диск для обследования</label>
+          <select value={roots.some(item => item.path === path) ? path : ''} onChange={e => e.target.value && setPath(e.target.value)}>
+            <option value="">Выбрать локальный том…</option>
+            {roots.map(item => <option key={item.path} value={item.path}>{item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}</option>)}
+          </select>
           <label>Папка или корень тома</label>
           <input value={path} onChange={e => setPath(e.target.value)} />
           <div className="actions">
@@ -583,8 +603,9 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
   </div>
 }
 
-export function StorageBrainAdmin({ scanId, setError, health }) {
+export function StorageBrainAdmin({ scanId, setError, refreshHealth }) {
   const [root, setRoot] = useState(localStorage.getItem('storageRoot') || 'F:\\Storage')
+  const [roots, setRoots] = useState([])
   const [classes, setClasses] = useState([])
   const [plan, setPlan] = useState(null)
   const [planId, setPlanId] = useState(localStorage.getItem('placementPlanId') || '')
@@ -594,25 +615,57 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
   const [job, setJob] = useState(null)
   const [sourceScope, setSourceScope] = useState(localStorage.getItem('storageSourceScope') || '')
   const [excludeScope, setExcludeScope] = useState(localStorage.getItem('storageExcludeScope') || '')
+  const [fileWrite, setFileWrite] = useState(null)
+  const [planQuery, setPlanQuery] = useState('')
+  const [pageOffset, setPageOffset] = useState(0)
+  const pageLimit = 250
 
   useEffect(() => { localStorage.setItem('storageRoot', root) }, [root])
   useEffect(() => { localStorage.setItem('storageSourceScope', sourceScope) }, [sourceScope])
   useEffect(() => { localStorage.setItem('storageExcludeScope', excludeScope) }, [excludeScope])
+
   useEffect(() => {
-    api('/api/storage/classes').then(x => setClasses(x.classes || [])).catch(e => setError(e.message))
+    Promise.all([
+      api('/api/storage/classes'),
+      api('/api/files/roots'),
+      api('/api/files/write-access'),
+    ])
+      .then(([classData, rootData, writeData]) => {
+        setClasses(classData.classes || [])
+        setRoots(rootData.roots || [])
+        setFileWrite(writeData)
+      })
+      .catch(e => setError(e.message))
   }, [setError])
+
+  function planUrl(id, offset = pageOffset, query = planQuery) {
+    const params = new URLSearchParams({
+      limit: String(pageLimit),
+      offset: String(Math.max(0, offset)),
+    })
+    if (query.trim()) params.set('q', query.trim())
+    return `/api/storage/plans/${id}?${params.toString()}`
+  }
+
+  async function reloadPlan(offset = pageOffset, query = planQuery) {
+    if (!planId) return
+    const value = await api(planUrl(planId, offset, query))
+    setPlan(value)
+    setPageOffset(value.page?.offset || 0)
+  }
 
   useEffect(() => {
     let active = true
     async function restore() {
       try {
         let value
-        if (planId) value = await api(`/api/storage/plans/${planId}`)
-        else if (scanId) value = await api(`/api/storage/plans/latest?scan_id=${scanId}`)
+        if (planId) value = await api(planUrl(planId, 0, ''))
+        else if (scanId) value = await api(`/api/storage/plans/latest?scan_id=${scanId}&limit=${pageLimit}`)
         else return
         if (!active) return
         setPlan(value)
         setPlanId(String(value.id))
+        setPageOffset(0)
         localStorage.setItem('placementPlanId', String(value.id))
       } catch {
         if (active && planId) {
@@ -623,7 +676,7 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
     }
     restore()
     return () => { active = false }
-  }, [planId, scanId])
+  }, [planId, scanId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!jobId) return undefined
@@ -637,7 +690,7 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
         if (TERMINAL_PLAN.has(next.status)) {
           localStorage.removeItem('placementJobId')
           setJobId('')
-          if (planId) setPlan(await api(`/api/storage/plans/${planId}`))
+          if (planId) await reloadPlan()
         }
       } catch (e) {
         if (!stopped) {
@@ -650,7 +703,7 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
     poll()
     const timer = setInterval(poll, 700)
     return () => { stopped = true; clearInterval(timer) }
-  }, [jobId, planId, setError])
+  }, [jobId, planId, setError]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function build() {
     const splitPaths = value => value
@@ -669,6 +722,8 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
       })
       setPlan(value)
       setPlanId(String(value.id))
+      setPageOffset(0)
+      setPlanQuery('')
       localStorage.setItem('placementPlanId', String(value.id))
       setConfirmation('')
     } catch (e) { setError(e.message) }
@@ -691,85 +746,209 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
     } catch (e) { setError(e.message) }
   }
 
+  async function toggleFileWrites() {
+    try {
+      const next = await api('/api/files/write-access', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: !fileWrite?.allowed }),
+      })
+      setFileWrite(next)
+      if (refreshHealth) await refreshHealth()
+    } catch (e) { setError(e.message) }
+  }
+
+  async function changeSelection(selected, itemIds = [], allItems = false) {
+    if (!plan) return
+    try {
+      const value = await api(`/api/storage/plans/${plan.id}/selection`, {
+        method: 'POST',
+        body: JSON.stringify({
+          selected,
+          item_ids: itemIds,
+          all_items: allItems,
+          query: allItems ? planQuery : '',
+        }),
+      })
+      setPlan(value)
+      setPageOffset(value.page?.offset || 0)
+    } catch (e) { setError(e.message) }
+  }
+
+  async function searchPlan() {
+    try {
+      setPageOffset(0)
+      await reloadPlan(0, planQuery)
+    } catch (e) { setError(e.message) }
+  }
+
+  function chooseVolume(path, target = 'storage') {
+    if (!path) return
+    if (target === 'storage') setRoot(joinPath(path, 'Storage'))
+    else {
+      const current = sourceScope.trim()
+      setSourceScope(current ? `${current}\n${path}` : path)
+    }
+  }
+
   const running = job && !TERMINAL_PLAN.has(job.status)
+  const selectedVolume = roots.find(item => root.toLowerCase().startsWith(item.path.toLowerCase()))?.path || ''
+  const fileWritesAllowed = Boolean(fileWrite?.allowed)
+  const page = plan?.page || { offset: 0, limit: pageLimit, filtered: plan?.items?.length || 0, total: plan?.total_items || 0 }
+  const hasPrev = page.offset > 0
+  const hasNext = page.offset + page.returned < page.filtered
+
   return <div className="stack admin-workbench">
     <Panel title="Storage policy classes">
-      <div className="class-grid">{classes.map(c => <div key={c.key}><b>{c.title}</b><small>{c.relative_root}</small><p>{c.description}</p></div>)}</div>
+      <div className="class-grid">{classes.map(item => <div key={item.key}><b>{item.title}</b><small>{item.relative_root}</small><p>{item.description}</p></div>)}</div>
     </Panel>
+
     <Panel title="Managed Import / Placement Planner">
       <div className="managed-import-grid">
         <div>
-          <label>Целевой HDD root</label>
-          <input value={root} onChange={e => setRoot(e.target.value)} placeholder="G:\\Storage" />
-          <small>Сюда DiskShell создаст Media / Photos / Archive / Documents / ...</small>
+          <label>Целевой HDD / том</label>
+          <select value={selectedVolume} onChange={e => chooseVolume(e.target.value, 'storage')}>
+            <option value="">Выбрать локальный том…</option>
+            {roots.map(item => <option key={item.path} value={item.path}>
+              {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+            </option>)}
+          </select>
+          <label>Managed root</label>
+          <input value={root} onChange={e => setRoot(e.target.value)} placeholder="W:\\Storage" />
+          <small>Выбираешь том, DiskShell предлагает его Storage-root. Путь можно поправить вручную.</small>
         </div>
         <div>
           <label>Source scope на SSD · по одному пути в строке</label>
+          <div className="inline-picker">
+            <select defaultValue="" onChange={e => { chooseVolume(e.target.value, 'source'); e.target.value = '' }}>
+              <option value="">+ добавить том в Source scope…</option>
+              {roots.map(item => <option key={item.path} value={item.path}>{item.path} · {item.filesystem || 'FS'}</option>)}
+            </select>
+          </div>
           <textarea value={sourceScope} onChange={e => setSourceScope(e.target.value)} placeholder={'F:\\fromDisk\nF:\\inst'} />
-          <small>Пусто = весь scan. Лучше явно выбрать только тот хаос, который переносим.</small>
+          <small>Пусто = весь scan. Для большого scan лучше явно выбрать папки/том, которые переносим.</small>
         </div>
         <div>
           <label>Exclude scope · по одному пути в строке</label>
           <textarea value={excludeScope} onChange={e => setExcludeScope(e.target.value)} placeholder={'F:\\work\nF:\\VM-active'} />
-          <small>DiskShell и target Storage backend исключает автоматически.</small>
+          <small>Project/data-dir и target Storage backend исключает автоматически.</small>
         </div>
       </div>
-      <div className="actions">
+
+      <div className="actions placement-primary-actions">
         <button className="primary" disabled={!scanId || running || !root.trim()} onClick={build}>Построить Managed Import из scan {scanId || '—'}</button>
+        <label className={`disk-write-toggle ${fileWritesAllowed ? 'enabled' : 'locked'}`}>
+          <input type="checkbox" checked={fileWritesAllowed} onChange={toggleFileWrites} />
+          <span className="toggle-track"><i /></span>
+          <span className="toggle-copy">
+            <b>{fileWritesAllowed ? 'FILE WRITE ENABLED' : 'FILE WRITE LOCKED'}</b>
+            <small>{fileWrite?.global_override ? 'DS_ALLOW_FILE_WRITES=1' : 'RAM toggle · until backend restart'}</small>
+          </span>
+        </label>
       </div>
-      <p className="muted">Scan остаётся общим снимком SSD. Этот plan берёт только Source scope, классифицирует данные и готовит перенос в HDD-папки. Cross-volume сейчас безопасно copy → verify → publish, исходник на SSD сохраняется до ручной проверки.</p>
+
+      <p className="muted">Plan классифицирует данные и готовит перенос в HDD-папки. Cross-volume: chunked copy → integrity verify → publish; исходник сохраняется. После publish DiskShell read-only проверяет фактические NTFS extents относительно macro-band policy.</p>
+
       {plan && <>
         <div className="metrics">
           <Metric label="Plan" value={`#${plan.id} · ${plan.status}`} />
-          <Metric label="Items" value={plan.total_items} />
-          <Metric label="Данные" value={fmtBytes(plan.total_bytes)} />
-          <Metric label="Рабочий резерв" value={fmtBytes(plan.reserve_bytes)} />
-          <Metric label="SSD → HDD" value={plan.cross_volume_items ?? 0} />
-          <Metric label="Внутри тома" value={plan.same_volume_items ?? 0} />
-          <Metric label="Нужно на HDD" value={fmtBytes(plan.additional_target_bytes || 0)} />
+          <Metric label="Всего items" value={plan.total_items} />
+          <Metric label="Выбрано" value={plan.selected_items ?? 0} />
+          <Metric label="Выбрано данных" value={fmtBytes(plan.selected_bytes || 0)} />
+          <Metric label="SSD → HDD выбрано" value={plan.selected_cross_volume_items ?? 0} />
+          <Metric label="Нужно на HDD" value={fmtBytes(plan.selected_additional_target_bytes || 0)} />
+          <Metric label="Layout OK" value={plan.layout_checks?.conforming ?? 0} />
+          <Metric label="Layout drift" value={plan.layout_checks?.drift ?? 0} />
         </div>
+
         {plan.scope && <div className="scope-summary">
           <span>В scope: <b>{plan.scope.selected_files}</b></span>
           <span>Вне scope: <b>{plan.scope.skipped_outside_scope}</b></span>
           <span>Excluded: <b>{plan.scope.skipped_excluded}</b></span>
         </div>}
-        {plan.warnings?.map(w => <p className="warning" key={w}>{w}</p>)}
-        <div className="plan managed-plan">{plan.items?.slice(0, 120).map(i => <div key={i.id} className={i.status}>
-          <span title={i.source_path}>{i.source_path}</span>
-          <b>→ {i.target_class}</b>
-          <span>{i.layout_lane || '—'} · {i.target_band_bytes ? fmtBytes(i.target_band_bytes) : '—'}</span>
-          <span>{i.action}</span>
-          <span>{fmtBytes(i.size)}</span>
-        </div>)}</div>
+
+        {plan.warnings?.map(w => <p className="warning" key={w}>{w} <small>(warning построен для полного draft; выбранный batch повторно проверяется перед execution)</small></p>)}
+
+        <div className="plan-toolbar">
+          <input
+            value={planQuery}
+            onChange={e => setPlanQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') searchPlan() }}
+            placeholder="Фильтр по source / target / class"
+          />
+          <button onClick={searchPlan}>Найти</button>
+          <button disabled={running} onClick={() => changeSelection(true, [], true)}>☑ Выбрать все {planQuery ? 'в фильтре' : ''}</button>
+          <button disabled={running} onClick={() => changeSelection(false, [], true)}>☐ Снять все {planQuery ? 'в фильтре' : ''}</button>
+          <span>{page.filtered} matches · {page.offset + 1}-{Math.min(page.offset + page.returned, page.filtered)}</span>
+          <button disabled={!hasPrev} onClick={() => reloadPlan(Math.max(0, page.offset - page.limit), planQuery)}>←</button>
+          <button disabled={!hasNext} onClick={() => reloadPlan(page.offset + page.limit, planQuery)}>→</button>
+        </div>
+
+        <div className="plan managed-plan selectable-plan">
+          {(plan.items || []).map(item => {
+            const layout = item.layout_verification
+            const layoutText = layout
+              ? layout.status === 'conforming'
+                ? `layout OK · ${layout.actual_extents}/~${layout.expected_extents} extents`
+                : layout.status === 'drift'
+                  ? `DRIFT · ${layout.actual_extents}/~${layout.expected_extents} extents`
+                  : `layout ${layout.status}`
+              : 'layout not checked'
+            return <div key={item.id} className={`${item.status} ${item.selected ? 'selected-plan-item' : 'unselected-plan-item'}`}>
+              <label className="plan-check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(item.selected)}
+                  disabled={running}
+                  onChange={e => changeSelection(e.target.checked, [item.id], false)}
+                />
+              </label>
+              <span title={item.source_path}>{item.source_path}</span>
+              <b>→ {item.target_class}</b>
+              <span title="Planned macro-band policy; not physical platter geometry">{item.layout_lane || '—'} · {item.target_band_bytes ? fmtBytes(item.target_band_bytes) : '—'}</span>
+              <span>{item.action}</span>
+              <span>{fmtBytes(item.size)}</span>
+              <span className={layout?.status === 'drift' ? 'layout-drift' : layout?.status === 'conforming' ? 'layout-ok' : 'muted'}>{layoutText}</span>
+              <span>{item.verification || ''}</span>
+            </div>
+          })}
+        </div>
+
         <div className="apply-box">
-          <p><b>Same-volume:</b> atomic move + journal. <b>SSD → HDD:</b> chunked copy → verify → publish; исходник пока сохраняется. Колонка lane/band показывает будущий Adaptive Macro Interleave профиль записи на HDD; реальное принудительное extent-placement всё ещё выключено.</p>
-          <select value={verify} onChange={e => setVerify(e.target.value)}><option value="size">Verify size</option><option value="sha256">Verify SHA-256</option></select>
-          <label>Для применения введи: <b>{plan.confirmation}</b></label>
+          <p><b>Integrity:</b> выбирается Size или SHA-256. <b>Layout:</b> после успешного publish Windows/NTFS extent map сравнивается с ожидаемым macro-band count. Это логические NTFS extents, не скрытая геометрия пластин.</p>
+          <select value={verify} onChange={e => setVerify(e.target.value)}>
+            <option value="size">Integrity: Verify size</option>
+            <option value="sha256">Integrity: Verify SHA-256</option>
+          </select>
+          <label>Для применения выбранного batch введи: <b>{plan.confirmation}</b></label>
           <input value={confirmation} onChange={e => setConfirmation(e.target.value)} />
           <div className="actions">
-            <button className="primary" disabled={!health?.safety?.file_writes || confirmation !== plan.confirmation || running} onClick={apply}>Запустить применение</button>
+            <button className="primary" disabled={!fileWritesAllowed || !plan.selected_items || confirmation !== plan.confirmation || running} onClick={apply}>
+              Применить выбранные {plan.selected_items || 0} items
+            </button>
             <button className="stop-button" disabled={!running || !jobId} onClick={stop}>■ Stop</button>
           </div>
-          {!health?.safety?.file_writes && <small>DS_ALLOW_FILE_WRITES=0 — file execution заблокирован; построение плана работает.</small>}
+          {!fileWritesAllowed && <small>FILE WRITE LOCKED — план строится, но execution выключен. Включи RAM-тумблер выше.</small>}
         </div>
       </>}
+
       {job && <>
         <JobProgress
           percent={job.progress_percent}
           running={running}
-          label={job.total_bytes ? `${fmtBytes(job.processed_bytes || 0)} / ${fmtBytes(job.total_bytes)}` : 'Подготовка плана выполнения'}
+          label={job.total_bytes ? `${fmtBytes(job.processed_bytes || 0)} / ${fmtBytes(job.total_bytes)}` : 'Подготовка выбранного batch'}
         />
         <div className="job-strip">
-        <StatusPill tone={job.status === 'completed' ? 'good' : job.status === 'failed' ? 'danger' : 'neutral'}>{job.status}</StatusPill>
-        <span>{job.completed || 0}/{job.total || 0} completed</span>
-        <span>{job.failed || 0} failed</span>
-        <span>{job.copied || 0} copied</span>
-        <span>{job.moved || 0} moved</span>
-      </div>
+          <StatusPill tone={job.status === 'completed' ? 'good' : job.status === 'failed' ? 'danger' : 'neutral'}>{job.status}</StatusPill>
+          <span>{job.completed || 0}/{job.total || 0} completed</span>
+          <span>{job.failed || 0} failed</span>
+          <span>{job.copied || 0} copied</span>
+          <span>{job.moved || 0} moved</span>
+        </div>
       </>}
     </Panel>
   </div>
 }
+
 
 export function DiagnosticsAdmin({ setError }) {
   const [disks, setDisks] = useState([])
@@ -999,6 +1178,7 @@ export function SecurityAdmin({ setError }) {
   const [engines, setEngines] = useState([])
   const [engine, setEngine] = useState('auto')
   const [path, setPath] = useState(localStorage.getItem('securityPath') || 'F:\\')
+  const [roots, setRoots] = useState([])
   const [jobId, setJobId] = useState(localStorage.getItem('securityJobId') || '')
   const [job, setJob] = useState(null)
   const [results, setResults] = useState([])
@@ -1006,9 +1186,14 @@ export function SecurityAdmin({ setError }) {
   const terminal = useMemo(() => new Set(['clean', 'threats_found', 'error', 'cancelled']), [])
 
   const refresh = async () => {
-    const [caps, history] = await Promise.all([api('/api/security/engines'), api('/api/security/results')])
+    const [caps, history, rootData] = await Promise.all([
+      api('/api/security/engines'),
+      api('/api/security/results'),
+      api('/api/files/roots'),
+    ])
     setEngines(caps.engines || [])
     setResults(history.results || [])
+    setRoots(rootData.roots || [])
   }
 
   useEffect(() => { refresh().catch(e => setError(e.message)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1059,6 +1244,11 @@ export function SecurityAdmin({ setError }) {
     <Panel title="Local malware scan · no remediation">
       <p>DiskShell использует установленный Microsoft Defender или ClamAV. Облако не требуется; этот раздел только сканирует и не удаляет найденные файлы.</p>
       <div className="engine-grid">{engines.map(e => <div key={e.id} className={e.available ? 'available' : 'unavailable'}><b>{e.title}</b><span>{e.available ? 'available' : 'not installed'}</span><small>{e.path || '—'}</small></div>)}</div>
+      <label>Локальный том</label>
+      <select value={roots.some(item => item.path === path) ? path : ''} onChange={e => e.target.value && setPath(e.target.value)}>
+        <option value="">Выбрать том…</option>
+        {roots.map(item => <option key={item.path} value={item.path}>{item.path} · {item.filesystem || 'FS'}</option>)}
+      </select>
       <label>Файл или каталог</label>
       <input value={path} onChange={e => setPath(e.target.value)} />
       <select value={engine} onChange={e => setEngine(e.target.value)}>
@@ -1197,13 +1387,19 @@ function CommanderPane({
         onDoubleClick={() => item.is_dir && !busy && load(side, item.path)}
       >
         <span title={item.path}>{item.is_dir ? '📁' : '📄'} {item.name}</span>
-        <span>{item.is_dir ? '<DIR>' : fmtBytes(item.size)}</span>
+        <span title={item.is_dir && item.size_known ? `indexed by scan ${item.indexed_scan_id}` : ''}>
+          {item.is_dir ? (item.size_known ? fmtBytes(item.size) : '—') : fmtBytes(item.size)}
+        </span>
         <span>{item.modified_ns ? new Date(item.modified_ns / 1e6).toLocaleString() : ''}</span>
       </button>)}
     </div>
     <div className="pane-status">
       <span>{state.data?.items?.length || 0} items</span>
-      <span>{state.selected ? `${state.selected.name} · ${state.selected.is_dir ? '<DIR>' : fmtBytes(state.selected.size)}` : 'nothing selected'}</span>
+      <span>{state.selected
+        ? `${state.selected.name} · ${state.selected.is_dir
+          ? (state.selected.size_known ? fmtBytes(state.selected.size) : 'size not indexed')
+          : fmtBytes(state.selected.size)}`
+        : 'nothing selected'}</span>
     </div>
   </Panel>
 }
@@ -1236,7 +1432,7 @@ function CommanderInspector({ preview, archive, remoteOrigin }) {
   </Panel>
 }
 
-export function FilesAdmin({ health, setError }) {
+export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
   const makePane = (side) => ({
     sourceType: 'local',
     path: localStorage.getItem(`file${side}Path`) || 'F:\\',
@@ -1269,6 +1465,7 @@ export function FilesAdmin({ health, setError }) {
   const [archive, setArchive] = useState(null)
   const [remoteOrigin, setRemoteOrigin] = useState('')
   const [archiveFormat, setArchiveFormat] = useState('zip')
+  const [fileWrite, setFileWrite] = useState(null)
 
   const terminal = useMemo(() => new Set(['completed', 'failed', 'cancelled']), [])
   const activePane = activeSide === 'left' ? left : right
@@ -1276,20 +1473,23 @@ export function FilesAdmin({ health, setError }) {
 
   async function refreshMeta() {
     try {
-      const [rootData, connectionData] = await Promise.all([
+      const [rootData, connectionData, writeData] = await Promise.all([
         api('/api/files/roots'),
         api('/api/commander/connections'),
+        api('/api/files/write-access'),
       ])
       setRoots(rootData.roots || [])
       setConnections(connectionData.connections || [])
+      setFileWrite(writeData)
     } catch (e) { setError(e.message) }
   }
 
   async function load(side, path, forcedPane = null) {
     const pane = forcedPane || (side === 'left' ? left : right)
     try {
+      const scanQuery = scanId ? `&scan_id=${encodeURIComponent(scanId)}` : ''
       const data = pane.sourceType === 'local'
-        ? await api(`/api/files?path=${encodeURIComponent(path)}`)
+        ? await api(`/api/files?path=${encodeURIComponent(path)}${scanQuery}`)
         : await api(`/api/commander/remote?connection_id=${encodeURIComponent(pane.connectionId)}&path=${encodeURIComponent(path)}`)
       const next = { ...pane, path: data.path, data, selected: null }
       if (side === 'left') {
@@ -1386,11 +1586,11 @@ export function FilesAdmin({ health, setError }) {
     } catch (e) { setError(e.message) }
   }
 
-  async function transfer(operation) {
-    const sourcePane = activePane
-    const destinationPane = passivePane
+  async function transfer(operation, sourceSide = activeSide) {
+    const sourcePane = sourceSide === 'left' ? left : right
+    const destinationPane = sourceSide === 'left' ? right : left
     const selected = sourcePane.selected
-    if (!selected || !health?.safety?.file_writes) return
+    if (!selected || !fileWrite?.allowed) return
 
     try {
       let destinationPath = destinationPane.sourceType === 'local'
@@ -1598,6 +1798,17 @@ export function FilesAdmin({ health, setError }) {
   }
 
   const busy = Boolean(jobId && job && !terminal.has(job.status))
+  const fileWritesAllowed = Boolean(fileWrite?.allowed)
+  const directTarget = (sourceSide) => {
+    const sourcePane = sourceSide === 'left' ? left : right
+    const targetPane = sourceSide === 'left' ? right : left
+    const selected = sourcePane.selected
+    if (!selected) return 'выбери файл/папку'
+    const target = targetPane.sourceType === 'local'
+      ? joinPath(targetPane.path, selected.name)
+      : remoteJoin(targetPane.path, selected.name)
+    return `${selected.path} → ${target}`
+  }
 
   useEffect(() => {
     const handler = event => {
@@ -1610,9 +1821,9 @@ export function FilesAdmin({ health, setError }) {
       } else if (event.key === 'F3') {
         event.preventDefault(); inspectSelected()
       } else if (event.key === 'F5') {
-        event.preventDefault(); transfer('copy')
+        event.preventDefault(); transfer('copy', activeSide)
       } else if (event.key === 'F6') {
-        event.preventDefault(); transfer('move')
+        event.preventDefault(); transfer('move', activeSide)
       } else if (event.key === 'F7') {
         event.preventDefault(); makeDirectory()
       } else if (event.key === 'F8') {
@@ -1633,13 +1844,21 @@ export function FilesAdmin({ health, setError }) {
         <b>DiskShell Commander</b>
         <span>Local · SFTP/SSH · FTP/FTPS · Preview · Archives</span>
       </div>
+      <label className={`disk-write-toggle ${fileWritesAllowed ? 'enabled' : 'locked'}`}>
+        <input type="checkbox" checked={fileWritesAllowed} onChange={toggleFileWrites} />
+        <span className="toggle-track"><i /></span>
+        <span className="toggle-copy">
+          <b>{fileWritesAllowed ? 'FILE WRITE ENABLED' : 'FILE WRITE LOCKED'}</b>
+          <small>{fileWrite?.global_override ? 'DS_ALLOW_FILE_WRITES=1' : 'RAM toggle · until backend restart'}</small>
+        </span>
+      </label>
       <label className="smart-transfer-toggle">
         <input
           type="checkbox"
           checked={smartTransfer}
           onChange={e => setSmartTransfer(e.target.checked)}
         />
-        <span><b>Smart placement</b><small>OFF = direct path · ON = classify into HDD storage classes</small></span>
+        <span><b>Smart folders</b><small>OFF = exact destination · ON = classify into HDD folders; no forced extent layout</small></span>
       </label>
       <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)}>
         <option value="zip">ZIP</option>
@@ -1669,17 +1888,17 @@ export function FilesAdmin({ health, setError }) {
 
       <div className="file-actions commander-actions">
         <button disabled={!activePane.selected || busy} onClick={inspectSelected}>F3 View</button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={() => transfer('copy')}>
-          {activeSide === 'left' ? 'F5 Copy →' : '← F5 Copy'}
-        </button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={() => transfer('move')}>
-          {activeSide === 'left' ? 'F6 Move →' : '← F6 Move'}
-        </button>
-        <button disabled={!health?.safety?.file_writes || busy} onClick={makeDirectory}>F7 MkDir</button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={renameSelected}>F2 Rename</button>
-        <button className="trash" disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={deleteSelected}>F8 Trash/Delete</button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={createArchive}>F9 Archive</button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={extractArchive}>Extract → other</button>
+        <small className="transfer-direction" title={directTarget('left')}>{directTarget('left')}</small>
+        <button disabled={!fileWritesAllowed || !left.selected || busy} onClick={() => transfer('copy', 'left')}>F5 Copy →</button>
+        <button disabled={!fileWritesAllowed || !left.selected || busy} onClick={() => transfer('move', 'left')}>F6 Move →</button>
+        <small className="transfer-direction" title={directTarget('right')}>{directTarget('right')}</small>
+        <button disabled={!fileWritesAllowed || !right.selected || busy} onClick={() => transfer('copy', 'right')}>← Copy</button>
+        <button disabled={!fileWritesAllowed || !right.selected || busy} onClick={() => transfer('move', 'right')}>← Move</button>
+        <button disabled={!fileWritesAllowed || busy} onClick={makeDirectory}>F7 MkDir</button>
+        <button disabled={!fileWritesAllowed || !activePane.selected || busy} onClick={renameSelected}>F2 Rename</button>
+        <button className="trash" disabled={!fileWritesAllowed || !activePane.selected || busy} onClick={deleteSelected}>F8 Trash/Delete</button>
+        <button disabled={!fileWritesAllowed || !activePane.selected || busy} onClick={createArchive}>F9 Archive</button>
+        <button disabled={!fileWritesAllowed || !activePane.selected || busy} onClick={extractArchive}>Extract → other</button>
         <button className="stop-button" disabled={!busy || !jobId} onClick={stop}>■ Stop / Esc</button>
       </div>
 
@@ -1702,7 +1921,7 @@ export function FilesAdmin({ health, setError }) {
     </div>
 
     {smartTransfer && <Panel title="Smart transfer policy">
-      <p><b>Direct transfer remains available.</b> Smart mode changes only the destination path for a file going into a local managed-storage root. The byte transfer is still the same verified Commander job.</p>
+      <p><b>Smart folders не означает шахматную фрагментацию.</b> Этот режим меняет только папку назначения по Storage Class. Direct transfer всегда остаётся доступным. Фактическую NTFS-нарезку проверяет Storage Brain / Storage Lab после managed transfer.</p>
       {smartHint && <div className="metrics">
         <Metric label="Class" value={smartHint.target_class} />
         <Metric label="Category" value={smartHint.category} />
@@ -1710,7 +1929,7 @@ export function FilesAdmin({ health, setError }) {
         <Metric label="Target band" value={fmtBytes(smartHint.target_band_bytes)} />
       </div>}
       {smartHint && <p className="path">{smartHint.destination}</p>}
-      <p className="muted">Smart fragmentation / extent-layout verification remains read-only/experimental until Storage Lab can compare actual NTFS extents against this lane/band policy.</p>
+      <p className="muted">Принудительный extent-placement пока выключен. Проверка фактических NTFS extents уже read-only; writer/rebalancer будет отдельным следующим этапом.</p>
     </Panel>}
 
     <Panel title="Commander transfer job">
@@ -1730,7 +1949,7 @@ export function FilesAdmin({ health, setError }) {
         <p className="path">{job.current_path}</p>
         {job.error && <p className="warning">{job.error}</p>}
       </>}
-      {!health?.safety?.file_writes && <small>DS_ALLOW_FILE_WRITES=0 — write operations are locked.</small>}
+      {!fileWritesAllowed && <small>FILE WRITE LOCKED — Copy/Move/MkDir/Rename/Delete/Archive отключены. Включи тумблер сверху.</small>}
     </Panel>
 
     <CommanderInspector preview={preview} archive={archive} remoteOrigin={remoteOrigin} />

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
-from backend.config import settings
 from backend.commander.jobs import (
     cancel_commander_job,
     get_commander_job,
     start_commander_job,
 )
 from backend.files.service import FileWriteBlocked
+from backend.files.write_authorization import file_writes_allowed
 from backend.remote.service import (
     RemoteConnectionError,
     cache_remote_file,
@@ -26,8 +26,8 @@ bp = Blueprint("commander", __name__, url_prefix="/api/commander")
 
 
 def _require_file_writes() -> None:
-    if not settings.allow_file_writes:
-        raise FileWriteBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise FileWriteBlocked("File writes are locked")
 
 
 @bp.get("/connections")

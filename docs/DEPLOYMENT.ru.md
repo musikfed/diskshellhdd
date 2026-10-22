@@ -34,21 +34,77 @@ npm run build
 
 ### ОБЯЗАТЕЛЬНЫЙ admin CLI запуск backend
 
-Закрой старый backend. Затем открой **Windows PowerShell / Windows Terminal → Запуск от имени администратора**.
+Для physical disk / Surface Diagnostics / Recovery RAW / Initialize / Partition / Format / NTFS extent функций backend должен быть elevated.
 
-Можно открыть elevated PowerShell командой:
+#### Вариант A — одна команда из обычного PowerShell или VS Code terminal
+
+Рекомендуемый способ:
+
+```powershell
+Set-Location "F:\diskshellhdd"
+.\scripts\start-admin.ps1
+```
+
+Скрипт сам проверяет token процесса. Если прав Administrator нет, Windows покажет стандартный UAC prompt и запустит **только backend** в elevated PowerShell. Это безопаснее, чем держать весь редактор с повышенными правами.
+
+Можно также запустить двойным кликом / из cmd.exe:
+
+```cmd
+scripts\start-admin.cmd
+```
+
+#### Вариант B — VS Code task
+
+В VS Code:
+
+```text
+Ctrl+Shift+P
+→ Tasks: Run Task
+→ DiskShell: Backend as Administrator
+```
+
+Task вызывает `scripts/start-admin.ps1`; после UAC backend работает elevated. Исходный VS Code может оставаться обычным пользователем.
+
+Если нужен именно **elevated integrated terminal**, есть второй task:
+
+```text
+Ctrl+Shift+P
+→ Tasks: Run Task
+→ DiskShell: Reopen VS Code as Administrator
+```
+
+После подтверждения UAC откроется elevated VS Code workspace. Тогда встроенный terminal уже может запускать:
+
+```powershell
+uv run python -m backend.app
+```
+
+⚠ В этом режиме **все расширения и workspace tasks VS Code тоже получают Administrator privileges**. Используй только для доверенного workspace.
+
+#### Вариант C — вручную через UAC
 
 ```powershell
 Start-Process powershell -Verb RunAs
 ```
 
-В новом окне с правами Administrator:
+В открывшемся Administrator PowerShell:
 
 ```powershell
 Set-Location "F:\diskshellhdd"
-
 uv run python -m backend.app
 ```
+
+#### Про `runas`
+
+Можно использовать alternate-credentials запуск:
+
+```cmd
+runas /user:Администратор "powershell.exe -NoExit -Command \"Set-Location 'F:\diskshellhdd'; uv run python -m backend.app\""
+```
+
+На англоязычной Windows имя встроенной учётки обычно `Administrator`.
+
+Но `runas` **не является надёжной заменой UAC elevation**: встроенный Administrator может быть отключён, имя локализовано, а процесс с другими credentials не всегда получает нужный high-integrity token. Для DiskShell предпочтителен `Start-Process ... -Verb RunAs` или готовый `scripts/start-admin.ps1`.
 
 Открыть UI:
 
@@ -56,7 +112,7 @@ uv run python -m backend.app
 http://127.0.0.1:8765/
 ```
 
-В нормальном admin runtime при `DS_DEBUG=0` backend работает через Waitress.
+При `DS_DEBUG=0` backend работает через Waitress.
 
 ## Linux — bash
 

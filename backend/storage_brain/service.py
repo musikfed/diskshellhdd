@@ -462,8 +462,6 @@ def suggest_managed_destination(
     target_class, reason = choose_storage_class(fake_row, rules)
     class_row = classes.get(target_class, classes["other"])
     folder = _target_folder(root, class_row, fake_row)
-    folder.mkdir(parents=True, exist_ok=True)
-
     source = Path(source_name)
     target = folder / source.name
     counter = 2

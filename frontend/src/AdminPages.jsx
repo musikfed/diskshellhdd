@@ -2137,7 +2137,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
         <button className="trash" disabled={!fileWritesAllowed || activeSelection.length === 0 || busy} onClick={deleteSelected}>F8 Trash/Delete</button>
         <button disabled={!fileWritesAllowed || activeSelection.length === 0 || activePane.sourceType !== 'local' || busy} onClick={createArchive}>F9 Archive</button>
         <button disabled={!fileWritesAllowed || activeSelection.length !== 1 || activePane.sourceType !== 'local' || passivePane.sourceType !== 'local' || busy} onClick={extractArchive}>Extract → other</button>
-        <button className="stop-button" disabled={!busy || !jobId} onClick={stop}>■ Stop / Esc</button>
+        <button className="stop-button" disabled={!busy || !jobId} onClick={stop}>■ Stop / keep partial</button>
       </div>
 
       <div onMouseDown={() => setActiveSide('right')}>
@@ -2185,7 +2185,11 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
         >
           Continue partial
         </button>
-        <button className="danger-button" onClick={() => resolveConflict('replace')}>
+        <button
+          className="danger-button"
+          disabled={pendingConflict.conflicts.some(item => item.same_as_source)}
+          onClick={() => resolveConflict('replace')}
+        >
           Replace all
         </button>
         <button onClick={() => resolveConflict('keep_both')}>
@@ -2215,7 +2219,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     </Panel>}
 
     <Panel title="Commander transfer job">
-      {!job && <p className="muted">F5/F6 use one batch background job for all selected local/SFTP/FTP items. Stop removes only the currently incomplete target; already completed batch items remain complete.</p>}
+      {!job && <p className="muted">F5/F6 use one batch background job for all selected local/SFTP/FTP items. Stop keeps the incomplete target so it can be continued later; already completed batch items remain complete.</p>}
       {job && <>
         <div className="metrics">
           <Metric label="Operation" value={job.operation} />

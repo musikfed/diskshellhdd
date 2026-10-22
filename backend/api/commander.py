@@ -10,6 +10,7 @@ from backend.commander.jobs import (
 from backend.files.service import FileWriteBlocked
 from backend.remote.service import (
     RemoteConnectionError,
+    cache_remote_file,
     create_profile,
     delete_item,
     delete_profile,
@@ -165,3 +166,20 @@ def cancel_job(job_id: str):
         return jsonify(cancel_commander_job(job_id))
     except KeyError:
         return jsonify({"error": "job_not_found"}), 404
+
+
+@bp.post("/remote/cache")
+def remote_cache():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(
+            cache_remote_file(
+                str(payload["connection_id"]),
+                str(payload["path"]),
+                max_bytes=int(payload.get("max_bytes") or 256 * 1024**2),
+            )
+        )
+    except KeyError:
+        return jsonify({"error": "connection_not_found"}), 404
+    except (RemoteConnectionError, OSError, ValueError, IsADirectoryError) as exc:
+        return jsonify({"error": "remote_cache_failed", "message": str(exc)}), 400

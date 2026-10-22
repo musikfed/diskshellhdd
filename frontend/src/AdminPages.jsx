@@ -244,11 +244,7 @@ export function DisksAdmin({ setError }) {
       const write = d.write_access || {}
       return <Panel key={d.number} title={`Disk ${d.number} · ${d.friendly_name}`} className="disk-card">
         <div className="disk-head">
-          {formatDirty && <div className="plan-stale">
-        Параметры изменены. Перед destructive execution пересчитай план.
-        <button onClick={() => prepareFormat(formatPlan.disk.number)}>Пересчитать план</button>
-      </div>}
-      <div className="metrics">
+          <div className="metrics">
             <Metric label="Размер" value={fmtBytes(d.size)} />
             <Metric label="Bus" value={d.bus_type} />
             <Metric label="Partition style" value={d.partition_style} />
@@ -351,6 +347,10 @@ export function DisksAdmin({ setError }) {
       <div className="preset-hint">
         <b>{filesystemProfile(fs)?.title || fs}</b> · {filesystemProfile(fs)?.warning || 'Windows проверит поддержку перед форматированием.'}
       </div>
+      {formatDirty && <div className="plan-stale">
+        <span>Параметры изменены. Перед destructive execution пересчитай план.</span>
+        <button onClick={() => prepareFormat(formatPlan.disk.number)}>Пересчитать план</button>
+      </div>}
       <div className="metrics">
         <Metric label="Первый том" value={formatPlan.use_maximum ? 'максимальный доступный' : fmtBytes(formatPlan.size_bytes)} />
         <Metric label="Остаток" value={formatPlan.use_maximum ? '0 / служебный GPT резерв' : 'останется Unallocated'} />
@@ -367,11 +367,11 @@ export function DisksAdmin({ setError }) {
       <div className="grid two">
         <div>
           <label>Размер, GiB (пусто = всё максимальное свободное место)</label>
-          <input value={partitionDraft.sizeGiB} onChange={e => setPartitionDraft(x => ({ ...x, sizeGiB: e.target.value }))} />
+          <input value={partitionDraft.sizeGiB} onChange={e => { setPartitionDraft(x => ({ ...x, sizeGiB: e.target.value })); setPartitionPlan(null) }} />
         </div>
         <div>
           <label>Буква (пусто = Windows назначит автоматически)</label>
-          <input maxLength={2} value={partitionDraft.driveLetter} onChange={e => setPartitionDraft(x => ({ ...x, driveLetter: e.target.value }))} />
+          <input maxLength={2} value={partitionDraft.driveLetter} onChange={e => { setPartitionDraft(x => ({ ...x, driveLetter: e.target.value })); setPartitionPlan(null) }} />
         </div>
       </div>
       <div className="form-row">
@@ -390,7 +390,7 @@ export function DisksAdmin({ setError }) {
         <select value={partitionDraft.allocationUnit} onChange={e => { setPartitionDraft(x => ({ ...x, allocationUnit: Number(e.target.value) })); setPartitionPlan(null) }}>
           {(filesystemProfile(partitionDraft.filesystem)?.clusters || [4096, 16384, 65536]).map(x => <option key={x} value={x}>{x < 1024 ** 2 ? `${x / 1024} KiB` : `${x / 1024 ** 2} MiB`}</option>)}
         </select>
-        <input value={partitionDraft.label} onChange={e => setPartitionDraft(x => ({ ...x, label: e.target.value }))} />
+        <input value={partitionDraft.label} onChange={e => { setPartitionDraft(x => ({ ...x, label: e.target.value })); setPartitionPlan(null) }} />
       </div>
       <div className="actions"><button className="primary" onClick={preparePartition}>Проверить план</button><button onClick={() => setPartitionDraft(null)}>Закрыть</button></div>
       {partitionPlan && <>

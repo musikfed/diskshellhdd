@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.9
+# DiskShell HDD 0.7.0
 
 [Русская версия](README.ru.md) · English
 
@@ -206,10 +206,21 @@ Resume applies while the backend job is alive; backend-restart recovery is not y
 Commander now creates zero-byte files correctly during Copy/Move, including cross-volume and remote workflows. Previously a missing empty target could be mistaken for a completed transfer because both its offset and expected size were zero, causing the following size verification to raise FileNotFoundError. The job current path is also updated before every file, including empty files.
 
 
-## Commander conflicts / resume / missing sources 0.6.9
+## Commander conflicts / resume / missing sources 0.7.0
 
 Copy/Move now requires an explicit policy when a destination already exists: **Continue partial**, **Replace all**, **Keep both** using `name (1)`, `name (2)`, and so on, **Skip conflicts**, or Cancel. There is no implicit overwrite.
 
 Stop and exhausted reconnect attempts retain the incomplete target instead of deleting it. The transfer job exposes `partial_retained` and the UI offers **Continue partial**. A retry can resume from the actual destination size; directory resume merges file-by-file using the same size-based continuation rule.
 
 If a selected source disappears between browsing and transfer start, or an individual source file disappears while walking a directory, the batch records it as missing/skipped, reports a warning, and continues the remaining items. Replace rechecks that the source still exists before deleting any existing destination.
+
+
+## Resilient endpoints / backend transfer manager 0.7.0
+
+Copy/Move is now treated as a backend-owned transfer, not a browser-owned operation. UI refreshes or render failures do not stop a live backend job.
+
+A disconnected local volume or a prolonged SSH/SFTP outage moves the job into `waiting_endpoint`. The backend periodically probes the endpoint, verifies local volume identity before resuming, recalculates the actual partial target size, and continues automatically. A different device that happens to reuse the same Windows drive letter is not accepted as the original target.
+
+The same wait/retry policy surrounds directory creation, final size verification, native rename, and Move source cleanup. Drive inventory is refreshed continuously and offline roots are represented as OFFLINE instead of being treated as fatal UI errors.
+
+Scope: the backend process must remain alive. Persistent job recovery across a backend restart is a separate transfer-journal milestone; remote credentials/profiles remain RAM-only.

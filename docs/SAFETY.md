@@ -1,4 +1,4 @@
-# DiskShell 0.5.2 — operator safety and responsibility
+# DiskShell 0.5.7 — operator safety and responsibility
 
 DiskShell is intended for system administrators, storage engineers, and other operators who understand the consequences of storage operations.
 
@@ -13,12 +13,13 @@ This notice does not replace backups, change-management, or organizational proce
 With `DS_ALLOW_DISK_WRITES=0`:
 
 - the global disk-write override is disabled;
-- one specific non-protected physical disk can still be unlocked from the UI;
-- unlock is bound to Number + UniqueId/Serial + Size;
-- exact typed confirmation is required;
-- runtime unlock expires after 15 minutes;
-- the operator can lock it again immediately;
-- System / Boot / Application disks cannot be unlocked.
+- write access can be enabled for one specific non-protected physical disk from the UI;
+- permission is bound to Number + UniqueId/Serial + Size;
+- no typed phrase is required to enable WRITE;
+- there is no automatic timeout;
+- WRITE stays enabled until manually disabled or the backend restarts;
+- changing the disk identity automatically invalidates the permission;
+- System / Boot / Application disks cannot be write-enabled.
 
 `DS_ALLOW_DISK_WRITES=1` remains a global override for controlled lab/automation environments and is not recommended for normal administration.
 

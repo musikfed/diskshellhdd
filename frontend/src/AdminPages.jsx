@@ -105,8 +105,6 @@ const TERMINAL_PLAN = new Set(['completed', 'partial', 'failed', 'blocked', 'can
 export function DisksAdmin({ setError }) {
   const [data, setData] = useState(null)
   const [capabilities, setCapabilities] = useState({ filesystems: [], process_elevated: null })
-  const [unlockPlan, setUnlockPlan] = useState(null)
-  const [unlockConfirm, setUnlockConfirm] = useState('')
   const [formatPlan, setFormatPlan] = useState(null)
   const [formatDirty, setFormatDirty] = useState(false)
   const [formatConfirm, setFormatConfirm] = useState('')
@@ -136,29 +134,12 @@ export function DisksAdmin({ setError }) {
   const elevated = capabilities.process_elevated === true
   const diskByNumber = number => (data?.disks || []).find(d => d.number === number)
 
-  async function prepareUnlock(disk) {
+  async function toggleWrite(disk) {
     try {
-      const value = await api(`/api/disks/${disk.number}/unlock-plan`, { method: 'POST', body: '{}' })
-      setUnlockPlan(value)
-      setUnlockConfirm('')
-    } catch (e) { setError(e.message) }
-  }
-
-  async function unlock() {
-    try {
-      await api(`/api/disks/${unlockPlan.disk.number}/unlock`, {
-        method: 'POST',
-        body: JSON.stringify({ confirmation: unlockConfirm }),
-      })
-      setUnlockPlan(null)
-      setUnlockConfirm('')
-      await reload()
-    } catch (e) { setError(e.message) }
-  }
-
-  async function lock(number) {
-    try {
-      await api(`/api/disks/${number}/lock`, { method: 'POST', body: '{}' })
+      const endpoint = disk.write_access?.allowed
+        ? `/api/disks/${disk.number}/lock`
+        : `/api/disks/${disk.number}/unlock`
+      await api(endpoint, { method: 'POST', body: '{}' })
       await reload()
     } catch (e) { setError(e.message) }
   }
@@ -346,7 +327,7 @@ export function DisksAdmin({ setError }) {
             <Metric label="Health" value={d.health_status} />
           </div>
           <StatusPill tone={d.protected ? 'warning' : write.allowed ? 'danger' : 'good'}>
-            {d.protected ? 'PROTECTED' : write.allowed ? 'WRITE UNLOCKED' : 'WRITE LOCKED'}
+            {d.protected ? 'PROTECTED' : write.allowed ? 'WRITE ENABLED' : 'WRITE LOCKED'}
           </StatusPill>
         </div>
 
@@ -358,7 +339,7 @@ export function DisksAdmin({ setError }) {
         <DiskLayoutBar disk={d} />
         {!d.protected && <div className="raw-stepper">
           <div className={write.allowed ? 'done' : 'current'}>
-            <b>1</b><span><strong>Разблокировать запись</strong><small>{write.allowed ? 'Готово' : 'Нужно временно разблокировать выбранный диск'}</small></span>
+            <b>1</b><span><strong>Разрешить запись</strong><small>{write.allowed ? 'WRITE ENABLED до ручного выключения / restart backend' : 'Включи тумблер только для выбранного диска'}</small></span>
           </div>
           <div className={String(d.partition_style).toUpperCase() !== 'RAW' ? 'done' : (write.allowed ? 'current' : '')}>
             <b>2</b><span><strong>Initialize GPT</strong><small>{String(d.partition_style).toUpperCase() !== 'RAW' ? 'GPT создан' : 'Создать только таблицу разделов'}</small></span>
@@ -370,9 +351,20 @@ export function DisksAdmin({ setError }) {
 
         {d.protected
           ? <p className="protected">🔒 {d.protection_reasons.join(', ')}</p>
-          : <div className="actions">
-              {!write.allowed && <button className="unlock-button" disabled={Boolean(diskBusy)} onClick={() => prepareUnlock(d)}>Разблокировать только этот диск</button>}
-              {write.allowed && <button disabled={Boolean(diskBusy)} onClick={() => lock(d.number)}>🔒 Заблокировать запись</button>}
+          : <div className="actions disk-write-actions">
+              <label className={`disk-write-toggle ${write.allowed ? 'enabled' : 'locked'}`}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(write.allowed)}
+                  disabled={Boolean(diskBusy) || Boolean(write.global_override)}
+                  onChange={() => toggleWrite(d)}
+                />
+                <span className="toggle-track"><i /></span>
+                <span className="toggle-copy">
+                  <b>{write.allowed ? 'WRITE ENABLED' : 'WRITE LOCKED'}</b>
+                  <small>{write.global_override ? 'DS_ALLOW_DISK_WRITES=1' : 'ручной per-disk переключатель'}</small>
+                </span>
+              </label>
               {String(d.partition_style).toUpperCase() === 'RAW' && <button disabled={Boolean(diskBusy) || !elevated} title={!elevated ? 'Backend должен быть запущен от администратора' : ''} onClick={() => prepareInitialize(d.number)}>Инициализировать GPT</button>}
               {Number(d.largest_free_extent || 0) > 0 && String(d.partition_style).toUpperCase() !== 'RAW' && <button disabled={Boolean(diskBusy) || !elevated} title={!elevated ? 'Backend должен быть запущен от администратора' : ''} onClick={() => newPartition(d)}>+ Раздел / том</button>}
               {String(d.partition_style).toUpperCase() !== 'RAW' && <button className="danger-outline" disabled={Boolean(diskBusy) || !elevated} title={!elevated ? 'Backend должен быть запущен от администратора' : ''} onClick={() => prepareFormat(d.number)}>
@@ -394,22 +386,6 @@ export function DisksAdmin({ setError }) {
         </div>
       </Panel>
     })}
-
-    {unlockPlan && <Panel title="Разблокировка выбранного физического диска" className="danger-card">
-      <p className="warning">{unlockPlan.warning}</p>
-      <div className="metrics">
-        <Metric label="Disk" value={unlockPlan.disk.number} />
-        <Metric label="Model" value={unlockPlan.disk.friendly_name} />
-        <Metric label="Serial" value={unlockPlan.disk.serial_number || '—'} />
-        <Metric label="Размер" value={fmtBytes(unlockPlan.disk.size)} />
-      </div>
-      <label>Для временной разблокировки введи точно: <b>{unlockPlan.confirmation}</b></label>
-      <input value={unlockConfirm} onChange={e => setUnlockConfirm(e.target.value)} />
-      <div className="actions">
-        <button className="danger-button" disabled={unlockConfirm !== unlockPlan.confirmation} onClick={unlock}>Разблокировать на 15 минут</button>
-        <button onClick={() => setUnlockPlan(null)}>Отмена</button>
-      </div>
-    </Panel>}
 
     {initializePlan && <Panel title="Инициализировать таблицу разделов" className="danger-card">
       <p className="warning">{initializePlan.warning}</p>

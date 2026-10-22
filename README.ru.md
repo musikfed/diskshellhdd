@@ -1,4 +1,4 @@
-# DiskShell HDD 0.5.6
+# DiskShell HDD 0.5.7
 
 Русский · [English](README.md)
 
@@ -8,8 +8,8 @@
 
 - React/Vite интерфейс переработан под системного администратора / storage engineer.
 - System / Boot / Application disk всегда backend-protected.
-- `DS_ALLOW_DISK_WRITES=0` оставляет глобальный override выключенным, но позволяет временно разблокировать **один выбранный непротектед physical disk** из UI.
-- Per-disk unlock привязан к Number + UniqueId/Serial + Size, требует typed-confirmation и истекает через 15 минут.
+- `DS_ALLOW_DISK_WRITES=0` оставляет глобальный override выключенным, но позволяет вручную включить запись **только для выбранного непротектед physical disk** из UI.
+- Per-disk write toggle привязан к Number + UniqueId/Serial + Size, не требует typed-confirmation и остаётся включённым до ручного выключения или перезапуска backend.
 - Partition/Volume Manager: initialize GPT/MBR, создать partition в unallocated space, форматировать NTFS/exFAT, выбрать cluster size, назначить drive letter.
 - Whole-disk workflow по-прежнему умеет Clear → GPT → one partition → format, но только после unlock и destructive confirmation.
 - Quick Index имеет настоящий Stop/Cancel.
@@ -32,11 +32,11 @@
 ```text
 DS_ALLOW_FILE_WRITES=0
 DS_ALLOW_VAULT_WRITES=0
-DS_ALLOW_DISK_WRITES=0   # global override OFF; per-disk UI unlock работает
+DS_ALLOW_DISK_WRITES=0   # global override OFF; per-disk WRITE toggle работает
 DS_ALLOW_EXTENT_MOVES=0
 ```
 
-Для обычной админской работы с storage-диском `DS_ALLOW_DISK_WRITES` можно оставить `0` и разблокировать только выбранный диск из UI.
+Для обычной админской работы `DS_ALLOW_DISK_WRITES` можно оставить `0` и включать WRITE только тумблером выбранного диска.
 
 ## Быстрый запуск Windows 11
 
@@ -62,7 +62,7 @@ uv run python -m backend.app
 
 Подробнее: [архитектура](docs/ARCHITECTURE.ru.md) · [развёртывание](docs/DEPLOYMENT.ru.md) · [безопасность](docs/SAFETY.ru.md).
 
-## Storage wizard 0.5.6
+## Storage wizard 0.5.7
 
 DiskShell различает три операции:
 
@@ -82,7 +82,7 @@ Cluster sizes показываются по выбранной FS. Backend до�
 - Defender/ClamAV: indeterminate, потому что движок не отдаёт надёжный общий объём.
 - Initialize/partition/format: activity indicator без фиктивного процента; принудительный Stop во время изменения partition table намеренно не предлагается.
 
-## Adaptive Macro Interleave 0.5.6
+## Adaptive Macro Interleave 0.5.7
 
 Storage Lab больше не моделирует одинаковые фиксированные куски. Вместо этого используется bounded macro-interleave:
 
@@ -98,11 +98,11 @@ Storage Lab больше не моделирует одинаковые фикс
 
 Симулятор показывает tiny/oversized split extents, max extents per file и итоговый quality. Реальное NTFS extent relocation всё ещё выключено и остаётся отдельным experimental этапом.
 
-## RAW disk workflow 0.5.6
+## RAW disk workflow 0.5.7
 
 Для RAW-диска DiskShell больше не предлагает основной shortcut «GPT + первый том». Безопасный путь разделён на стадии:
 
-1. временно разблокировать выбранный physical disk;
+1. включить WRITE тумблер только для выбранного physical disk;
 2. Initialize GPT;
 3. перечитать topology;
 4. создать раздел/том из unallocated space;
@@ -112,7 +112,7 @@ UI показывает stepper и фиксированный activity-status п
 
 Destructive Windows Storage operations требуют запуска backend от имени Administrator. Страница Disks теперь показывает это явно и блокирует write-кнопки, если процесс не elevated.
 
-## Commander 0.5.6
+## Commander 0.5.7
 
 `Files` теперь является единым двухпанельным Commander. Отдельная вкладка Preview / Archives удалена.
 
@@ -131,3 +131,18 @@ Destructive Windows Storage operations требуют запуска backend о�
 `Smart placement` выключен по умолчанию. В Direct-режиме файл попадает ровно в открытую папку второй панели. В Smart-режиме при переносе в локальный HDD root DiskShell выбирает Storage Class (`Media/Photos/Archive/...`) и сохраняет lane/target-band hint. Сами байты всё равно передаются тем же проверяемым Commander job.
 
 Реальное принудительное перемещение NTFS extents пока не включено. Будущий Smart Fragmentation Verifier должен сравнивать фактические extents после переноса с lane/band policy и только диагностировать drift, пока `DS_ALLOW_EXTENT_MOVES=0`.
+
+
+## Per-disk WRITE toggle 0.5.7
+
+Разблокировка диска больше не использует фразу вида `UNLOCK DISK ...` и не имеет 15-минутного TTL.
+
+Для непротектед physical disk на странице «Диски» используется обычный тумблер:
+
+```text
+WRITE LOCKED  ⇄  WRITE ENABLED
+```
+
+Состояние хранится только в памяти backend и действует до ручного выключения или restart backend. Разрешение жёстко связано с Number + UniqueId + Serial + Size: если identity на этом номере изменилась, write enable автоматически сбрасывается.
+
+System / Boot / Application disk остаются backend-protected и тумблером не открываются. Typed confirmation у конкретных destructive действий (Initialize / Format / Create partition) остаётся отдельным уровнем подтверждения операции.

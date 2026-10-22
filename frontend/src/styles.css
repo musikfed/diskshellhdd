@@ -643,3 +643,72 @@ textarea{
   .commander-columns,.commander-list button{grid-template-columns:minmax(150px,1fr) 90px}
   .commander-columns span:nth-child(3),.commander-list button span:nth-child(3){display:none}
 }
+
+
+/* 0.5.7 per-disk write toggle */
+.disk-write-actions{
+  align-items:center;
+  flex-wrap:wrap;
+}
+.disk-write-toggle{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  min-width:250px;
+  padding:9px 11px;
+  border:1px solid rgba(100,137,192,.26);
+  border-radius:12px;
+  background:rgba(7,16,29,.58);
+  cursor:pointer;
+  user-select:none;
+}
+.disk-write-toggle input{
+  position:absolute;
+  opacity:0;
+  pointer-events:none;
+}
+.toggle-track{
+  position:relative;
+  width:50px;
+  height:28px;
+  flex:0 0 50px;
+  border-radius:999px;
+  background:#26364f;
+  border:1px solid rgba(120,150,197,.28);
+  transition:.18s ease;
+}
+.toggle-track i{
+  position:absolute;
+  top:3px;
+  left:3px;
+  width:20px;
+  height:20px;
+  border-radius:50%;
+  background:#a7b7cf;
+  transition:.18s ease;
+}
+.disk-write-toggle.enabled{
+  border-color:rgba(255,111,125,.42);
+  background:rgba(126,35,49,.16);
+}
+.disk-write-toggle.enabled .toggle-track{
+  background:#9f3144;
+  border-color:rgba(255,146,157,.45);
+}
+.disk-write-toggle.enabled .toggle-track i{
+  left:25px;
+  background:#fff0f2;
+}
+.disk-write-toggle:has(input:disabled){
+  opacity:.55;
+  cursor:not-allowed;
+}
+.toggle-copy{
+  display:grid;
+  gap:2px;
+  text-align:left;
+}
+.toggle-copy b{font-size:12px;letter-spacing:.04em}
+.toggle-copy small{color:#8da1bf;font-size:11px}
+.disk-write-toggle.enabled .toggle-copy b{color:#ffbec5}
+.disk-write-toggle.locked .toggle-copy b{color:#aee5c9}

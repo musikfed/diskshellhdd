@@ -21,7 +21,7 @@ from backend.core.database import init_database
 from backend.storage_brain.service import ensure_defaults
 
 
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 
 
 def create_app() -> Flask:
@@ -59,6 +59,7 @@ def create_app() -> Flask:
                     "disk_writes": settings.allow_disk_writes,
                     "disk_writes_global_override": settings.allow_disk_writes,
                     "selected_disk_unlocks": True,
+                    "selected_disk_write_toggle": "manual_until_restart",
                     "extent_moves": settings.allow_extent_moves,
                 },
             }

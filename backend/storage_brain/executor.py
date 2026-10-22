@@ -12,7 +12,13 @@ from typing import Any
 
 from backend.core.database import connect
 from backend.files.write_authorization import file_writes_allowed
-from backend.storage_brain.service import capacity_policy, get_plan
+from backend.storage_brain.service import (
+    capacity_policy,
+    get_plan,
+    get_plan_for_execution,
+    get_plan_layout_summary,
+    plan_has_remaining_items,
+)
 from backend.storage_lab.service import query_file_extents
 
 
@@ -173,13 +179,11 @@ def apply_plan(
     if verify not in {"size", "sha256"}:
         raise ValueError("verify must be 'size' or 'sha256'")
 
-    plan = get_plan(plan_id)
+    plan = get_plan_for_execution(plan_id)
     if plan["status"] not in {"draft", "failed", "partial", "cancelled"}:
         raise PlanExecutionBlocked(f"Plan status is {plan['status']}")
 
-    selected_items = [
-        item for item in plan["items"] if bool(item.get("selected", 1))
-    ]
+    selected_items = plan["items"]
     if not selected_items:
         raise PlanExecutionBlocked("No placement items are selected")
 
@@ -401,11 +405,7 @@ def apply_plan(
         _set_plan_status(plan_id, "cancelled")
         raise
 
-    latest_plan = get_plan(plan_id)
-    remaining = any(
-        item["status"] != "completed"
-        for item in latest_plan["items"]
-    )
+    remaining = plan_has_remaining_items(plan_id)
     status = (
         "failed"
         if failed and completed == 0
@@ -423,7 +423,7 @@ def apply_plan(
         "same_volume_moves": moved,
         "verified_cross_volume_copies": copied,
         "cross_volume_source_policy": "kept",
-        "layout_verification": get_plan(plan_id)["layout_checks"],
+        "layout_verification": get_plan_layout_summary(plan_id),
         "note": (
             "Cross-volume originals are intentionally kept. Integrity is verified; "
             "layout verification checks NTFS-visible extents against the planned "

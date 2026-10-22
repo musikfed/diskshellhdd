@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import subprocess
 import threading
-import time
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime

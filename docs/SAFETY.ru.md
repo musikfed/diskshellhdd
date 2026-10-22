@@ -1,4 +1,4 @@
-# DiskShell 0.5.7 — безопасность и ответственность оператора
+# DiskShell 0.6.0 — безопасность и ответственность оператора
 
 DiskShell предназначен для системных администраторов, инженеров хранения и других пользователей, которые понимают последствия операций с накопителями.
 
@@ -16,7 +16,7 @@ DiskShell предназначен для системных администр�
 
 Это предупреждение не заменяет резервные копии, change-management и процедуры организации.
 
-## Модель записи в 0.5
+## Модель записи в 0.6
 
 `DS_ALLOW_DISK_WRITES=0` больше не означает, что администратор вообще не может работать с выбранным storage-диском.
 
@@ -32,6 +32,8 @@ DiskShell предназначен для системных администр�
 - System / Boot / Application disk включить на запись нельзя.
 
 `DS_ALLOW_DISK_WRITES=1` остаётся глобальным override для лабораторной/автоматизированной среды и не рекомендуется для обычной эксплуатации.
+
+File WRITE — отдельный gate. При `DS_ALLOW_FILE_WRITES=0` его можно временно включить из Commander/Storage Brain; состояние хранится только в RAM и сбрасывается при restart backend.
 
 ## Перед destructive-операцией
 
@@ -63,3 +65,21 @@ Stop является cooperative:
 SFTP/FTP connection credentials не сохраняются на диск. Remote write-команды подчиняются `DS_ALLOW_FILE_WRITES`. Local F8 использует Recycle Bin; remote F8/Delete не имеет системной корзины и требует явного подтверждения. При cross-endpoint move источник удаляется только после завершённой копии и проверки размера.
 
 Remote preview ограничен размером temporary cache, чтобы случайный F3 не скачивал многогигабайтный образ целиком.
+
+
+## Placement / layout safety 0.6.0
+
+Новые Placement Plans создаются без выбранных items. Оператор обязан отметить нужный batch. Capacity/reserve проверяется повторно непосредственно перед execution выбранного batch.
+
+Integrity verification и layout verification — разные проверки:
+
+- Size/SHA-256 отвечает за корректность скопированных байтов;
+- NTFS extent verification отвечает только за соответствие фактических logical extents целевой macro-band policy;
+- layout `drift` не означает повреждение файла;
+- `DS_ALLOW_EXTENT_MOVES=0` означает, что DiskShell не переставляет extents автоматически.
+
+DiskShell не заявляет знание скрытой физической геометрии HDD.
+
+## Elevated backend
+
+Для physical/raw/NTFS storage функций запускай backend из PowerShell/Terminal **от имени администратора** (Windows) или из root shell (Linux). При elevated/root процессе оставляй `DS_HOST=127.0.0.1` и `DS_DEBUG=0`. Полные команды — в [DEPLOYMENT.ru.md](DEPLOYMENT.ru.md).

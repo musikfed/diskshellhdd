@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
+import { DisksAdmin, RecoveryAdmin, ScanAdmin, SecurityAdmin, StorageBrainAdmin } from './AdminPages.jsx'
 
 const NAV = [
   ['dashboard', '🐙', 'Главная'],
@@ -11,6 +12,8 @@ const NAV = [
   ['content', '🐙', 'Preview / Archives'],
   ['people', '🦉', 'Photos / People'],
   ['vault', '🔐', 'Vault'],
+  ['recovery', '🧭', 'Recovery'],
+  ['security', '🛡️', 'Security'],
   ['lab', '🧪', 'Storage Lab'],
 ]
 
@@ -36,14 +39,16 @@ export default function App() {
   const context = useMemo(() => ({ scanId, setScanId, setError, health }), [scanId, health])
   const pages = {
     dashboard: <Dashboard {...context} setPage={setPage} />,
-    disks: <Disks {...context} />,
-    scan: <Scan {...context} />,
+    disks: <DisksAdmin {...context} />,
+    scan: <ScanAdmin {...context} />,
     analytics: <Analytics {...context} />,
-    storage: <StorageBrain {...context} />,
+    storage: <StorageBrainAdmin {...context} />,
     files: <Files {...context} />,
     content: <Content {...context} />,
     people: <People {...context} />,
     vault: <Vault {...context} />,
+    recovery: <RecoveryAdmin {...context} />,
+    security: <SecurityAdmin {...context} />,
     lab: <StorageLab {...context} />,
   }
   return <div className="app">
@@ -62,11 +67,11 @@ export default function App() {
 
 function Dashboard({ health, scanId, setPage }) {
   return <div className="stack">
-    <Card title="DiskShell 0.4 · диск как система хранения"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
+    <Card title="DiskShell 0.5 · Admin Storage Workbench"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
     <div className="grid three">
       <Card title="Сейчас"><Metric label="Версия" value={health?.version || '...'} /><Metric label="Активный scan" value={scanId || 'нет'} /><Metric label="Режим" value="localhost / local-first" /></Card>
       <Card title="Правильный цикл"><ol><li>Обследовать</li><li>Понять Analytics</li><li>Построить placement plan</li><li>Сохранить резерв</li><li>Применить только нужное</li></ol></Card>
-      <Card title="Защита"><p>System / Boot / Application disk блокируются независимо от UI.</p><p>Опасные области имеют отдельные environment gates.</p></Card>
+      <Card title="Защита"><p>System / Boot / Application disk блокируются независимо от UI.</p><p>System/Boot/Application диски блокируются всегда. Для остальных дисков запись разблокируется только на выбранный physical disk и ограниченное время.</p></Card>
     </div>
   </div>
 }

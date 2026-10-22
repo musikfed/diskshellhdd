@@ -16,6 +16,10 @@ from backend.services.storage.windows_disks import (
     DiskDetectionError,
     list_windows_disks,
 )
+from backend.services.storage.windows_privileges import (
+    WindowsElevationRequired,
+    is_process_elevated,
+)
 from backend.services.storage.write_authorization import (
     DiskWriteBlocked,
     annotate_disks,
@@ -38,7 +42,10 @@ def _disk_by_number(disk_number: int) -> dict:
 
 @bp.get("/capabilities")
 def get_capabilities():
-    return jsonify(capabilities())
+    payload = capabilities()
+    payload["process_elevated"] = is_process_elevated()
+    payload["destructive_requires_elevation"] = True
+    return jsonify(payload)
 
 
 @bp.get("")
@@ -135,7 +142,7 @@ def format_disk(disk_number: int):
             size_bytes=size_bytes,
             drive_letter=payload.get("drive_letter"),
         )
-    except DiskWriteBlocked as exc:
+    except (DiskWriteBlocked, WindowsElevationRequired) as exc:
         return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403
     except (ValueError, RuntimeError, DiskDetectionError) as exc:
         return jsonify({"error": "format_failed", "message": str(exc)}), 400
@@ -147,7 +154,7 @@ def get_initialize_plan(disk_number: int):
     payload = request.get_json(silent=True) or {}
     try:
         return jsonify(initialize_plan(disk_number, str(payload.get("partition_style", "GPT"))))
-    except DiskWriteBlocked as exc:
+    except (DiskWriteBlocked, WindowsElevationRequired) as exc:
         return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403
     except (ValueError, DiskDetectionError) as exc:
         return jsonify({"error": "initialize_plan_failed", "message": str(exc)}), 400
@@ -164,7 +171,7 @@ def initialize_selected_disk(disk_number: int):
                 str(payload.get("confirmation", "")),
             )
         )
-    except DiskWriteBlocked as exc:
+    except (DiskWriteBlocked, WindowsElevationRequired) as exc:
         return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403
     except (ValueError, RuntimeError, DiskDetectionError) as exc:
         return jsonify({"error": "initialize_failed", "message": str(exc)}), 400
@@ -186,7 +193,7 @@ def get_create_partition_plan(disk_number: int):
                 drive_letter=payload.get("drive_letter"),
             )
         )
-    except DiskWriteBlocked as exc:
+    except (DiskWriteBlocked, WindowsElevationRequired) as exc:
         return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403
     except (ValueError, DiskDetectionError) as exc:
         return jsonify({"error": "partition_plan_failed", "message": str(exc)}), 400
@@ -209,7 +216,7 @@ def create_selected_partition(disk_number: int):
                 drive_letter=payload.get("drive_letter"),
             )
         )
-    except DiskWriteBlocked as exc:
+    except (DiskWriteBlocked, WindowsElevationRequired) as exc:
         return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403
     except (ValueError, RuntimeError, DiskDetectionError) as exc:
         return jsonify({"error": "partition_create_failed", "message": str(exc)}), 400
@@ -227,7 +234,7 @@ def set_partition_drive_letter(disk_number: int, partition_number: int):
                 str(payload.get("confirmation", "")),
             )
         )
-    except DiskWriteBlocked as exc:
+    except (DiskWriteBlocked, WindowsElevationRequired) as exc:
         return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403
     except (ValueError, RuntimeError, DiskDetectionError) as exc:
         return jsonify({"error": "drive_letter_failed", "message": str(exc)}), 400

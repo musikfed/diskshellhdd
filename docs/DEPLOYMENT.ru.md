@@ -93,3 +93,22 @@ Photos/People: `uv sync --group dev --extra vision`, затем задать л�
 ## Progress semantics
 
 Не считать движущуюся полоску процентом, если total неизвестен. UI явно подписывает такие операции как «процент неизвестен». Реальный `%` показывается только там, где backend знает total bytes/items.
+
+## Administrator privileges для разметки
+
+Просмотр/сканирование можно выполнять обычным пользователем. Initialize GPT, partition, format и изменение drive letter требуют elevated PowerShell/Terminal.
+
+Проверка теперь встроена в DiskShell. Если backend не elevated, на странице Disks появится предупреждение, а write-кнопки будут disabled.
+
+Пример запуска:
+
+```powershell
+Start-Process powershell -Verb RunAs
+```
+
+В открывшемся elevated PowerShell:
+
+```powershell
+Set-Location "F:\diskshellhdd"
+uv run python -m backend.app
+```

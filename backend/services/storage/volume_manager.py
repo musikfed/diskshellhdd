@@ -12,6 +12,7 @@ from backend.services.storage.filesystem_profiles import (
     validate_volume_size,
 )
 from backend.services.storage.windows_disks import DiskDetectionError, list_windows_disks
+from backend.services.storage.windows_privileges import require_process_elevated
 from backend.services.storage.write_authorization import DiskWriteBlocked, require_disk_write_authorized
 
 
@@ -74,6 +75,7 @@ def initialize_plan(disk_number: int, partition_style: str = "GPT") -> dict[str,
 def initialize_disk(disk_number: int, partition_style: str, confirmation: str) -> dict[str, Any]:
     plan = initialize_plan(disk_number, partition_style)
     require_disk_write_authorized(plan["disk"])
+    require_process_elevated()
     if confirmation != plan["confirmation"]:
         raise DiskWriteBlocked("Typed confirmation does not match")
 
@@ -160,6 +162,7 @@ def create_partition(
         drive_letter=drive_letter,
     )
     require_disk_write_authorized(plan["disk"])
+    require_process_elevated()
     if confirmation != plan["confirmation"]:
         raise DiskWriteBlocked("Typed confirmation does not match")
 
@@ -232,6 +235,7 @@ def assign_drive_letter(
 ) -> dict[str, Any]:
     disk = _get_disk(disk_number)
     require_disk_write_authorized(disk)
+    require_process_elevated()
     letter = _validate_drive_letter(drive_letter)
     assert letter is not None
     expected = f"ASSIGN {letter}: DISK {disk_number} PARTITION {partition_number}"

@@ -184,6 +184,9 @@ CREATE TABLE IF NOT EXISTS access_samples (
     sampled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+"""
+
+INDEX_SCHEMA = """
 CREATE INDEX IF NOT EXISTS idx_files_scan_parent ON files(scan_id, parent_path);
 CREATE INDEX IF NOT EXISTS idx_files_scan_size ON files(scan_id, size DESC);
 CREATE INDEX IF NOT EXISTS idx_files_scan_category ON files(scan_id, category);
@@ -263,4 +266,7 @@ def init_database() -> None:
                 ("error", "TEXT"),
             ],
         )
+        # Indexes that reference migrated columns must be created only after
+        # legacy 0.2/0.3 tables have received those columns.
+        connection.executescript(INDEX_SCHEMA)
         connection.commit()

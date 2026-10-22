@@ -633,8 +633,13 @@ def start_commander_batch_job(
     if len(set(destination_keys)) != len(destination_keys):
         raise ValueError("batch contains duplicate destination paths")
 
-    total_bytes = sum(int(item["total_bytes"]) for item in prepared)
-    total_files = sum(int(item["total_files"]) for item in prepared)
+    active_prepared = [
+        item
+        for item in prepared
+        if not item["skip_before_run"] and not item["missing_source"]
+    ]
+    total_bytes = sum(int(item["total_bytes"]) for item in active_prepared)
+    total_files = sum(int(item["total_files"]) for item in active_prepared)
     first = prepared[0]
 
     job_id = uuid.uuid4().hex
@@ -796,6 +801,14 @@ def _run_batch_job(
                         job["missing"] += 1
                         job["skipped"] += 1
                         job["items"] += 1
+                        job["total_bytes"] = max(
+                            0,
+                            int(job["total_bytes"]) - int(transfer["total_bytes"]),
+                        )
+                        job["total_files"] = max(
+                            0,
+                            int(job["total_files"]) - int(transfer["total_files"]),
+                        )
                         job["warnings"].append(
                             f"Source disappeared before transfer: {source['path']}"
                         )
@@ -859,6 +872,20 @@ def _run_batch_job(
                                     job = _jobs[job_id]
                                     job["missing"] += 1
                                     job["skipped"] += 1
+                                    job["total_bytes"] = max(
+                                        0,
+                                        int(job["total_bytes"]) - int(expected_size),
+                                    )
+                                    job["total_files"] = max(
+                                        0,
+                                        int(job["total_files"]) - 1,
+                                    )
+                                    total = int(job["total_bytes"] or 0)
+                                    job["progress_percent"] = (
+                                        min(100.0, job["bytes"] * 100.0 / total)
+                                        if total
+                                        else 100.0
+                                    )
                                     job["retrying"] = False
                                     job["retry_attempt"] = 0
                                     job["resume_offset"] = 0

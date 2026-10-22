@@ -184,6 +184,24 @@ CREATE TABLE IF NOT EXISTS access_samples (
     sampled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS recovery_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS security_scan_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL,
+    engine TEXT NOT NULL,
+    status TEXT NOT NULL,
+    exit_code INTEGER,
+    threats INTEGER,
+    output TEXT,
+    started_at TEXT,
+    completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 """
 
 INDEX_SCHEMA = """

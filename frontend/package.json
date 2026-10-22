@@ -1,12 +1,13 @@
 {
   "name": "diskshell-ui",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "lint": "eslint src"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -14,5 +15,8 @@
     "react": "latest",
     "react-dom": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "eslint": "^9.38.0",
+    "globals": "^16.4.0"
+  }
 }

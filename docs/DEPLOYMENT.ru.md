@@ -1,131 +1,80 @@
-# Развёртывание DiskShell 0.4.1 на Windows 11
+# Развёртывание DiskShell 0.5 на Windows 11
 
-## Рекомендуемый способ: чистое восстановление из GitHub
+## Чистая установка / восстановление
 
-GitHub `main` является источником истины. Если локальная папка запуталась или содержит старые файлы, её можно полностью очистить и развернуть заново.
-
-Сначала останови Flask/Node и выйди из каталога:
+GitHub `main` — источник истины.
 
 ```powershell
 Set-Location F:\
-```
-
-### Если нужно сохранить историю сканов / runtime state
-
-Скопируй `data` отдельно:
-
-```powershell
-if (Test-Path F:\diskshellhdd\data) {
-    Copy-Item F:\diskshellhdd\data F:\diskshellhdd_data_backup -Recurse -Force
-}
-```
-
-Также отдельно сохрани `.env`, если в нём есть нужные локальные пути/настройки.
-
-### Полностью очистить локальный проект
-
-Удалить старую папку целиком:
-
-```powershell
-Remove-Item F:\diskshellhdd -Recurse -Force
-```
-
-Затем клонировать чистый `main`:
-
-```powershell
-git clone https://github.com/musikfed/diskshellhdd.git F:\diskshellhdd
-Set-Location F:\diskshellhdd
+Remove-Item F:\diskshellhdd -Recurse -Force -ErrorAction SilentlyContinue
+git clone "https://github.com/musikfed/diskshellhdd.git" "F:\diskshellhdd"
+Set-Location "F:\diskshellhdd"
 Copy-Item .env.example .env
-```
-
-Если нужен старый runtime state, вернуть его **до первого запуска backend**:
-
-```powershell
-if (Test-Path F:\diskshellhdd_data_backup) {
-    Copy-Item F:\diskshellhdd_data_backup\* F:\diskshellhdd\data\ -Recurse -Force
-}
-```
-
-SQLite migration выполняется автоматически. Версия 0.4.1 специально проверяет миграцию старой 0.2-схемы до создания новых индексов.
-
-## Установка Python
-
-```powershell
 uv sync --group dev
 uv run ruff check backend tests
 uv run pytest -v
-```
-
-Для Preview PDF/7Z/ISO:
-
-```powershell
-uv sync --group dev --extra preview
-```
-
-Для локального Photos/People:
-
-```powershell
-uv sync --group dev --extra vision
-```
-
-## Сборка интерфейса
-
-Из корня проекта:
-
-```powershell
 npm run ui:install
 npm run build
-```
-
-Корневой `package.json` проксирует команды в `frontend`, поэтому `cd frontend` больше не нужен.
-
-## Запуск
-
-```powershell
 uv run python -m backend.app
 ```
 
-Открыть:
+Открыть `http://127.0.0.1:8765/`.
 
-`http://127.0.0.1:8765/`
+Если нужны старые scan history / Vault runtime files, заранее сохрани `data` и верни его до первого запуска backend. SQLite migrations выполняются автоматически.
 
-## Обычное обновление без полной очистки
+## Disk write в 0.5
 
-Если локальная папка уже является нормальным clone:
-
-```powershell
-Set-Location F:\diskshellhdd
-git fetch origin
-git reset --hard origin/main
-uv sync --group dev
-uv run ruff check backend tests
-uv run pytest -v
-npm run build
-```
-
-## Safety gates
-
-Для обследования все gates оставлять выключенными:
+Оставлять рекомендуется:
 
 ```text
-DS_ALLOW_FILE_WRITES=0
-DS_ALLOW_VAULT_WRITES=0
 DS_ALLOW_DISK_WRITES=0
-DS_ALLOW_EXTENT_MOVES=0
 ```
 
-`DS_ALLOW_FILE_WRITES=1` нужен только для намеренных file operations / placement execution.
+Это отключает **global override**, но не блокирует администраторский workflow. На странице Disks:
 
-`DS_ALLOW_VAULT_WRITES=1` — только для create/import/export Vault.
+1. выбери physical disk;
+2. проверь model / serial / UniqueId / size;
+3. нажми «Разблокировать только этот диск»;
+4. введи точную фразу;
+5. runtime unlock действует 15 минут;
+6. после работы нажми «Заблокировать запись».
 
-`DS_ALLOW_DISK_WRITES=1` — только перед намеренной разметкой конкретного **не protected** диска.
+System / Boot / Application disk разблокировать нельзя.
 
-`DS_ALLOW_EXTENT_MOVES=0` пока оставлять выключенным.
+`DS_ALLOW_DISK_WRITES=1` — глобальный override для контролируемой лаборатории/automation и для обычной эксплуатации не рекомендуется.
 
-System / boot / application disk защищаются backend независимо от UI.
+## Partition / Volume Manager
 
-До появления полноценной remote-auth схемы оставлять:
+0.5 умеет:
 
-```text
-DS_HOST=127.0.0.1
-```
+- initialize RAW disk как GPT или MBR;
+- создать partition в unallocated space;
+- использовать максимальный free extent или заданный размер;
+- форматировать новый volume в NTFS/exFAT;
+- выбрать cluster 4/8/16/32/64 KiB;
+- назначить drive letter;
+- destructive whole-disk workflow Clear → Initialize GPT → one maximum partition → Format.
+
+Все write-операции требуют per-disk unlock и typed confirmation.
+
+## Stop buttons
+
+Stop доступен для Quick Index, Placement Executor и Security Scan. Отмена cooperative: уже завершённая атомарная операция не отменяется молча.
+
+## Recovery
+
+Recovery page пока read-only: topology snapshots сохраняются в SQLite, raw signature probe читает MBR/GPT и boot sectors. Это диагностическая основа для будущего recovery engine, а не обещание автоматического восстановления данных.
+
+## Security
+
+Используются локальные Microsoft Defender или ClamAV. DiskShell запускает scan без remediation. Если ни один engine не найден, UI это показывает.
+
+## Extras
+
+Preview PDF/7Z/ISO: `uv sync --group dev --extra preview`.
+
+Photos/People: `uv sync --group dev --extra vision`, затем задать локальные YuNet/SFace ONNX paths.
+
+До появления remote-auth оставлять `DS_HOST=127.0.0.1`.
+
+См. также [SAFETY.ru.md](SAFETY.ru.md).

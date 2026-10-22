@@ -444,6 +444,42 @@ def _wait_for_endpoints(
             raise CommanderCancelled("Operation cancelled by operator")
 
 
+def _run_endpoint_operation(
+    action,
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    event: threading.Event,
+    wait_status,
+    current_path: str,
+):
+    while True:
+        _wait_for_endpoints(
+            source,
+            destination,
+            event,
+            wait_status,
+            current_path,
+            "endpoint unavailable",
+        )
+        try:
+            return action()
+        except CommanderCancelled:
+            raise
+        except Exception as exc:
+            unavailable = _unavailable_endpoints(source, destination)
+            if unavailable or _looks_like_endpoint_loss(exc):
+                _wait_for_endpoints(
+                    source,
+                    destination,
+                    event,
+                    wait_status,
+                    current_path,
+                    f"{type(exc).__name__}: {exc}",
+                )
+                continue
+            raise
+
+
 def _retryable_transfer_error(exc: Exception) -> bool:
     if isinstance(
         exc,
@@ -1027,14 +1063,28 @@ def _run_batch_job(
                     continue
 
                 if transfer["replace_existing"]:
-                    _delete_endpoint(destination)
+                    _run_endpoint_operation(
+                        lambda: _delete_endpoint(destination),
+                        source,
+                        destination,
+                        event,
+                        wait_status,
+                        destination["path"],
+                    )
 
                 if (
                     operation == "move"
                     and not transfer["resume_existing"]
                     and _same_native_location(source, destination)
                 ):
-                    _rename_native(source, destination)
+                    _run_endpoint_operation(
+                        lambda: _rename_native(source, destination),
+                        source,
+                        destination,
+                        event,
+                        wait_status,
+                        source["path"],
+                    )
                     created_target = True
                     with _lock:
                         job = _jobs[job_id]
@@ -1043,12 +1093,25 @@ def _run_batch_job(
                         job["current_path"] = destination["path"]
                 else:
                     if is_dir:
-                        _make_directory(destination)
+                        _run_endpoint_operation(
+                            lambda: _make_directory(destination),
+                            source,
+                            destination,
+                            event,
+                            wait_status,
+                            destination["path"],
+                        )
                         created_target = True
                         for relative in directories:
                             if relative:
-                                _make_directory(
-                                    _join_endpoint(destination, relative)
+                                directory_endpoint = _join_endpoint(destination, relative)
+                                _run_endpoint_operation(
+                                    lambda endpoint=directory_endpoint: _make_directory(endpoint),
+                                    source,
+                                    directory_endpoint,
+                                    event,
+                                    wait_status,
+                                    directory_endpoint["path"],
                                 )
                     else:
                         created_target = True
@@ -1062,7 +1125,14 @@ def _run_batch_job(
                         )
                         with _lock:
                             _jobs[job_id]["current_path"] = source_file["path"]
-                        destination_before = _destination_info(destination_file)
+                        destination_before = _run_endpoint_operation(
+                            lambda: _destination_info(destination_file),
+                            source_file,
+                            destination_file,
+                            event,
+                            wait_status,
+                            destination_file["path"],
+                        )
                         try:
                             _copy_file(
                                 source_file,
@@ -1073,7 +1143,14 @@ def _run_batch_job(
                                 retry_status,
                                 wait_status,
                             )
-                            _verify_size(destination_file, expected_size)
+                            _run_endpoint_operation(
+                                lambda: _verify_size(destination_file, expected_size),
+                                source_file,
+                                destination_file,
+                                event,
+                                wait_status,
+                                destination_file["path"],
+                            )
                         except Exception as exc:
                             if _is_missing_error(exc):
                                 if not destination_before["exists"]:
@@ -1118,7 +1195,14 @@ def _run_batch_job(
 
                     _check_cancel(event)
                     if operation == "move":
-                        _remove_source_after_move(source)
+                        _run_endpoint_operation(
+                            lambda: _remove_source_after_move(source),
+                            source,
+                            destination,
+                            event,
+                            wait_status,
+                            source["path"],
+                        )
 
                 with _lock:
                     job = _jobs[job_id]

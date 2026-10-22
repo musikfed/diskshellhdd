@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.8
+# DiskShell HDD 0.6.9
 
 Русский · [English](README.md)
 
@@ -13,7 +13,7 @@
 - Partition/Volume Manager: initialize GPT/MBR, создать partition в unallocated space, форматировать NTFS/exFAT, выбрать cluster size, назначить drive letter.
 - Whole-disk workflow по-прежнему умеет Clear → GPT → one partition → format, но только после unlock и destructive confirmation.
 - Quick Index имеет настоящий Stop/Cancel.
-- Двухпанельные Files Copy/Move выполняются background-job с Stop; незавершённый target очищается, исходник сохраняется.
+- Двухпанельные Files Copy/Move выполняются background-job с Stop; незавершённый target сохраняется как partial для явного Continue, исходник сохраняется.
 - Placement Plan сохраняется в SQLite и автоматически восстанавливается после refresh.
 - Placement Executor запускается background-job, имеет Stop; cross-volume copy идёт chunks и удаляет partial-файл при отмене.
 - Recovery / Forensics: persistent topology snapshots и read-only raw signature probe MBR/GPT/NTFS/exFAT/FAT32/BitLocker.
@@ -262,3 +262,24 @@ Resume работает пока жив backend job. Полный restart backen
 ## Zero-byte file transfer fix 0.6.8
 
 Commander теперь корректно создаёт файлы размером 0 байт при Copy/Move между томами и в remote-transfer workflow. Раньше такой файл ошибочно считался уже полностью переданным при `offset == expected_size == 0`, хотя target ещё не существовал; последующий size verification завершался `FileNotFoundError`. Также `current_path` обновляется до начала каждого файла, включая пустые файлы.
+
+
+## Commander conflicts / resume / missing sources 0.6.9
+
+Copy/Move больше не использует правило «destination уже существует → весь job падает». Перед записью Commander возвращает структурированный конфликт и UI требует явное решение:
+
+```text
+Continue partial  — продолжить существующий неполный target по фактическому размеру
+Replace all       — удалить конфликтующий target и записать заново
+Keep both         — сохранить рядом как name (1), name (2), ...
+Skip conflicts    — не трогать конфликтующие элементы и продолжить batch
+Cancel            — ничего не писать
+```
+
+Автоматической перезаписи нет. Если source и destination — один и тот же объект, Replace/Continue блокируются; безопасным вариантом остаётся Keep both или Cancel.
+
+При Stop или после исчерпания reconnect attempts незавершённый target **не удаляется**. Job помечает `partial_retained`, а UI показывает кнопку **Continue partial**. При следующем запуске того же Copy/Move существующий target определяется как resumable, если его размер не больше source. Для каталога Continue работает как merge/resume по файлам и размерам.
+
+Если выбранный source исчез между отображением списка и фактическим стартом, batch больше не падает целиком: элемент получает counters `missing/skipped`, warning и обработка остальных элементов продолжается. То же применяется к отдельному файлу, который исчез уже во время обхода каталога.
+
+Для Move source удаляется только после завершения и size verification соответствующего transfer. Replace повторно проверяет наличие source **до удаления destination**, чтобы stale selection не уничтожил существующий target.

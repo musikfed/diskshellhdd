@@ -117,6 +117,8 @@ CREATE TABLE IF NOT EXISTS placement_plan_items (
     size INTEGER NOT NULL,
     reason TEXT NOT NULL,
     action TEXT NOT NULL DEFAULT 'move',
+    layout_lane TEXT,
+    target_band_bytes INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
     verification TEXT,
     error TEXT,
@@ -202,6 +204,23 @@ CREATE TABLE IF NOT EXISTS security_scan_results (
     completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS diagnostic_runs (
+    id TEXT PRIMARY KEY,
+    disk_number INTEGER NOT NULL,
+    disk_identity TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    rating TEXT,
+    total_bytes INTEGER NOT NULL DEFAULT 0,
+    sampled_bytes INTEGER NOT NULL DEFAULT 0,
+    read_errors INTEGER NOT NULL DEFAULT 0,
+    slow_cells INTEGER NOT NULL DEFAULT 0,
+    cells_json TEXT NOT NULL DEFAULT '[]',
+    summary_json TEXT NOT NULL DEFAULT '{}'
+);
+
 """
 
 INDEX_SCHEMA = """
@@ -217,6 +236,8 @@ CREATE INDEX IF NOT EXISTS idx_photos_scan ON photos(scan_id);
 CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_runs_disk
+ON diagnostic_runs(disk_number, started_at DESC);
 """
 
 
@@ -282,6 +303,8 @@ def init_database() -> None:
                 ("status", "TEXT NOT NULL DEFAULT 'pending'"),
                 ("verification", "TEXT"),
                 ("error", "TEXT"),
+                ("layout_lane", "TEXT"),
+                ("target_band_bytes", "INTEGER"),
             ],
         )
         # Indexes that reference migrated columns must be created only after

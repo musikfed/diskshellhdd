@@ -9,6 +9,7 @@ from pathlib import Path
 
 from backend.config import settings
 from backend.core.database import connect, init_database
+from backend.storage_lab.service import CLASS_LANES, LANE_POLICIES
 
 
 DEFAULT_CLASSES = [
@@ -94,6 +95,25 @@ def list_storage_classes() -> list[dict]:
         ).fetchall()
     return [dict(row) for row in rows]
 
+
+
+def _normalized_path(value: Path | str) -> str:
+    return os.path.normcase(os.path.abspath(os.path.expanduser(str(value))))
+
+
+def _is_within(path: Path | str, root: Path | str) -> bool:
+    candidate = _normalized_path(path)
+    parent = _normalized_path(root)
+    try:
+        return os.path.commonpath([candidate, parent]) == parent
+    except ValueError:
+        return False
+
+
+def _layout_hint(category: str) -> tuple[str, int]:
+    lane = CLASS_LANES.get(category, "C-interactive")
+    policy = LANE_POLICIES[lane]
+    return lane, int(policy["target_band"])
 
 def _existing_anchor(path: Path) -> Path:
     candidate = path.expanduser().resolve()
@@ -197,10 +217,19 @@ def _unique_target(folder: Path, source: Path, reserved: set[str]) -> Path:
     return candidate
 
 
-def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
+def create_placement_plan(
+    scan_id: int,
+    storage_root: Path,
+    source_roots: list[Path] | None = None,
+    exclude_roots: list[Path] | None = None,
+) -> dict:
     ensure_defaults()
     storage_root = storage_root.expanduser().resolve()
     policy = capacity_policy(storage_root)
+
+    includes = [Path(item).expanduser() for item in (source_roots or [])]
+    excludes = [Path(item).expanduser() for item in (exclude_roots or [])]
+    excludes.extend([settings.project_root, settings.data_dir, storage_root])
 
     with connect() as connection:
         session = connection.execute(
@@ -230,10 +259,22 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
         reserved_targets: set[str] = set()
         additional_target_bytes = 0
 
+        selected_files = 0
+        skipped_outside_scope = 0
+        skipped_excluded = 0
+
         for file_row in files:
+            source = Path(file_row["path"])
+            if includes and not any(_is_within(source, root) for root in includes):
+                skipped_outside_scope += 1
+                continue
+            if any(_is_within(source, root) for root in excludes):
+                skipped_excluded += 1
+                continue
+
+            selected_files += 1
             target_class, reason = choose_storage_class(file_row, rules)
             class_row = classes.get(target_class, classes["other"])
-            source = Path(file_row["path"])
             target_class_root = storage_root / class_row["relative_root"]
 
             try:
@@ -253,6 +294,7 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
             )
             same_volume = _same_volume(source, storage_root)
             action = "move_same_volume" if same_volume else "copy_cross_volume"
+            layout_lane, target_band_bytes = _layout_hint(str(file_row["category"]))
             if not same_volume:
                 additional_target_bytes += int(file_row["size"])
 
@@ -264,6 +306,8 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
                     int(file_row["size"]),
                     reason,
                     action,
+                    layout_lane,
+                    target_band_bytes,
                 )
             )
             connection.execute(
@@ -302,14 +346,36 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
         connection.executemany(
             """
             INSERT INTO placement_plan_items
-                (plan_id, source_path, target_path, target_class, size, reason, action)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (
+                    plan_id, source_path, target_path, target_class, size,
+                    reason, action, layout_lane, target_band_bytes
+                )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [(plan_id, *item) for item in items],
         )
         connection.commit()
 
-    return get_plan(plan_id)
+    result = get_plan(plan_id)
+    result["scope"] = {
+        "source_roots": [str(path) for path in includes],
+        "exclude_roots": [str(path) for path in excludes],
+        "selected_files": selected_files,
+        "skipped_outside_scope": skipped_outside_scope,
+        "skipped_excluded": skipped_excluded,
+    }
+    result["same_volume_items"] = sum(
+        1 for item in result["items"] if item["action"] == "move_same_volume"
+    )
+    result["cross_volume_items"] = sum(
+        1 for item in result["items"] if item["action"] == "copy_cross_volume"
+    )
+    result["additional_target_bytes"] = sum(
+        int(item["size"])
+        for item in result["items"]
+        if item["action"] == "copy_cross_volume"
+    )
+    return result
 
 
 def get_plan(plan_id: int) -> dict:
@@ -330,6 +396,17 @@ def get_plan(plan_id: int) -> dict:
     result = dict(plan)
     result["warnings"] = json.loads(result["warnings"] or "[]")
     result["items"] = [dict(row) for row in items]
+    result["same_volume_items"] = sum(
+        1 for item in result["items"] if item["action"] == "move_same_volume"
+    )
+    result["cross_volume_items"] = sum(
+        1 for item in result["items"] if item["action"] == "copy_cross_volume"
+    )
+    result["additional_target_bytes"] = sum(
+        int(item["size"])
+        for item in result["items"]
+        if item["action"] == "copy_cross_volume"
+    )
     result["confirmation"] = f"APPLY PLAN {plan_id}"
     return result
 

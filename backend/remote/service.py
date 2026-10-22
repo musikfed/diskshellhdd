@@ -3,6 +3,7 @@ from __future__ import annotations
 import ftplib
 import io
 import posixpath
+import socket
 import stat as statmod
 import threading
 import uuid
@@ -25,6 +26,12 @@ class RemoteNotFound(FileNotFoundError):
 
 _profiles_lock = threading.Lock()
 _profiles: dict[str, dict[str, Any]] = {}
+
+SSH_KEEPALIVE_SECONDS = 30
+SSH_IO_TIMEOUT_SECONDS = 120
+TCP_KEEPIDLE_SECONDS = 60
+TCP_KEEPINTERVAL_SECONDS = 15
+TCP_KEEPCOUNT = 4
 
 
 def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
@@ -189,10 +196,10 @@ class RemoteSession(AbstractContextManager):
     def rename(self, source: str, destination: str) -> None:
         raise NotImplementedError
 
-    def open_read(self, path: str) -> BinaryIO:
+    def open_read(self, path: str, offset: int = 0) -> BinaryIO:
         raise NotImplementedError
 
-    def open_write(self, path: str) -> BinaryIO:
+    def open_write(self, path: str, offset: int = 0) -> BinaryIO:
         raise NotImplementedError
 
     def walk(self, path: str) -> tuple[list[str], list[tuple[str, int]]]:
@@ -272,8 +279,41 @@ class SFTPSession(RemoteSession):
 
         try:
             client.connect(**kwargs)
+            transport = client.get_transport()
+            if transport is None or not transport.is_active():
+                raise RemoteConnectionError("SSH transport did not become active")
+
+            transport.set_keepalive(SSH_KEEPALIVE_SECONDS)
+            raw_socket = getattr(transport, "sock", None)
+            if raw_socket is not None:
+                try:
+                    raw_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                    if hasattr(socket, "TCP_KEEPIDLE"):
+                        raw_socket.setsockopt(
+                            socket.IPPROTO_TCP,
+                            socket.TCP_KEEPIDLE,
+                            TCP_KEEPIDLE_SECONDS,
+                        )
+                    if hasattr(socket, "TCP_KEEPINTVL"):
+                        raw_socket.setsockopt(
+                            socket.IPPROTO_TCP,
+                            socket.TCP_KEEPINTVL,
+                            TCP_KEEPINTERVAL_SECONDS,
+                        )
+                    if hasattr(socket, "TCP_KEEPCNT"):
+                        raw_socket.setsockopt(
+                            socket.IPPROTO_TCP,
+                            socket.TCP_KEEPCNT,
+                            TCP_KEEPCOUNT,
+                        )
+                except OSError:
+                    # SSH keepalive still protects the session even if an OS
+                    # does not expose/tolerate every TCP keepalive option.
+                    pass
+
             self.client = client
             self.sftp = client.open_sftp()
+            self.sftp.get_channel().settimeout(SSH_IO_TIMEOUT_SECONDS)
             return self
         except Exception as exc:  # noqa: BLE001
             client.close()
@@ -343,13 +383,20 @@ class SFTPSession(RemoteSession):
         assert self.sftp is not None
         self.sftp.rename(_normalize_remote_path(source), _normalize_remote_path(destination))
 
-    def open_read(self, path: str) -> BinaryIO:
+    def open_read(self, path: str, offset: int = 0) -> BinaryIO:
         assert self.sftp is not None
-        return self.sftp.open(_normalize_remote_path(path), "rb")
+        stream = self.sftp.open(_normalize_remote_path(path), "rb")
+        if offset:
+            stream.seek(int(offset))
+        return stream
 
-    def open_write(self, path: str) -> BinaryIO:
+    def open_write(self, path: str, offset: int = 0) -> BinaryIO:
         assert self.sftp is not None
-        return self.sftp.open(_normalize_remote_path(path), "wb")
+        normalized = _normalize_remote_path(path)
+        stream = self.sftp.open(normalized, "r+b" if offset else "wb")
+        if offset:
+            stream.seek(int(offset))
+        return stream
 
 
 class _FTPStream(io.BufferedIOBase):
@@ -488,15 +535,21 @@ class FTPSession(RemoteSession):
             _normalize_remote_path(destination),
         )
 
-    def open_read(self, path: str) -> BinaryIO:
+    def open_read(self, path: str, offset: int = 0) -> BinaryIO:
         assert self.ftp is not None
-        socket = self.ftp.transfercmd(f"RETR {_normalize_remote_path(path)}")
-        return _FTPStream(self.ftp, socket, "rb")
+        data_socket = self.ftp.transfercmd(
+            f"RETR {_normalize_remote_path(path)}",
+            rest=int(offset) if offset else None,
+        )
+        return _FTPStream(self.ftp, data_socket, "rb")
 
-    def open_write(self, path: str) -> BinaryIO:
+    def open_write(self, path: str, offset: int = 0) -> BinaryIO:
         assert self.ftp is not None
-        socket = self.ftp.transfercmd(f"STOR {_normalize_remote_path(path)}")
-        return _FTPStream(self.ftp, socket, "wb")
+        data_socket = self.ftp.transfercmd(
+            f"STOR {_normalize_remote_path(path)}",
+            rest=int(offset) if offset else None,
+        )
+        return _FTPStream(self.ftp, data_socket, "wb")
 
 
 def open_session_from_profile(profile: dict[str, Any]) -> RemoteSession:

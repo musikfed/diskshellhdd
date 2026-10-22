@@ -71,3 +71,11 @@ Band size is derived from the lane policy plus measured sequential throughput an
 Large files are split into approximately equal extents with no tiny tail; small files stay whole; multiple small files of the same class can fill one macro-band.
 
 The simulator reports tiny/oversized split extents, max extents per file, and an overall layout quality score. Real NTFS extent relocation remains disabled and experimental.
+
+## RAW disk workflow 0.5.4
+
+RAW-disk setup is now explicitly staged instead of using the combined shortcut as the primary path: unlock the selected disk, initialize GPT, refresh topology, then create/format a volume from unallocated space.
+
+The UI shows a persistent stepper and a fixed operation-status panel. Windows does not expose a trustworthy percentage for Initialize-Disk/New-Partition/Format-Volume, so DiskShell reports the active stage instead of inventing progress.
+
+Destructive Windows Storage operations require an elevated backend process. DiskShell exposes the elevation state and disables write controls when the backend is not running as Administrator.

@@ -290,3 +290,69 @@ def test_commander_remote_upload_reconnects_and_resumes(tmp_path, monkeypatch):
     assert sum(progress) == len(payload)
     assert offsets == [0, 4]
     assert len(retries) == 1
+
+
+
+def test_commander_cross_volume_move_preserves_zero_byte_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    monkeypatch.setattr(commander_jobs, "_same_native_location", lambda _src, _dst: False)
+
+    source = tmp_path / "source-tree"
+    source.mkdir()
+    (source / ".python-version").write_text("3.12\n", encoding="utf-8")
+    (source / "README.md").write_bytes(b"")
+    nested = source / "nested"
+    nested.mkdir()
+    (nested / "empty.txt").write_bytes(b"")
+    (nested / "data.bin").write_bytes(b"abc")
+
+    destination = tmp_path / "destination-tree"
+    job = commander_jobs.start_commander_job(
+        "move",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+    )
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = commander_jobs.get_commander_job(job["id"])
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            break
+        time.sleep(0.02)
+
+    assert job["status"] == "completed", job["error"]
+    assert not source.exists()
+    assert (destination / ".python-version").read_text(encoding="utf-8") == "3.12\n"
+    assert (destination / "README.md").exists()
+    assert (destination / "README.md").stat().st_size == 0
+    assert (destination / "nested" / "empty.txt").exists()
+    assert (destination / "nested" / "empty.txt").stat().st_size == 0
+    assert (destination / "nested" / "data.bin").read_bytes() == b"abc"
+
+
+def test_zero_byte_copy_updates_current_path_before_verify(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    monkeypatch.setattr(commander_jobs, "_same_native_location", lambda _src, _dst: False)
+
+    source = tmp_path / "source-tree"
+    source.mkdir()
+    (source / "a.txt").write_bytes(b"x")
+    (source / "z-empty.txt").write_bytes(b"")
+    destination = tmp_path / "destination-tree"
+
+    job = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+    )
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = commander_jobs.get_commander_job(job["id"])
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            break
+        time.sleep(0.02)
+
+    assert job["status"] == "completed", job["error"]
+    assert job["current_path"].endswith("z-empty.txt")
+    assert (destination / "z-empty.txt").exists()

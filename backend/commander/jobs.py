@@ -21,7 +21,6 @@ from backend.remote.service import (
     RemoteNotFound,
     open_session,
     profile_identity,
-    remote_endpoint_state,
 )
 
 
@@ -342,19 +341,47 @@ def _endpoint_state(endpoint: dict[str, Any]) -> dict[str, Any]:
     if endpoint["kind"] == "local":
         return local_endpoint_state(endpoint)
 
-    state = remote_endpoint_state(endpoint["connection_id"])
     expected = endpoint.get("remote_identity")
-    current = state.get("identity")
-    if state.get("available") and expected and current and expected != current:
+    current = None
+    if expected:
+        try:
+            current = profile_identity(endpoint["connection_id"])
+        except KeyError:
+            return {
+                "available": False,
+                "reason": "remote_profile_missing",
+                "expected_identity": expected,
+                "current_identity": None,
+            }
+        if current != expected:
+            return {
+                "available": False,
+                "reason": "remote_identity_mismatch",
+                "expected_identity": expected,
+                "current_identity": current,
+            }
+
+    try:
+        with open_session(endpoint["connection_id"]):
+            pass
+    except KeyError:
         return {
-            **state,
             "available": False,
-            "reason": "remote_identity_mismatch",
+            "reason": "remote_profile_missing",
+            "expected_identity": expected,
+            "current_identity": current,
+        }
+    except RemoteConnectionError as exc:
+        return {
+            "available": False,
+            "reason": "remote_offline",
+            "message": str(exc),
             "expected_identity": expected,
             "current_identity": current,
         }
     return {
-        **state,
+        "available": True,
+        "reason": None,
         "expected_identity": expected,
         "current_identity": current,
     }

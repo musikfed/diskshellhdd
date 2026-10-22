@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
+from backend.config import settings
 from backend.commander.jobs import (
     cancel_commander_job,
     get_commander_job,
@@ -22,6 +23,11 @@ from backend.remote.service import (
 
 
 bp = Blueprint("commander", __name__, url_prefix="/api/commander")
+
+
+def _require_file_writes() -> None:
+    if not settings.allow_file_writes:
+        raise FileWriteBlocked("DS_ALLOW_FILE_WRITES is disabled")
 
 
 @bp.get("/connections")
@@ -61,6 +67,8 @@ def connect():
 def disconnect(profile_id: str):
     try:
         return jsonify(delete_profile(profile_id))
+    except FileWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
     except KeyError:
         return jsonify({"error": "connection_not_found"}), 404
 
@@ -73,6 +81,8 @@ def remote_browse():
         return jsonify({"error": "missing_connection_id"}), 400
     try:
         return jsonify(list_directory(profile_id, path))
+    except FileWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
     except KeyError:
         return jsonify({"error": "connection_not_found"}), 404
     except (RemoteConnectionError, OSError, ValueError) as exc:
@@ -83,7 +93,10 @@ def remote_browse():
 def remote_mkdir():
     payload = request.get_json(silent=True) or {}
     try:
+        _require_file_writes()
         return jsonify(make_directory(str(payload["connection_id"]), str(payload["path"]))), 201
+    except FileWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
     except KeyError:
         return jsonify({"error": "connection_not_found"}), 404
     except (RemoteConnectionError, OSError, ValueError) as exc:
@@ -94,6 +107,7 @@ def remote_mkdir():
 def remote_rename():
     payload = request.get_json(silent=True) or {}
     try:
+        _require_file_writes()
         return jsonify(
             rename_item(
                 str(payload["connection_id"]),
@@ -101,6 +115,8 @@ def remote_rename():
                 str(payload["destination"]),
             )
         )
+    except FileWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
     except KeyError:
         return jsonify({"error": "connection_not_found"}), 404
     except (RemoteConnectionError, OSError, ValueError) as exc:
@@ -111,6 +127,7 @@ def remote_rename():
 def remote_delete():
     payload = request.get_json(silent=True) or {}
     try:
+        _require_file_writes()
         return jsonify(
             delete_item(
                 str(payload["connection_id"]),
@@ -118,6 +135,8 @@ def remote_delete():
                 recursive=bool(payload.get("recursive", False)),
             )
         )
+    except FileWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
     except KeyError:
         return jsonify({"error": "connection_not_found"}), 404
     except (RemoteConnectionError, OSError, ValueError) as exc:
@@ -179,6 +198,8 @@ def remote_cache():
                 max_bytes=int(payload.get("max_bytes") or 256 * 1024**2),
             )
         )
+    except FileWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
     except KeyError:
         return jsonify({"error": "connection_not_found"}), 404
     except (RemoteConnectionError, OSError, ValueError, IsADirectoryError) as exc:

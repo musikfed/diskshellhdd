@@ -5,7 +5,13 @@ import threading
 import time
 from types import SimpleNamespace
 import backend.commander.jobs as commander_jobs
-from backend.remote.service import _normalize_remote_path, _public_profile
+from backend.remote.service import (
+    RemoteConnectionError,
+    RemoteNotFound,
+    SFTPSession,
+    _normalize_remote_path,
+    _public_profile,
+)
 from backend.storage_brain.service import suggest_managed_destination
 
 
@@ -543,3 +549,32 @@ def test_commander_cancel_retains_partial_target_for_resume(tmp_path, monkeypatc
     assert job["partial_retained"] is True
     assert job["partial_path"] == str(destination)
     assert destination.read_bytes() == b"abcd"
+
+
+
+class _StatFailureSFTP:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def stat(self, _path):
+        raise self.exc
+
+
+def test_sftp_stat_only_treats_enoent_as_missing():
+    missing = SFTPSession({})
+    missing.sftp = _StatFailureSFTP(OSError(2, "No such file"))
+    try:
+        missing.stat("/gone.txt")
+    except RemoteNotFound:
+        pass
+    else:
+        raise AssertionError("ENOENT must map to RemoteNotFound")
+
+    broken = SFTPSession({})
+    broken.sftp = _StatFailureSFTP(OSError(5, "I/O transport error"))
+    try:
+        broken.stat("/maybe-there.txt")
+    except RemoteConnectionError:
+        pass
+    else:
+        raise AssertionError("transport errors must not be reported as missing")

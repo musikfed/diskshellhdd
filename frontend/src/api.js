@@ -7,7 +7,12 @@ export async function api(path, options = {}) {
     ...options,
   })
   const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.message || payload.error || `HTTP ${response.status}`)
+  if (!response.ok) {
+    const error = new Error(payload.message || payload.error || `HTTP ${response.status}`)
+    error.status = response.status
+    error.payload = payload
+    throw error
+  }
   return payload
 }
 

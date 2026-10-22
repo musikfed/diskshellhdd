@@ -5,7 +5,13 @@ import threading
 import time
 from types import SimpleNamespace
 import backend.commander.jobs as commander_jobs
-from backend.remote.service import _normalize_remote_path, _public_profile
+from backend.remote.service import (
+    RemoteConnectionError,
+    RemoteNotFound,
+    SFTPSession,
+    _normalize_remote_path,
+    _public_profile,
+)
 from backend.storage_brain.service import suggest_managed_destination
 
 
@@ -356,3 +362,219 @@ def test_zero_byte_copy_updates_current_path_before_verify(tmp_path, monkeypatch
     assert job["status"] == "completed", job["error"]
     assert job["current_path"].endswith("z-empty.txt")
     assert (destination / "z-empty.txt").exists()
+
+
+
+def _wait_commander_job(job_id, timeout=5):
+    deadline = time.monotonic() + timeout
+    job = commander_jobs.get_commander_job(job_id)
+    while time.monotonic() < deadline:
+        job = commander_jobs.get_commander_job(job_id)
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            return job
+        time.sleep(0.02)
+    return job
+
+
+def test_commander_missing_selected_source_is_skipped_not_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    missing = tmp_path / "already-gone.txt"
+    destination = tmp_path / "copied.txt"
+
+    job = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(missing)},
+        {"kind": "local", "path": str(destination)},
+    )
+    job = _wait_commander_job(job["id"])
+
+    assert job["status"] == "completed"
+    assert job["missing"] == 1
+    assert job["skipped"] == 1
+    assert job["items"] == 1
+    assert not destination.exists()
+    assert any("Source missing" in item for item in job["warnings"])
+
+
+def test_commander_conflict_requires_explicit_policy(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    source.write_bytes(b"abcdefgh")
+    destination.write_bytes(b"abcd")
+
+    try:
+        commander_jobs.start_commander_job(
+            "copy",
+            {"kind": "local", "path": str(source)},
+            {"kind": "local", "path": str(destination)},
+        )
+    except commander_jobs.CommanderConflict as exc:
+        assert len(exc.conflicts) == 1
+        assert exc.conflicts[0]["can_resume"] is True
+        assert exc.conflicts[0]["destination_size"] == 4
+    else:
+        raise AssertionError("Expected CommanderConflict")
+
+
+def test_commander_resume_existing_partial_local_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    monkeypatch.setattr(commander_jobs, "_same_native_location", lambda _src, _dst: False)
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    source.write_bytes(b"abcdefghijkl")
+    destination.write_bytes(b"abcd")
+
+    job = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+        conflict_policy="resume",
+    )
+    job = _wait_commander_job(job["id"])
+
+    assert job["status"] == "completed", job["error"]
+    assert destination.read_bytes() == source.read_bytes()
+    assert job["bytes"] == len(source.read_bytes())
+
+
+def test_commander_keep_both_adds_incremented_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    monkeypatch.setattr(commander_jobs, "_same_native_location", lambda _src, _dst: False)
+    source = tmp_path / "report.txt"
+    destination = tmp_path / "target" / "report.txt"
+    destination.parent.mkdir()
+    source.write_text("new", encoding="utf-8")
+    destination.write_text("old", encoding="utf-8")
+    (destination.parent / "report (1).txt").write_text("older", encoding="utf-8")
+
+    job = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+        conflict_policy="keep_both",
+    )
+    job = _wait_commander_job(job["id"])
+
+    assert job["status"] == "completed", job["error"]
+    assert destination.read_text(encoding="utf-8") == "old"
+    assert (destination.parent / "report (1).txt").read_text(encoding="utf-8") == "older"
+    assert (destination.parent / "report (2).txt").read_text(encoding="utf-8") == "new"
+    assert job["transfers"][0]["conflict_resolution"] == "keep_both"
+    assert job["transfers"][0]["destination"]["path"].endswith("report (2).txt")
+
+
+def test_commander_replace_overwrites_only_after_source_recheck(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    monkeypatch.setattr(commander_jobs, "_same_native_location", lambda _src, _dst: False)
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    source.write_bytes(b"new-content")
+    destination.write_bytes(b"old-content")
+
+    job = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+        conflict_policy="replace",
+    )
+    job = _wait_commander_job(job["id"])
+
+    assert job["status"] == "completed", job["error"]
+    assert destination.read_bytes() == b"new-content"
+
+
+def test_commander_replace_does_not_delete_target_if_source_disappears(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    source.write_bytes(b"new-content")
+    destination.write_bytes(b"old-content")
+
+    original_source_exists = commander_jobs._source_exists
+    calls = {"count": 0}
+
+    def disappears_after_prepare(endpoint):
+        if endpoint["path"] == str(source):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                source.unlink()
+                return False
+        return original_source_exists(endpoint)
+
+    monkeypatch.setattr(commander_jobs, "_source_exists", disappears_after_prepare)
+
+    job = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+        conflict_policy="replace",
+    )
+    job = _wait_commander_job(job["id"])
+
+    assert job["status"] == "completed"
+    assert job["missing"] == 1
+    assert destination.read_bytes() == b"old-content"
+
+
+def test_commander_cancel_retains_partial_target_for_resume(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    monkeypatch.setattr(commander_jobs, "_same_native_location", lambda _src, _dst: False)
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    source.write_bytes(b"abcdefghijkl")
+
+    original_copy_file = commander_jobs._copy_file
+
+    def interrupted_copy(source_ep, destination_ep, expected_size, event, progress, retry_status):
+        target = commander_jobs._local_path(destination_ep)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"abcd")
+        progress(4, source_ep["path"])
+        raise commander_jobs.CommanderCancelled("simulated Stop")
+
+    monkeypatch.setattr(commander_jobs, "_copy_file", interrupted_copy)
+    job = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+    )
+    job = _wait_commander_job(job["id"])
+    monkeypatch.setattr(commander_jobs, "_copy_file", original_copy_file)
+
+    assert job["status"] == "cancelled"
+    assert job["partial_retained"] is True
+    assert job["partial_path"] == str(destination)
+    assert destination.read_bytes() == b"abcd"
+
+
+
+class _StatFailureSFTP:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def stat(self, _path):
+        raise self.exc
+
+
+def test_sftp_stat_only_treats_enoent_as_missing():
+    missing = SFTPSession({})
+    missing.sftp = _StatFailureSFTP(OSError(2, "No such file"))
+    try:
+        missing.stat("/gone.txt")
+    except RemoteNotFound:
+        pass
+    else:
+        raise AssertionError("ENOENT must map to RemoteNotFound")
+
+    broken = SFTPSession({})
+    broken.sftp = _StatFailureSFTP(OSError(5, "I/O transport error"))
+    try:
+        broken.stat("/maybe-there.txt")
+    except RemoteConnectionError:
+        pass
+    else:
+        raise AssertionError("transport errors must not be reported as missing")

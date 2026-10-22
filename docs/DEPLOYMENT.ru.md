@@ -1,6 +1,6 @@
-# Развёртывание DiskShell 0.6.7
+# Развёртывание DiskShell 0.6.9
 
-DiskShell 0.6.7 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
+DiskShell 0.6.9 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
 
 ## Важно про права администратора
 
@@ -282,3 +282,21 @@ Resume:            from target size
 Если все reconnect attempts исчерпаны, job становится failed и DiskShell пытается удалить текущий incomplete target. Уже полностью завершённые и проверенные items batch не откатываются.
 
 Важно: credentials/profile живут только в RAM backend. Поэтому reconnect работает в рамках текущего backend-процесса; restart backend не является persistent resume.
+
+
+## Commander: обрывы, partial и конфликты имён
+
+Начиная с 0.6.9, обычный workflow крупного Copy/Move:
+
+1. Commander проверяет source и destination.
+2. Если destination свободен — запускает job.
+3. Если имя занято — запись не начинается до выбора **Continue / Replace / Keep both / Skip / Cancel**.
+4. `Keep both` подбирает первый свободный индекс: `file (1).ext`, `file (2).ext`; для каталога — `Folder (1)`.
+5. При кратком SSH/SFTP обрыве внутри job действуют keepalive + reconnect.
+6. Если reconnect attempts закончились или оператор нажал Stop, partial target сохраняется.
+7. Кнопка **Continue partial** запускает новый job с `conflict_policy=resume`, и запись продолжается с фактического размера target.
+8. Исчезнувшие source-файлы считаются `missing/skipped` и не останавливают остальные элементы batch.
+
+`Replace` — destructive только для destination и выполняется после повторной проверки существования source. `Move` удаляет source только после успешного копирования и size verification.
+
+После restart backend локальный partial остаётся на диске и может быть продолжен новым Copy/Move. Для remote продолжения после restart нужно заново подключить SFTP/FTP profile, потому что credentials по-прежнему хранятся только в RAM.

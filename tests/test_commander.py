@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
-
 import backend.commander.jobs as commander_jobs
 from backend.remote.service import _normalize_remote_path, _public_profile
 from backend.storage_brain.service import suggest_managed_destination
@@ -37,11 +35,7 @@ def test_remote_paths_are_normalized_to_posix_absolute():
 
 
 def test_commander_local_copy_job_reports_progress(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        commander_jobs,
-        "settings",
-        SimpleNamespace(allow_file_writes=True),
-    )
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
     source = tmp_path / "source.bin"
     destination = tmp_path / "destination.bin"
     source.write_bytes(b"x" * (2 * 1024 * 1024))

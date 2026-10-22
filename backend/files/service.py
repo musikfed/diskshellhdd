@@ -9,6 +9,7 @@ from pathlib import Path
 from send2trash import send2trash
 
 from backend.core.database import connect
+from backend.files.endpoint_availability import local_volume_probe
 from backend.files.write_authorization import file_writes_allowed
 
 
@@ -203,6 +204,7 @@ def list_roots() -> dict:
             usage = shutil.disk_usage(mountpoint)
         except OSError:
             usage = None
+        probe = local_volume_probe(mountpoint)
         roots.append(
             {
                 "path": mountpoint,
@@ -211,6 +213,8 @@ def list_roots() -> dict:
                 "options": str(partition.opts or ""),
                 "total": int(usage.total) if usage else None,
                 "free": int(usage.free) if usage else None,
+                "available": bool(probe["available"] and usage is not None),
+                "volume_identity": probe.get("identity"),
             }
         )
     roots.sort(key=lambda row: row["path"].casefold())

@@ -10,14 +10,25 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from backend.files.endpoint_availability import (
+    bind_local_volume,
+    local_endpoint_state,
+)
 from backend.files.service import FileWriteBlocked
 from backend.files.write_authorization import file_writes_allowed
-from backend.remote.service import RemoteConnectionError, RemoteNotFound, open_session
+from backend.remote.service import (
+    RemoteConnectionError,
+    RemoteNotFound,
+    open_session,
+    profile_identity,
+)
 
 
 CHUNK_SIZE = 8 * 1024 * 1024
 TRANSFER_RETRY_LIMIT = 4
 TRANSFER_RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
+ENDPOINT_RECHECK_SECONDS = 3.0
+WINDOWS_ENDPOINT_LOSS_ERRORS = {3, 21, 53, 64, 1117, 1167}
 
 
 class CommanderCancelled(RuntimeError):
@@ -75,7 +86,9 @@ def _validate_endpoint(endpoint: dict[str, Any]) -> dict[str, Any]:
         if not connection_id:
             raise ValueError("remote endpoint requires connection_id")
         result["connection_id"] = connection_id
-    return result
+        result["remote_identity"] = profile_identity(connection_id)
+        return result
+    return bind_local_volume(result)
 
 
 def _same_native_location(source: dict[str, Any], destination: dict[str, Any]) -> bool:
@@ -324,6 +337,171 @@ def _ensure_zero_length_destination(endpoint: dict[str, Any]) -> None:
             raise OSError(f"Expected empty target, got {entry.size} bytes")
 
 
+def _endpoint_state(
+    endpoint: dict[str, Any],
+    connect_remote: bool = True,
+) -> dict[str, Any]:
+    if endpoint["kind"] == "local":
+        return local_endpoint_state(endpoint)
+
+    expected = endpoint.get("remote_identity")
+    current = None
+    if expected:
+        try:
+            current = profile_identity(endpoint["connection_id"])
+        except KeyError:
+            return {
+                "available": False,
+                "reason": "remote_profile_missing",
+                "expected_identity": expected,
+                "current_identity": None,
+            }
+        if current != expected:
+            return {
+                "available": False,
+                "reason": "remote_identity_mismatch",
+                "expected_identity": expected,
+                "current_identity": current,
+            }
+
+    if not connect_remote:
+        return {
+            "available": True,
+            "reason": None,
+            "expected_identity": expected,
+            "current_identity": current,
+        }
+
+    try:
+        with open_session(endpoint["connection_id"]):
+            pass
+    except KeyError:
+        return {
+            "available": False,
+            "reason": "remote_profile_missing",
+            "expected_identity": expected,
+            "current_identity": current,
+        }
+    except RemoteConnectionError as exc:
+        return {
+            "available": False,
+            "reason": "remote_offline",
+            "message": str(exc),
+            "expected_identity": expected,
+            "current_identity": current,
+        }
+    return {
+        "available": True,
+        "reason": None,
+        "expected_identity": expected,
+        "current_identity": current,
+    }
+
+
+def _unavailable_endpoints(
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    connect_remote: bool = True,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for role, endpoint in (("source", source), ("destination", destination)):
+        state = _endpoint_state(endpoint, connect_remote=connect_remote)
+        if not state.get("available"):
+            result.append(
+                {
+                    "role": role,
+                    "kind": endpoint["kind"],
+                    "path": endpoint["path"],
+                    "reason": state.get("reason") or "endpoint_offline",
+                    "root": state.get("root"),
+                    "message": state.get("message"),
+                    "expected_identity": state.get("expected_identity"),
+                    "current_identity": state.get("current_identity"),
+                }
+            )
+    return result
+
+
+def _looks_like_endpoint_loss(exc: Exception) -> bool:
+    winerror = getattr(exc, "winerror", None)
+    if winerror in WINDOWS_ENDPOINT_LOSS_ERRORS:
+        return True
+    return isinstance(
+        exc,
+        (
+            RemoteConnectionError,
+            ConnectionError,
+            TimeoutError,
+            EOFError,
+        ),
+    )
+
+
+def _wait_for_endpoints(
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    event: threading.Event,
+    wait_status,
+    current_path: str,
+    error: str,
+) -> None:
+    while True:
+        _check_cancel(event)
+        unavailable = _unavailable_endpoints(source, destination, connect_remote=True)
+        if not unavailable:
+            wait_status(False, [], current_path, error)
+            return
+        wait_status(True, unavailable, current_path, error)
+        if event.wait(ENDPOINT_RECHECK_SECONDS):
+            raise CommanderCancelled("Operation cancelled by operator")
+
+
+def _run_endpoint_operation(
+    action,
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    event: threading.Event,
+    wait_status,
+    current_path: str,
+):
+    while True:
+        unavailable = _unavailable_endpoints(
+            source,
+            destination,
+            connect_remote=False,
+        )
+        if unavailable:
+            _wait_for_endpoints(
+                source,
+                destination,
+                event,
+                wait_status,
+                current_path,
+                "endpoint unavailable",
+            )
+        try:
+            return action()
+        except CommanderCancelled:
+            raise
+        except Exception as exc:
+            unavailable = _unavailable_endpoints(
+                source,
+                destination,
+                connect_remote=True,
+            )
+            if unavailable or _looks_like_endpoint_loss(exc):
+                _wait_for_endpoints(
+                    source,
+                    destination,
+                    event,
+                    wait_status,
+                    current_path,
+                    f"{type(exc).__name__}: {exc}",
+                )
+                continue
+            raise
+
+
 def _retryable_transfer_error(exc: Exception) -> bool:
     if isinstance(
         exc,
@@ -361,6 +539,7 @@ def _copy_file(
     event: threading.Event,
     progress,
     retry_status,
+    wait_status,
 ) -> None:
     has_remote = source["kind"] == "remote" or destination["kind"] == "remote"
     reported = 0
@@ -368,6 +547,22 @@ def _copy_file(
 
     while True:
         _check_cancel(event)
+        unavailable = _unavailable_endpoints(
+            source,
+            destination,
+            connect_remote=False,
+        )
+        if unavailable:
+            _wait_for_endpoints(
+                source,
+                destination,
+                event,
+                wait_status,
+                source["path"],
+                "endpoint unavailable before transfer",
+            )
+            retries = 0
+
         try:
             offset = _partial_destination_size(destination)
             if int(expected_size) == 0:
@@ -434,26 +629,70 @@ def _copy_file(
         except CommanderCancelled:
             raise
         except Exception as exc:
-            if (
-                not has_remote
-                or retries >= TRANSFER_RETRY_LIMIT
-                or not _retryable_transfer_error(exc)
-            ):
+            unavailable = _unavailable_endpoints(
+                source,
+                destination,
+                connect_remote=True,
+            )
+            if unavailable:
+                _wait_for_endpoints(
+                    source,
+                    destination,
+                    event,
+                    wait_status,
+                    source["path"],
+                    f"{type(exc).__name__}: {exc}",
+                )
+                retries = 0
+                continue
+
+            retryable = _retryable_transfer_error(exc) or _looks_like_endpoint_loss(exc)
+            if not retryable or (not has_remote and not _looks_like_endpoint_loss(exc)):
                 raise
 
-            retries += 1
-            retry_status(
-                retries,
-                TRANSFER_RETRY_LIMIT,
-                reported,
-                f"{type(exc).__name__}: {exc}",
+            if retries < TRANSFER_RETRY_LIMIT:
+                retries += 1
+                retry_status(
+                    retries,
+                    TRANSFER_RETRY_LIMIT,
+                    reported,
+                    f"{type(exc).__name__}: {exc}",
+                    source["path"],
+                )
+                delay = TRANSFER_RETRY_BACKOFF_SECONDS[
+                    min(retries - 1, len(TRANSFER_RETRY_BACKOFF_SECONDS) - 1)
+                ]
+                if event.wait(delay):
+                    raise CommanderCancelled("Operation cancelled by operator") from exc
+                continue
+
+            # Fast reconnect attempts are exhausted. Do not fail a multi-gigabyte
+            # transfer: enter downloader-like waiting mode and keep the partial.
+            wait_status(
+                True,
+                [
+                    {
+                        "role": "connection",
+                        "kind": "remote" if has_remote else "local",
+                        "path": source["path"],
+                        "reason": "reconnect_backoff",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    }
+                ],
                 source["path"],
+                f"{type(exc).__name__}: {exc}",
             )
-            delay = TRANSFER_RETRY_BACKOFF_SECONDS[
-                min(retries - 1, len(TRANSFER_RETRY_BACKOFF_SECONDS) - 1)
-            ]
-            if event.wait(delay):
+            if event.wait(ENDPOINT_RECHECK_SECONDS):
                 raise CommanderCancelled("Operation cancelled by operator") from exc
+            _wait_for_endpoints(
+                source,
+                destination,
+                event,
+                wait_status,
+                source["path"],
+                f"{type(exc).__name__}: {exc}",
+            )
+            retries = 0
 
 
 def _verify_size(endpoint: dict[str, Any], expected: int) -> None:
@@ -681,6 +920,11 @@ def start_commander_batch_job(
         "retry_limit": TRANSFER_RETRY_LIMIT,
         "resume_offset": 0,
         "last_retry_error": None,
+        "waiting_endpoint": False,
+        "waiting_since": None,
+        "waiting_for": [],
+        "wait_cycles": 0,
+        "auto_resumes": 0,
         "conflict_policy": policy,
         "skipped": 0,
         "missing": 0,
@@ -758,6 +1002,32 @@ def _run_batch_job(
             job["last_retry_error"] = error
             job["current_path"] = current_path
 
+    def wait_status(
+        waiting: bool,
+        states: list[dict[str, Any]],
+        current_path: str,
+        error: str,
+    ) -> None:
+        with _lock:
+            job = _jobs[job_id]
+            was_waiting = bool(job["waiting_endpoint"])
+            job["waiting_endpoint"] = bool(waiting)
+            job["waiting_for"] = states
+            job["current_path"] = current_path
+            job["last_retry_error"] = error or job.get("last_retry_error")
+            if waiting:
+                if not was_waiting:
+                    job["waiting_since"] = _now()
+                    job["wait_cycles"] += 1
+                job["status"] = "waiting_endpoint"
+                job["retrying"] = False
+            else:
+                if was_waiting:
+                    job["auto_resumes"] += 1
+                job["waiting_since"] = None
+                job["waiting_for"] = []
+                job["status"] = "running"
+
     try:
         for index, transfer in enumerate(transfers, start=1):
             _check_cancel(event)
@@ -795,6 +1065,14 @@ def _run_batch_job(
                 continue
 
             try:
+                _wait_for_endpoints(
+                    source,
+                    destination,
+                    event,
+                    wait_status,
+                    source["path"],
+                    "endpoint unavailable",
+                )
                 if not _source_exists(source):
                     with _lock:
                         job = _jobs[job_id]
@@ -815,14 +1093,28 @@ def _run_batch_job(
                     continue
 
                 if transfer["replace_existing"]:
-                    _delete_endpoint(destination)
+                    _run_endpoint_operation(
+                        lambda: _delete_endpoint(destination),
+                        source,
+                        destination,
+                        event,
+                        wait_status,
+                        destination["path"],
+                    )
 
                 if (
                     operation == "move"
                     and not transfer["resume_existing"]
                     and _same_native_location(source, destination)
                 ):
-                    _rename_native(source, destination)
+                    _run_endpoint_operation(
+                        lambda: _rename_native(source, destination),
+                        source,
+                        destination,
+                        event,
+                        wait_status,
+                        source["path"],
+                    )
                     created_target = True
                     with _lock:
                         job = _jobs[job_id]
@@ -831,12 +1123,25 @@ def _run_batch_job(
                         job["current_path"] = destination["path"]
                 else:
                     if is_dir:
-                        _make_directory(destination)
+                        _run_endpoint_operation(
+                            lambda: _make_directory(destination),
+                            source,
+                            destination,
+                            event,
+                            wait_status,
+                            destination["path"],
+                        )
                         created_target = True
                         for relative in directories:
                             if relative:
-                                _make_directory(
-                                    _join_endpoint(destination, relative)
+                                directory_endpoint = _join_endpoint(destination, relative)
+                                _run_endpoint_operation(
+                                    lambda endpoint=directory_endpoint: _make_directory(endpoint),
+                                    source,
+                                    directory_endpoint,
+                                    event,
+                                    wait_status,
+                                    directory_endpoint["path"],
                                 )
                     else:
                         created_target = True
@@ -850,7 +1155,14 @@ def _run_batch_job(
                         )
                         with _lock:
                             _jobs[job_id]["current_path"] = source_file["path"]
-                        destination_before = _destination_info(destination_file)
+                        destination_before = _run_endpoint_operation(
+                            lambda: _destination_info(destination_file),
+                            source_file,
+                            destination_file,
+                            event,
+                            wait_status,
+                            destination_file["path"],
+                        )
                         try:
                             _copy_file(
                                 source_file,
@@ -859,8 +1171,16 @@ def _run_batch_job(
                                 event,
                                 progress,
                                 retry_status,
+                                wait_status,
                             )
-                            _verify_size(destination_file, expected_size)
+                            _run_endpoint_operation(
+                                lambda: _verify_size(destination_file, expected_size),
+                                source_file,
+                                destination_file,
+                                event,
+                                wait_status,
+                                destination_file["path"],
+                            )
                         except Exception as exc:
                             if _is_missing_error(exc):
                                 if not destination_before["exists"]:
@@ -899,10 +1219,20 @@ def _run_batch_job(
                             _jobs[job_id]["retrying"] = False
                             _jobs[job_id]["retry_attempt"] = 0
                             _jobs[job_id]["resume_offset"] = 0
+                            _jobs[job_id]["waiting_endpoint"] = False
+                            _jobs[job_id]["waiting_since"] = None
+                            _jobs[job_id]["waiting_for"] = []
 
                     _check_cancel(event)
                     if operation == "move":
-                        _remove_source_after_move(source)
+                        _run_endpoint_operation(
+                            lambda: _remove_source_after_move(source),
+                            source,
+                            destination,
+                            event,
+                            wait_status,
+                            source["path"],
+                        )
 
                 with _lock:
                     job = _jobs[job_id]
@@ -915,8 +1245,12 @@ def _run_batch_job(
                         )
             except Exception as exc:
                 preserve_partial = isinstance(exc, CommanderCancelled) or (
-                    (source["kind"] == "remote" or destination["kind"] == "remote")
-                    and _retryable_transfer_error(exc)
+                    _retryable_transfer_error(exc)
+                    and (
+                        source["kind"] == "remote"
+                        or destination["kind"] == "remote"
+                        or _looks_like_endpoint_loss(exc)
+                    )
                 )
                 if preserve_partial and created_target:
                     with _lock:

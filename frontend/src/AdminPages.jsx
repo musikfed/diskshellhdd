@@ -122,15 +122,43 @@ export function DisksAdmin({ setError }) {
   const [letterConfirm, setLetterConfirm] = useState('')
   const [diskBusy, setDiskBusy] = useState(null)
   const [diskNotice, setDiskNotice] = useState('')
+  const [inventoryError, setInventoryError] = useState('')
 
-  const reload = () => api('/api/disks').then(setData).catch(e => setError(e.message))
+  const reload = async () => {
+    try {
+      const next = await api('/api/disks')
+      setData(next)
+      setInventoryError('')
+    } catch (e) {
+      setInventoryError(e.message)
+    }
+  }
   useEffect(() => {
-    Promise.all([api('/api/disks'), api('/api/disks/capabilities')])
-      .then(([disks, caps]) => { setData(disks); setCapabilities(caps) })
-      .catch(e => setError(e.message))
+    let stopped = false
+    const refresh = async () => {
+      const [diskResult, capabilityResult] = await Promise.allSettled([
+        api('/api/disks'),
+        api('/api/disks/capabilities'),
+      ])
+      if (stopped) return
+      if (diskResult.status === 'fulfilled') {
+        setData(diskResult.value)
+        setInventoryError('')
+      } else {
+        setInventoryError(diskResult.reason?.message || 'Disk inventory temporarily unavailable')
+      }
+      if (capabilityResult.status === 'fulfilled') setCapabilities(capabilityResult.value)
+    }
+    refresh()
+    const timer = setInterval(refresh, 4000)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filesystemProfile = key => capabilities.filesystems?.find(item => item.key === key)
+  const filesystemList = Array.isArray(capabilities.filesystems) ? capabilities.filesystems : []
+  const filesystemProfile = key => filesystemList.find(item => item.key === key)
   const elevated = capabilities.process_elevated === true
   const diskByNumber = number => (data?.disks || []).find(d => d.number === number)
 
@@ -296,6 +324,11 @@ export function DisksAdmin({ setError }) {
   }
 
   return <div className="stack admin-workbench">
+    {inventoryError && <div className="warning">
+      <b>Disk inventory temporarily unavailable.</b> {inventoryError}
+      <span>Hot-unplug не должен ронять DiskShell: destructive controls остаются закрыты до следующего успешного inventory.</span>
+      <button onClick={reload}>Retry inventory</button>
+    </div>}
     {capabilities.process_elevated === false && <div className="elevation-warning">
       <b>Backend запущен без Administrator privileges.</b>
       <span>Просмотр работает, но Initialize / partition / format Windows заблокирует. Перезапусти PowerShell/Terminal «Запуск от имени администратора» и снова запусти backend.</span>
@@ -316,7 +349,7 @@ export function DisksAdmin({ setError }) {
       </div>
     </div>
 
-    {(data?.disks || []).map(d => {
+    {(Array.isArray(data?.disks) ? data.disks : []).map(d => {
       const write = d.write_access || {}
       return <Panel key={d.number} title={`Disk ${d.number} · ${d.friendly_name}`} className="disk-card">
         <div className="disk-head">
@@ -350,7 +383,7 @@ export function DisksAdmin({ setError }) {
         </div>}
 
         {d.protected
-          ? <p className="protected">🔒 {d.protection_reasons.join(', ')}</p>
+          ? <p className="protected">🔒 {(Array.isArray(d.protection_reasons) ? d.protection_reasons : []).join(', ') || 'protected'}</p>
           : <div className="actions disk-write-actions">
               <label className={`disk-write-toggle ${write.allowed ? 'enabled' : 'locked'}`}>
                 <input
@@ -410,7 +443,7 @@ export function DisksAdmin({ setError }) {
             if (profile?.recommended_cluster) setCluster(profile.recommended_cluster)
             setFormatDirty(true)
           }}>
-            {(capabilities.filesystems || []).map(item => <option key={item.key} value={item.key}>{item.title}</option>)}
+            {filesystemList.map(item => <option key={item.key} value={item.key}>{item.title}</option>)}
           </select>
         </div>
         <div>
@@ -1360,8 +1393,8 @@ function CommanderPane({
         onChange={e => e.target.value && load(side, e.target.value, { ...state, path: e.target.value })}
       >
         <option value="">Drives…</option>
-        {roots.map(root => <option key={root.path} value={root.path}>
-          {root.path} · {root.filesystem || 'FS'} · {root.free != null ? fmtBytes(root.free) + ' free' : '—'}
+        {roots.map(root => <option key={root.path} value={root.path} disabled={root.available === false}>
+          {root.path} · {root.available === false ? 'OFFLINE' : (root.filesystem || 'FS')} · {root.free != null ? fmtBytes(root.free) + ' free' : '—'}
         </option>)}
       </select>}
 
@@ -1371,6 +1404,11 @@ function CommanderPane({
         <button disabled={busy} onClick={() => disconnectRemote(side, state)}>Disconnect</button>
       </div>}
     </div>
+
+    {!remote && state.endpointStatus?.state === 'offline' && <div className="warning">
+      <b>Local volume offline.</b> {state.endpointStatus.root || state.endpointStatus.path}
+      {' '}— панель сохранит путь; после подключения диска нажми ↻. Активный transfer job продолжится автоматически.
+    </div>}
 
     {remote && !profile && <div className="remote-connect-box">
       <input placeholder="host / IP" value={form.host || ''} onChange={e => patchForm({ host: e.target.value })} />
@@ -1475,6 +1513,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     selectedPaths: [],
     anchorPath: null,
     connectionId: '',
+    endpointStatus: null,
     remoteForm: {
       protocol: 'sftp',
       host: '',
@@ -1555,6 +1594,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
         selected: null,
         selectedPaths: [],
         anchorPath: null,
+        endpointStatus: null,
       }
       if (side === 'left') {
         setLeft(next)
@@ -1563,7 +1603,26 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
         setRight(next)
         if (next.sourceType === 'local') localStorage.setItem('fileRightPath', data.path)
       }
-    } catch (e) { setError(e.message) }
+    } catch (e) {
+      if (e.status === 409 && e.payload?.error === 'endpoint_unavailable') {
+        const setter = side === 'left' ? setLeft : setRight
+        setter(current => ({
+          ...current,
+          data: null,
+          selected: null,
+          selectedPaths: [],
+          anchorPath: null,
+          endpointStatus: {
+            state: 'offline',
+            path,
+            root: e.payload?.root || '',
+            message: e.message,
+          },
+        }))
+        return
+      }
+      setError(e.message)
+    }
   }
 
   function choose(side, item, event = null) {
@@ -1647,7 +1706,21 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     refreshMeta()
     load('left', left.path)
     load('right', right.path)
+    const timer = setInterval(refreshMeta, 3000)
+    return () => clearInterval(timer)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const revive = (side, pane) => {
+      if (pane.sourceType !== 'local' || pane.endpointStatus?.state !== 'offline') return
+      const root = pane.endpointStatus.root
+      if (root && roots.some(item => item.path === root && item.available !== false)) {
+        load(side, pane.path, pane)
+      }
+    }
+    revive('left', left)
+    revive('right', right)
+  }, [roots]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     localStorage.setItem('commanderActiveSide', activeSide)
@@ -2228,6 +2301,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
           <Metric label="Files" value={`${job.files || 0}/${job.total_files || 0}`} />
           <Metric label="Transferred" value={fmtBytes(job.bytes || 0)} />
           <Metric label="Reconnects" value={job.retries || 0} />
+          <Metric label="Auto resumes" value={job.auto_resumes || 0} />
           <Metric label="Missing" value={job.missing || 0} />
           <Metric label="Skipped" value={job.skipped || 0} />
         </div>
@@ -2237,8 +2311,16 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
           label={`${fmtBytes(job.bytes || 0)} / ${fmtBytes(job.total_bytes || 0)}`}
         />
         <p className="path">{job.current_path}</p>
+        {job.waiting_endpoint && <div className="warning">
+          <b>Transfer paused · waiting for endpoint.</b>
+          {(job.waiting_for || []).map((item, index) => <div key={`${item.role}-${item.path}-${index}`}>
+            {item.role}: {item.path} · {item.reason}
+            {item.reason === 'volume_identity_mismatch' ? ' · другой носитель с этой буквой не будет использован' : ''}
+          </div>)}
+          <small>Backend проверяет endpoint каждые несколько секунд и продолжит с фактического partial offset. Stop оставит partial.</small>
+        </div>}
         {job.retrying && <p className="warning">
-          Remote connection interrupted — reconnect {job.retry_attempt}/{job.retry_limit}.
+          Connection interrupted — reconnect {job.retry_attempt}/{job.retry_limit}.
           Resume from approximately {fmtBytes(job.resume_offset || 0)}; completed bytes are not restarted.
           {job.last_retry_error ? ` Last error: ${job.last_retry_error}` : ''}
         </p>}

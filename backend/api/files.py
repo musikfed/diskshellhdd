@@ -4,6 +4,7 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
+from backend.files.endpoint_availability import local_volume_probe
 from backend.files.jobs import cancel_file_job, get_file_job, start_file_job
 from backend.files.write_authorization import file_write_state, set_runtime_file_writes
 from backend.storage_brain.service import suggest_managed_destination
@@ -31,6 +32,19 @@ def browse():
         return jsonify({"error": "missing_path"}), 400
     raw_scan_id = request.args.get("scan_id")
     scan_id = int(raw_scan_id) if raw_scan_id not in {None, ""} else None
+    state = local_volume_probe(path)
+    if not state["available"]:
+        return (
+            jsonify(
+                {
+                    "error": "endpoint_unavailable",
+                    "message": f"Volume is offline: {state['root']}",
+                    "path": str(path),
+                    "root": state["root"],
+                }
+            ),
+            409,
+        )
     try:
         return jsonify(list_directory(path, scan_id=scan_id))
     except (ValueError, FileNotFoundError, NotADirectoryError, OSError) as exc:

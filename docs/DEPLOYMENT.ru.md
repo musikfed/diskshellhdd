@@ -1,6 +1,6 @@
-# Развёртывание DiskShell 0.6.9
+# Развёртывание DiskShell 0.7.0
 
-DiskShell 0.6.9 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
+DiskShell 0.7.0 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
 
 ## Важно про права администратора
 
@@ -279,7 +279,7 @@ Resume:            from target size
 
 При кратковременном обрыве Wi‑Fi/LAN/VPN или SSH channel Commander переподключается и продолжает текущий файл с уже подтверждённого offset. Прогресс при этом корректируется по фактическому размеру partial target. После полного копирования выполняется size verification.
 
-Если все reconnect attempts исчерпаны, job становится failed и DiskShell пытается удалить текущий incomplete target. Уже полностью завершённые и проверенные items batch не откатываются.
+После исчерпания быстрых reconnect attempts job переходит в `waiting_endpoint` и оставляет partial. Backend продолжает проверять endpoint и автоматически возобновляет transfer после его возвращения.
 
 Важно: credentials/profile живут только в RAM backend. Поэтому reconnect работает в рамках текущего backend-процесса; restart backend не является persistent resume.
 
@@ -300,3 +300,20 @@ Resume:            from target size
 `Replace` — destructive только для destination и выполняется после повторной проверки существования source. `Move` удаляет source только после успешного копирования и size verification.
 
 После restart backend локальный partial остаётся на диске и может быть продолжен новым Copy/Move. Для remote продолжения после restart нужно заново подключить SFTP/FTP profile, потому что credentials по-прежнему хранятся только в RAM.
+
+
+## 0.7.0 — hot-unplug и waiting endpoint
+
+Commander теперь ведёт Copy/Move как backend transfer manager. Для локального диска и remote endpoint состояние может быть:
+
+```text
+running → waiting_endpoint → running → completed
+```
+
+При отключении локального тома backend не считает путь «пропавшим файлом». Он ждёт появления тома и проверяет его identity. На Windows identity берётся из Volume GUID с fallback на volume serial; одной буквы диска недостаточно.
+
+SSH/SFTP сначала использует keepalive и четыре быстрых reconnect, затем остаётся в waiting-state и продолжает проверки. После возврата server/volume фактический partial size заново читается и используется как resume offset.
+
+UI inventory опрашивается периодически. Исчезнувший том помечается OFFLINE; открытая Commander pane восстанавливается после reconnect. Временная ошибка Windows disk inventory больше не должна ронять страницу «Диски».
+
+Перезапуск **самого backend** пока завершает in-memory job. Partial остаётся на target и может быть продолжен через Continue после запуска; автоматическое восстановление job после restart потребует persistent transfer journal. SSH credentials намеренно остаются RAM-only.

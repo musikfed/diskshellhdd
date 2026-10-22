@@ -5,6 +5,7 @@ import threading
 import time
 from types import SimpleNamespace
 import backend.commander.jobs as commander_jobs
+import backend.files.endpoint_availability as endpoint_availability
 from backend.remote.service import (
     RemoteConnectionError,
     RemoteNotFound,
@@ -249,6 +250,7 @@ def test_commander_remote_download_reconnects_and_resumes(tmp_path, monkeypatch)
         threading.Event(),
         lambda count, _path: progress.append(count),
         lambda *args: retries.append(args),
+        lambda *_args: None,
     )
 
     assert destination.read_bytes() == payload
@@ -290,6 +292,7 @@ def test_commander_remote_upload_reconnects_and_resumes(tmp_path, monkeypatch):
         threading.Event(),
         lambda count, _path: progress.append(count),
         lambda *args: retries.append(args),
+        lambda *_args: None,
     )
 
     assert bytes(store["data"]) == payload
@@ -529,7 +532,16 @@ def test_commander_cancel_retains_partial_target_for_resume(tmp_path, monkeypatc
 
     original_copy_file = commander_jobs._copy_file
 
-    def interrupted_copy(source_ep, destination_ep, expected_size, event, progress, retry_status):
+    def interrupted_copy(
+        source_ep,
+        destination_ep,
+        expected_size,
+        event,
+        progress,
+        retry_status,
+        wait_status,
+    ):
+        del expected_size, event, retry_status, wait_status
         target = commander_jobs._local_path(destination_ep)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"abcd")
@@ -578,3 +590,85 @@ def test_sftp_stat_only_treats_enoent_as_missing():
         pass
     else:
         raise AssertionError("transport errors must not be reported as missing")
+
+
+
+def test_local_volume_identity_mismatch_blocks_auto_resume(monkeypatch):
+    monkeypatch.setattr(
+        endpoint_availability,
+        "local_volume_probe",
+        lambda _path: {
+            "root": "W:\\",
+            "available": True,
+            "identity": "volume-new",
+        },
+    )
+
+    state = endpoint_availability.local_endpoint_state(
+        {
+            "kind": "local",
+            "path": r"W:\\target\\large.bin",
+            "volume_identity": "volume-original",
+        }
+    )
+
+    assert state["available"] is False
+    assert state["reason"] == "volume_identity_mismatch"
+    assert state["expected_identity"] == "volume-original"
+    assert state["current_identity"] == "volume-new"
+
+
+def test_commander_waits_for_offline_endpoint_then_auto_resumes(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    monkeypatch.setattr(commander_jobs, "ENDPOINT_RECHECK_SECONDS", 0.01)
+
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    payload = b"resumable-data" * 1024
+    source.write_bytes(payload)
+
+    calls = {"destination": 0}
+
+    def endpoint_state(endpoint, connect_remote=True):
+        del connect_remote
+        if endpoint["path"] == str(destination):
+            calls["destination"] += 1
+            if calls["destination"] <= 2:
+                return {
+                    "available": False,
+                    "reason": "volume_offline",
+                    "root": str(tmp_path),
+                    "expected_identity": "volume-a",
+                    "current_identity": None,
+                }
+        return {
+            "available": True,
+            "reason": None,
+            "root": str(tmp_path),
+            "expected_identity": endpoint.get("volume_identity"),
+            "current_identity": endpoint.get("volume_identity"),
+        }
+
+    monkeypatch.setattr(commander_jobs, "_endpoint_state", endpoint_state)
+
+    job = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+    )
+    job = _wait_commander_job(job["id"])
+
+    assert job["status"] == "completed", job["error"]
+    assert job["wait_cycles"] >= 1
+    assert job["auto_resumes"] >= 1
+    assert job["waiting_endpoint"] is False
+    assert destination.read_bytes() == payload
+
+
+def test_windows_path_not_found_is_treated_as_endpoint_loss():
+    class WindowsPathGone(FileNotFoundError):
+        winerror = 3
+
+    assert commander_jobs._looks_like_endpoint_loss(
+        WindowsPathGone("device disappeared")
+    ) is True

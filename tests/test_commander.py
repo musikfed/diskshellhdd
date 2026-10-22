@@ -656,6 +656,9 @@ def test_commander_waits_for_offline_endpoint_then_auto_resumes(tmp_path, monkey
 
 
 def test_windows_path_not_found_is_treated_as_endpoint_loss():
-    exc = FileNotFoundError("device disappeared")
-    exc.winerror = 3
-    assert commander_jobs._looks_like_endpoint_loss(exc) is True
+    class WindowsPathGone(FileNotFoundError):
+        winerror = 3
+
+    assert commander_jobs._looks_like_endpoint_loss(
+        WindowsPathGone("device disappeared")
+    ) is True

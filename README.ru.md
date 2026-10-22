@@ -264,7 +264,7 @@ Resume работает пока жив backend job. Полный restart backen
 Commander теперь корректно создаёт файлы размером 0 байт при Copy/Move между томами и в remote-transfer workflow. Раньше такой файл ошибочно считался уже полностью переданным при `offset == expected_size == 0`, хотя target ещё не существовал; последующий size verification завершался `FileNotFoundError`. Также `current_path` обновляется до начала каждого файла, включая пустые файлы.
 
 
-## Commander conflicts / resume / missing sources 0.7.0
+## Commander conflicts / resume / missing sources 0.6.9
 
 Copy/Move больше не использует правило «destination уже существует → весь job падает». Перед записью Commander возвращает структурированный конфликт и UI требует явное решение:
 

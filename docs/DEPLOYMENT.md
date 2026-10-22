@@ -34,21 +34,77 @@ npm run build
 
 ### REQUIRED administrator CLI launch
 
-Stop the previous backend. Open **Windows PowerShell / Windows Terminal → Run as Administrator**.
+Physical disk, Surface Diagnostics, raw Recovery, Initialize/Partition/Format and NTFS extent features require an elevated backend.
 
-You can open an elevated PowerShell with:
+#### Option A — one command from normal PowerShell or the VS Code terminal
+
+Recommended:
+
+```powershell
+Set-Location "F:\diskshellhdd"
+.\scripts\start-admin.ps1
+```
+
+The script checks the current process token. If it is not elevated, Windows shows the standard UAC prompt and starts **only the backend** in an elevated PowerShell. This is safer than keeping the whole editor elevated.
+
+A cmd.exe / double-click wrapper is also available:
+
+```cmd
+scripts\start-admin.cmd
+```
+
+#### Option B — VS Code task
+
+In VS Code:
+
+```text
+Ctrl+Shift+P
+→ Tasks: Run Task
+→ DiskShell: Backend as Administrator
+```
+
+The task calls `scripts/start-admin.ps1`; after the UAC prompt the backend is elevated while the original VS Code process can stay unprivileged.
+
+If you specifically want an **elevated integrated terminal**, use:
+
+```text
+Ctrl+Shift+P
+→ Tasks: Run Task
+→ DiskShell: Reopen VS Code as Administrator
+```
+
+After UAC, the reopened workspace can run:
+
+```powershell
+uv run python -m backend.app
+```
+
+⚠ In this mode **all VS Code extensions and workspace tasks also run with Administrator privileges**. Use it only for a trusted workspace.
+
+#### Option C — manual UAC launch
 
 ```powershell
 Start-Process powershell -Verb RunAs
 ```
 
-Inside the elevated shell:
+Then:
 
 ```powershell
 Set-Location "F:\diskshellhdd"
-
 uv run python -m backend.app
 ```
+
+#### About `runas`
+
+Alternate credentials are possible:
+
+```cmd
+runas /user:Administrator "powershell.exe -NoExit -Command \"Set-Location 'F:\diskshellhdd'; uv run python -m backend.app\""
+```
+
+On localized Windows the built-in account name may differ, for example `Администратор`.
+
+However, `runas` is **not a reliable substitute for UAC elevation**. The built-in Administrator account may be disabled, account names are locale-dependent, and alternate credentials do not always provide the required high-integrity token. Prefer `Start-Process ... -Verb RunAs` or `scripts/start-admin.ps1`.
 
 Open:
 

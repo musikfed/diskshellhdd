@@ -1,117 +1,67 @@
-# Инструкция по развёртыванию
+# Развёртывание на Windows 11
 
-Эта инструкция описывает запуск DiskShell baseline 0.2 на Windows 11.
+## Установка
 
-## 1. Требования
+```powershell
+git clone https://github.com/musikfed/diskshellhdd.git F:\diskshellhdd
+cd F:\diskshellhdd
+Copy-Item .env.example .env
+uv sync --group dev
+uv run ruff check backend tests
+uv run pytest -v
+```
 
-Установи Windows 11, Git, uv и Python 3.12.
+Опциональные previews PDF/7Z/ISO:
 
-Проверка:
+```powershell
+uv sync --group dev --extra preview
+```
 
-    git --version
-    uv --version
+Опциональный локальный vision runtime:
 
-## 2. Клонирование
+```powershell
+uv sync --group dev --extra vision
+```
 
-    git clone https://github.com/musikfed/diskshellhdd.git
-    cd diskshellhdd
+Face-модели автоматически не скачиваются. Пути к локальным YuNet/SFace моделям задаются в `.env`.
 
-## 3. Python-окружение
+## Сборка интерфейса
 
-DiskShell baseline 0.2 рассчитан на Python 3.12.
+```powershell
+cd F:\diskshellhdd\frontend
+npm install
+npm run build
+cd ..
+```
 
-    uv sync
-    uv run python --version
+## Запуск
 
-Ожидается Python 3.12.x.
+```powershell
+uv run python -m backend.app
+```
 
-## 4. Конфигурация
+Открыть `http://127.0.0.1:8765/`.
 
-    Copy-Item .env.example .env
+## Безопасность
 
-Рекомендуемые значения:
+Во время обследования все write gates оставлять `0`. Включать только конкретную область, которой собираешься пользоваться. Disk writes не включать, пока `/api/disks` не показывает system/boot/application disks как protected.
 
-    DS_HOST=127.0.0.1
-    DS_PORT=8765
-    DS_DEBUG=1
-    DS_DATA_DIR=./data
-    DS_ALLOW_DESTRUCTIVE=0
+## Обновление существующей папки F:\\diskshellhdd из GitHub
 
-Для baseline 0.2 destructive operations включать нельзя.
+Сначала сохранить нужные локальные изменения или сделать backup. Затем:
 
-## 5. Проверка Ruff
+```powershell
+cd F:\diskshellhdd
+git fetch origin
+git switch main
+git reset --hard origin/main
+uv sync --group dev
+cd frontend
+npm install
+npm run build
+cd ..
+uv run ruff check backend tests
+uv run pytest -v
+```
 
-    uv run ruff check backend tests
-
-Для безопасного автоматического исправления lint/import-ошибок:
-
-    uv run ruff check backend tests --fix
-
-После этого снова выполнить обычную проверку.
-
-## 6. Тесты
-
-    uv run pytest -v
-
-## 7. Запуск backend
-
-    uv run python -m backend.app
-
-Локальный адрес: http://127.0.0.1:8765
-
-Основные endpoints:
-
-- GET /
-- GET /api/health
-- GET /api/disks
-- POST /api/scans
-- GET /api/scans/<job_id>
-- GET /api/index/scans/<scan_id>/top
-- GET /api/index/scans/<scan_id>/directory
-
-## 8. Проверка CLI-сканера
-
-Сначала используй небольшой каталог:
-
-    uv run python -m backend.scanner.quick_scan F:\\diskshellhdd\\backend
-
-Сканируемый каталог DiskShell не изменяет. Индекс записывается только в собственную SQLite-базу приложения.
-
-## 9. Проверка фонового сканирования
-
-Оставь Flask работающим в одном окне PowerShell. Во втором:
-
-    $body = @{ path = "F:\\diskshellhdd\\backend" } | ConvertTo-Json
-    $result = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/api/scans" -ContentType "application/json" -Body $body
-    $job = $result.id
-    Invoke-RestMethod "http://127.0.0.1:8765/api/scans/$job" | Format-List
-
-Успешная задача должна показать status = completed, ненулевые счётчики files/directories и scan_id.
-
-## 10. Безопасность дисков
-
-В baseline 0.2 нельзя добавлять или вызывать Clear-Disk, Initialize-Disk, Format-Volume, разрушительные команды diskpart, raw disk writes или перемещение экстентов.
-
-Для всех физических дисков должен оставаться write_policy = blocked.
-
-## 11. Flask development server
-
-Встроенный Flask server используется только для локальной разработки. Для будущего LAN/WireGuard развёртывания нужен production WSGI (например Waitress), аутентификация и firewall restrictions. До этого сервис остаётся на 127.0.0.1.
-
-## 12. Где хранится база
-
-По умолчанию:
-
-    data\\diskshell.db
-
-В будущем базу приложения, cache, thumbnails и временные файлы лучше держать на SSD/NVMe, а не на основном storage HDD.
-
-## 13. Правило дальнейшей разработки
-
-Перед крупным изменением:
-
-    git status
-    git add .
-    git commit -m "checkpoint: working baseline"
-
-Дальше добавляем по одному milestone и не смешиваем read-side функции с потенциально опасными write-side операциями.
+`git reset --hard` специально заменяет tracked-файлы локальной папки версией из GitHub. Runtime-данные из ignored `data/` не входят в репозиторий, но перед крупным обновлением backup всё равно рекомендуется.

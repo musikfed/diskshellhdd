@@ -1,73 +1,60 @@
-# DiskShell HDD
+# DiskShell HDD 0.3
 
-[Русская версия](README.ru.md) · English
+[Русский](README.ru.md) · English
 
-DiskShell is a local-first storage inspection and indexing project for Windows. The current baseline focuses on safe, read-only discovery of physical disks and volumes, fast filesystem indexing, SQLite-backed scan history, and a small Flask API.
+DiskShell is a **local-first storage workspace and storage brain**, not a PowerShell frontend. It is designed to help a person inspect disks, understand what is stored, keep working free-space reserve, classify information, plan where data should live, browse and preview files, work with archives and private Vault data, and experiment with logical HDD layout policies.
 
-## Current baseline: 0.2
+PowerShell exists only inside the Windows storage adapter where Windows has no better high-level Python API for a specific operation. The product model is storage-oriented: **content → policy → placement → safe execution → filesystem adapter**.
 
-Implemented:
+## What is included
 
-- Windows 11 physical disk / partition / volume inventory.
-- Read-only PowerShell Storage queries.
-- Automatic protection labels for system, boot, and application disks.
-- SQLite index stored locally by DiskShell.
-- Quick filesystem indexer based on os.scandir.
-- Bottom-up directory size aggregation.
-- Background scan jobs with live counters.
-- Flask API bound to localhost by default.
-- Ruff and pytest development checks.
+- Physical disk / partition / volume discovery on Windows 11.
+- Quick read-only filesystem indexer with SQLite history.
+- File classification: photos, video, audio, documents, archives, ISO/images, code, development dependencies, cache, system data, and other.
+- Analytics: categories, largest directories, largest files, extension distribution.
+- Storage Classes and Placement Planner.
+- Capacity policy with soft/hard fill limits and working reserve.
+- File workspace backend: browse, hash, copy, move, Trash (write gate locked by default).
+- Preview metadata for images, text/code and optional PDF.
+- Read-only ZIP/TAR, optional 7Z and ISO browsing.
+- AES-GCM encrypted Vault with Argon2id key derivation, random master key, recovery key and in-memory unlock sessions.
+- Partition Magic safety layer with protected-disk checks and typed confirmation (disk write gate locked by default).
+- Storage Lab managed-interleave simulator and read-only NTFS extent query.
+- Optional local face detector pipeline using OpenCV YuNet model paths; no cloud.
+- React/Vite UI with Dashboard, Disks, Examine, Analytics, Storage Brain, Files, Vault and Storage Lab.
+- No Rust.
 
-Planned later:
+## Safety gates
 
-- Analytics dashboard and file classification.
-- React frontend.
-- Preview providers for images, documents, archives, ISO and media.
-- Local photo/person recognition.
-- File manager with quarantine-first write operations.
-- Vault.
-- Partition Magic with a separate privileged safety layer.
-- Experimental Storage Lab / managed layout research.
+All risky write domains are independent and **OFF by default**:
 
-## Safety model
+```text
+DS_ALLOW_FILE_WRITES=0
+DS_ALLOW_VAULT_WRITES=0
+DS_ALLOW_DISK_WRITES=0
+DS_ALLOW_EXTENT_MOVES=0
+```
 
-Baseline 0.2 is intentionally non-destructive.
+System, boot and the disk containing DiskShell itself are marked protected. Partition formatting requires a separate disk-write gate plus exact typed confirmation.
 
-DiskShell does not initialize, format, clear, repartition, delete, or relocate disk extents in this milestone. Every physical disk returned by the disk inventory API has write_policy = blocked.
+## Windows quick start
 
-Filesystem scanning reads metadata from the selected directory and writes index data only to DiskShell's own local SQLite database.
+```powershell
+git clone https://github.com/musikfed/diskshellhdd.git F:\diskshellhdd
+cd F:\diskshellhdd
+Copy-Item .env.example .env
+uv sync --group dev
+uv run ruff check backend tests
+uv run pytest -v
+cd frontend
+npm install
+npm run build
+cd ..
+uv run python -m backend.app
+```
 
-## Requirements
+Open `http://127.0.0.1:8765/`.
 
-- Windows 11
-- Python 3.12
-- uv
-- PowerShell with the Windows Storage module
+For development UI: run backend, then `cd frontend; npm run dev` and open `http://127.0.0.1:5173/`.
 
-## Quick start
-
-    git clone https://github.com/musikfed/diskshellhdd.git
-    cd diskshellhdd
-    Copy-Item .env.example .env
-    uv sync
-    uv run ruff check backend tests
-    uv run pytest -v
-    uv run python -m backend.app
-
-Open:
-
-- http://127.0.0.1:8765/
-- http://127.0.0.1:8765/api/health
-- http://127.0.0.1:8765/api/disks
-
-Read the full English deployment guide: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
-
-Полная инструкция на русском: [docs/DEPLOYMENT.ru.md](docs/DEPLOYMENT.ru.md)
-
-## Development status
-
-The working baseline has been validated with a local scan job completing successfully with zero scanner errors. The project is now ready for the next milestone: file classification and Analytics API.
-
-## License
-
-No license has been selected yet.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

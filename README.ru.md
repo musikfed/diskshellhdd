@@ -1,73 +1,60 @@
-# DiskShell HDD
+# DiskShell HDD 0.3
 
 Русский · [English](README.md)
 
-DiskShell — локальный проект для безопасного обследования, индексирования и последующей аналитики накопителей в Windows. Текущий baseline сосредоточен на read-only обнаружении физических дисков и томов, быстром индексировании файловой системы, истории сканирований в SQLite и локальном Flask API.
+DiskShell — это **локальное рабочее пространство для хранения и Storage Brain**, а не оболочка над PowerShell. Цель программы — удобно и правильно эксплуатировать диск: обследовать накопители, понимать состав данных, держать рабочий резерв, классифицировать информацию, предлагать правильное место хранения, работать с файлами и архивами, защищать приватные данные и экспериментировать с логическим размещением на HDD.
 
-## Текущий baseline: 0.2
+PowerShell остаётся только глубоко внутри Windows-adapter там, где конкретная операция Windows требует системного API. Пользовательская модель DiskShell другая: **содержимое → политика → план размещения → безопасное выполнение → файловая система**.
 
-Уже реализовано:
+## Что уже входит
 
 - обнаружение физических дисков, разделов и томов Windows 11;
-- read-only запросы через PowerShell Storage;
-- автоматические признаки защиты для system / boot / application disk;
-- локальный SQLite-индекс DiskShell;
-- Quick Indexer на базе os.scandir;
-- bottom-up подсчёт размеров каталогов;
-- фоновые scan jobs с живыми счётчиками;
-- Flask API, по умолчанию доступный только на localhost;
-- проверки Ruff и pytest.
+- Quick Indexer с read-only обходом и историей в SQLite;
+- классификация: фото, видео, аудио, документы, архивы, ISO/образы, код, development dependencies, cache, system, other;
+- Analytics: категории, самые тяжёлые папки/файлы, распределение расширений;
+- Storage Classes и Placement Planner;
+- контроль заполнения, soft/hard limits и рабочий резерв;
+- файловый workspace: просмотр, hash, copy/move/Trash через отдельный write gate;
+- preview изображений, текста/кода и опционально PDF;
+- просмотр ZIP/TAR и опционально 7Z/ISO без распаковки всего контейнера;
+- зашифрованный Vault: Argon2id + AES-GCM, случайный master key, recovery key, unlock только в RAM;
+- Partition Magic safety layer с защитой system/boot/application disk и текстовым подтверждением;
+- Storage Lab: симулятор Managed Interleave и read-only запрос NTFS extents;
+- опциональный локальный face detector через OpenCV YuNet; облако не используется;
+- React/Vite UI: Dashboard, Disks, Examine, Analytics, Storage Brain, Files, Vault, Storage Lab;
+- Rust не используется.
 
-Планируется далее:
+## Safety gates
 
-- Analytics и классификация файлов;
-- React-интерфейс;
-- preview providers для изображений, документов, архивов, ISO и медиа;
-- локальное распознавание людей на фотографиях;
-- файловый менеджер с quarantine-first логикой;
-- Vault;
-- Partition Magic с отдельным привилегированным safety layer;
-- экспериментальный Storage Lab / managed layout.
+Все потенциально опасные области **выключены по умолчанию независимо друг от друга**:
 
-## Модель безопасности
+```text
+DS_ALLOW_FILE_WRITES=0
+DS_ALLOW_VAULT_WRITES=0
+DS_ALLOW_DISK_WRITES=0
+DS_ALLOW_EXTENT_MOVES=0
+```
 
-Baseline 0.2 намеренно не выполняет разрушительных операций.
+System/boot диск и физический диск, на котором находится DiskShell, помечаются protected. Форматирование требует отдельного включения disk-write gate и точной фразы подтверждения.
 
-На этом этапе DiskShell не инициализирует, не форматирует, не очищает и не переразмечает диски, не удаляет пользовательские данные и не перемещает экстенты. Для каждого физического диска API возвращает write_policy = blocked.
+## Быстрый запуск Windows
 
-Сканирование файловой системы только читает метаданные выбранного каталога. Результаты записываются только в собственную локальную SQLite-базу DiskShell.
+```powershell
+git clone https://github.com/musikfed/diskshellhdd.git F:\diskshellhdd
+cd F:\diskshellhdd
+Copy-Item .env.example .env
+uv sync --group dev
+uv run ruff check backend tests
+uv run pytest -v
+cd frontend
+npm install
+npm run build
+cd ..
+uv run python -m backend.app
+```
 
-## Требования
+Открыть: `http://127.0.0.1:8765/`.
 
-- Windows 11
-- Python 3.12
-- uv
-- PowerShell с Windows Storage module
+Для UI-разработки: backend оставить запущенным, затем `cd frontend; npm run dev` и открыть `http://127.0.0.1:5173/`.
 
-## Быстрый запуск
-
-    git clone https://github.com/musikfed/diskshellhdd.git
-    cd diskshellhdd
-    Copy-Item .env.example .env
-    uv sync
-    uv run ruff check backend tests
-    uv run pytest -v
-    uv run python -m backend.app
-
-Открыть в браузере:
-
-- http://127.0.0.1:8765/
-- http://127.0.0.1:8765/api/health
-- http://127.0.0.1:8765/api/disks
-
-Полная инструкция развёртывания на русском: [docs/DEPLOYMENT.ru.md](docs/DEPLOYMENT.ru.md)
-
-English deployment guide: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
-
-## Текущий статус разработки
-
-Рабочий baseline уже проверен локально: background scan job успешно завершает индексирование без ошибок сканера. Следующий milestone — классификация файлов и Analytics API.
-
-## Лицензия
-
-Лицензия пока не выбрана.
+Подробно: [docs/DEPLOYMENT.ru.md](docs/DEPLOYMENT.ru.md) и [docs/ARCHITECTURE.ru.md](docs/ARCHITECTURE.ru.md).

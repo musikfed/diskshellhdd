@@ -616,8 +616,12 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
   const [verify, setVerify] = useState('size')
   const [jobId, setJobId] = useState(localStorage.getItem('placementJobId') || '')
   const [job, setJob] = useState(null)
+  const [sourceScope, setSourceScope] = useState(localStorage.getItem('storageSourceScope') || '')
+  const [excludeScope, setExcludeScope] = useState(localStorage.getItem('storageExcludeScope') || '')
 
   useEffect(() => { localStorage.setItem('storageRoot', root) }, [root])
+  useEffect(() => { localStorage.setItem('storageSourceScope', sourceScope) }, [sourceScope])
+  useEffect(() => { localStorage.setItem('storageExcludeScope', excludeScope) }, [excludeScope])
   useEffect(() => {
     api('/api/storage/classes').then(x => setClasses(x.classes || [])).catch(e => setError(e.message))
   }, [setError])
@@ -673,10 +677,19 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
   }, [jobId, planId, setError])
 
   async function build() {
+    const splitPaths = value => value
+      .split(/\r?\n|;/)
+      .map(item => item.trim())
+      .filter(Boolean)
     try {
       const value = await api('/api/storage/plans', {
         method: 'POST',
-        body: JSON.stringify({ scan_id: Number(scanId), storage_root: root }),
+        body: JSON.stringify({
+          scan_id: Number(scanId),
+          storage_root: root,
+          source_roots: splitPaths(sourceScope),
+          exclude_roots: splitPaths(excludeScope),
+        }),
       })
       setPlan(value)
       setPlanId(String(value.id))
@@ -707,23 +720,53 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
     <Panel title="Storage policy classes">
       <div className="class-grid">{classes.map(c => <div key={c.key}><b>{c.title}</b><small>{c.relative_root}</small><p>{c.description}</p></div>)}</div>
     </Panel>
-    <Panel title="Placement Planner">
-      <div className="planner-toolbar">
-        <div className="grow"><label>Корень управляемого хранилища</label><input value={root} onChange={e => setRoot(e.target.value)} /></div>
-        <button className="primary" disabled={!scanId || running} onClick={build}>Построить план из scan {scanId || '—'}</button>
+    <Panel title="Managed Import / Placement Planner">
+      <div className="managed-import-grid">
+        <div>
+          <label>Целевой HDD root</label>
+          <input value={root} onChange={e => setRoot(e.target.value)} placeholder="G:\\Storage" />
+          <small>Сюда DiskShell создаст Media / Photos / Archive / Documents / ...</small>
+        </div>
+        <div>
+          <label>Source scope на SSD · по одному пути в строке</label>
+          <textarea value={sourceScope} onChange={e => setSourceScope(e.target.value)} placeholder={'F:\\fromDisk\nF:\\inst'} />
+          <small>Пусто = весь scan. Лучше явно выбрать только тот хаос, который переносим.</small>
+        </div>
+        <div>
+          <label>Exclude scope · по одному пути в строке</label>
+          <textarea value={excludeScope} onChange={e => setExcludeScope(e.target.value)} placeholder={'F:\\work\nF:\\VM-active'} />
+          <small>DiskShell и target Storage backend исключает автоматически.</small>
+        </div>
       </div>
-      <p className="muted">Scan = снимок фактов о файлах. Placement Plan = сохранённое в SQLite предложение, куда эти файлы должны попасть. Последний plan автоматически восстанавливается после refresh.</p>
+      <div className="actions">
+        <button className="primary" disabled={!scanId || running || !root.trim()} onClick={build}>Построить Managed Import из scan {scanId || '—'}</button>
+      </div>
+      <p className="muted">Scan остаётся общим снимком SSD. Этот plan берёт только Source scope, классифицирует данные и готовит перенос в HDD-папки. Cross-volume сейчас безопасно copy → verify → publish, исходник на SSD сохраняется до ручной проверки.</p>
       {plan && <>
         <div className="metrics">
           <Metric label="Plan" value={`#${plan.id} · ${plan.status}`} />
           <Metric label="Items" value={plan.total_items} />
           <Metric label="Данные" value={fmtBytes(plan.total_bytes)} />
           <Metric label="Рабочий резерв" value={fmtBytes(plan.reserve_bytes)} />
+          <Metric label="SSD → HDD" value={plan.cross_volume_items ?? 0} />
+          <Metric label="Внутри тома" value={plan.same_volume_items ?? 0} />
+          <Metric label="Нужно на HDD" value={fmtBytes(plan.additional_target_bytes || 0)} />
         </div>
+        {plan.scope && <div className="scope-summary">
+          <span>В scope: <b>{plan.scope.selected_files}</b></span>
+          <span>Вне scope: <b>{plan.scope.skipped_outside_scope}</b></span>
+          <span>Excluded: <b>{plan.scope.skipped_excluded}</b></span>
+        </div>}
         {plan.warnings?.map(w => <p className="warning" key={w}>{w}</p>)}
-        <div className="plan">{plan.items?.slice(0, 120).map(i => <div key={i.id} className={i.status}><span title={i.source_path}>{i.source_path}</span><b>→ {i.target_class}</b><span>{i.action}</span><span>{fmtBytes(i.size)}</span></div>)}</div>
+        <div className="plan managed-plan">{plan.items?.slice(0, 120).map(i => <div key={i.id} className={i.status}>
+          <span title={i.source_path}>{i.source_path}</span>
+          <b>→ {i.target_class}</b>
+          <span>{i.layout_lane || '—'} · {i.target_band_bytes ? fmtBytes(i.target_band_bytes) : '—'}</span>
+          <span>{i.action}</span>
+          <span>{fmtBytes(i.size)}</span>
+        </div>)}</div>
         <div className="apply-box">
-          <p><b>Same-volume:</b> atomic move + journal. <b>Cross-volume:</b> chunked copy → verify → publish; исходник сохраняется.</p>
+          <p><b>Same-volume:</b> atomic move + journal. <b>SSD → HDD:</b> chunked copy → verify → publish; исходник пока сохраняется. Колонка lane/band показывает будущий Adaptive Macro Interleave профиль записи на HDD; реальное принудительное extent-placement всё ещё выключено.</p>
           <select value={verify} onChange={e => setVerify(e.target.value)}><option value="size">Verify size</option><option value="sha256">Verify SHA-256</option></select>
           <label>Для применения введи: <b>{plan.confirmation}</b></label>
           <input value={confirmation} onChange={e => setConfirmation(e.target.value)} />
@@ -751,6 +794,172 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
     </Panel>
   </div>
 }
+
+export function DiagnosticsAdmin({ setError }) {
+  const [disks, setDisks] = useState([])
+  const [elevated, setElevated] = useState(null)
+  const [diskNumber, setDiskNumber] = useState(localStorage.getItem('diagnosticDisk') || '')
+  const [mode, setMode] = useState(localStorage.getItem('diagnosticMode') || 'quick')
+  const [jobId, setJobId] = useState(localStorage.getItem('diagnosticJobId') || '')
+  const [job, setJob] = useState(null)
+  const [history, setHistory] = useState([])
+
+  const terminal = useMemo(() => new Set(['completed', 'failed', 'cancelled']), [])
+
+  async function refreshBase() {
+    const [inventory, caps, previous] = await Promise.all([
+      api('/api/disks'),
+      api('/api/disks/capabilities'),
+      api('/api/diagnostics/history?limit=8'),
+    ])
+    setDisks(inventory.disks || [])
+    setElevated(caps.process_elevated)
+    setHistory(previous.runs || [])
+    if (!diskNumber && inventory.disks?.length) {
+      const preferred = inventory.disks.find(item => !item.protected) || inventory.disks[0]
+      setDiskNumber(String(preferred.number))
+    }
+  }
+
+  useEffect(() => { refreshBase().catch(e => setError(e.message)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (diskNumber !== '') localStorage.setItem('diagnosticDisk', diskNumber) }, [diskNumber])
+  useEffect(() => { localStorage.setItem('diagnosticMode', mode) }, [mode])
+
+  useEffect(() => {
+    if (!jobId) return undefined
+    localStorage.setItem('diagnosticJobId', jobId)
+    let stopped = false
+    const poll = async () => {
+      try {
+        const next = await api(`/api/diagnostics/surface/${jobId}`)
+        if (stopped) return
+        setJob(next)
+        if (terminal.has(next.status)) {
+          localStorage.removeItem('diagnosticJobId')
+          setJobId('')
+          api('/api/diagnostics/history?limit=8').then(x => setHistory(x.runs || [])).catch(() => {})
+        }
+      } catch (e) {
+        if (!stopped) {
+          localStorage.removeItem('diagnosticJobId')
+          setJobId('')
+          setError(e.message)
+        }
+      }
+    }
+    poll()
+    const timer = setInterval(poll, 600)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [jobId, setError, terminal])
+
+  async function start() {
+    try {
+      const value = await api('/api/diagnostics/surface', {
+        method: 'POST',
+        body: JSON.stringify({ disk_number: Number(diskNumber), mode }),
+      })
+      setJob(value)
+      setJobId(value.id)
+    } catch (e) { setError(e.message) }
+  }
+
+  async function stop() {
+    try {
+      setJob(await api(`/api/diagnostics/surface/${jobId}/cancel`, { method: 'POST', body: '{}' }))
+    } catch (e) { setError(e.message) }
+  }
+
+  const running = job && !terminal.has(job.status)
+  const selected = disks.find(item => String(item.number) === String(diskNumber))
+  const tone = job?.rating === 'Excellent' || job?.rating === 'Good'
+    ? 'good'
+    : job?.rating === 'Warning'
+      ? 'warning'
+      : job?.rating === 'Bad'
+        ? 'danger'
+        : 'neutral'
+
+  return <div className="stack admin-workbench diagnostics-page">
+    <Panel title="Surface Diagnostics · read-only">
+      <p>Проверка читает physical disk и ничего на него не записывает. Quick/Standard равномерно семплируют всю ёмкость; Full читает весь диск последовательно. Для raw physical access backend должен быть запущен от Administrator.</p>
+      {elevated === false && <p className="warning">Backend не elevated — raw surface scan не запустится.</p>}
+      <div className="diagnostic-controls">
+        <div>
+          <label>Physical disk</label>
+          <select value={diskNumber} onChange={e => setDiskNumber(e.target.value)} disabled={running}>
+            {disks.map(d => <option key={d.number} value={d.number}>Disk {d.number} · {d.friendly_name} · {fmtBytes(d.size)}</option>)}
+          </select>
+        </div>
+        <div>
+          <label>Глубина</label>
+          <select value={mode} onChange={e => setMode(e.target.value)} disabled={running}>
+            <option value="quick">Quick · ~384 MiB samples</option>
+            <option value="standard">Standard · ~4 GiB samples</option>
+            <option value="full">Full read · вся ёмкость</option>
+          </select>
+        </div>
+        <div className="diagnostic-buttons">
+          <button className="primary" disabled={!selected || running || elevated === false} onClick={start}>▶ Проверить поверхность</button>
+          <button className="stop-button" disabled={!running || !jobId} onClick={stop}>■ Stop</button>
+        </div>
+      </div>
+      {mode === 'full' && <p className="warning">Full read на 4-TB HDD может идти много часов. Он read-only, но создаёт длительную нагрузку на диск.</p>}
+
+      {job && <>
+        <div className="metrics">
+          <Metric label="Status" value={job.status} />
+          <Metric label="Оценка" value={job.rating || 'идёт проверка'} />
+          <Metric label="Median" value={job.median_mib_s != null ? `${job.median_mib_s} MiB/s` : '—'} />
+          <Metric label="Read errors" value={job.read_errors ?? 0} />
+          <Metric label="Slow cells" value={job.slow_cells ?? 0} />
+          <Metric label="Прочитано" value={fmtBytes(job.sampled_bytes || 0)} />
+        </div>
+        <JobProgress percent={job.progress_percent} running={running} label={`${job.completed_cells || 0} / ${job.total_cells || 0} regions`} />
+        <div className="surface-head">
+          <StatusPill tone={tone}>{job.rating || job.status}</StatusPill>
+          <span>Windows: <b>{job.health_status || 'Unknown'}</b></span>
+          <span>🌡 <b>{job.reliability?.temperature_c ?? '—'} °C</b></span>
+          <span>⏱ <b>{job.reliability?.power_on_hours ?? '—'} h</b></span>
+        </div>
+        <div className="surface-grid">
+          {(job.cells || []).map(cell => <i
+            key={cell.index}
+            className={cell.status}
+            title={`Region ${cell.index + 1}/${job.total_cells}\nOffset ${fmtBytes(cell.start)} – ${fmtBytes(cell.end)}\nRead ${fmtBytes(cell.sample_bytes || 0)}\n${cell.mib_s != null ? `${cell.mib_s} MiB/s` : cell.status}\n${cell.error || ''}`}
+          />)}
+        </div>
+        <div className="surface-legend">
+          <span><i className="good" /> normal</span>
+          <span><i className="warn" /> slower</span>
+          <span><i className="slow" /> very slow</span>
+          <span><i className="bad" /> read error</span>
+          <span><i className="pending" /> not checked</span>
+        </div>
+        {job.error && <p className="warning">{job.error}</p>}
+        <p className="muted">{job.note}</p>
+      </>}
+    </Panel>
+
+    <Panel title="Как читается оценка">
+      <div className="health-scale">
+        <div className="excellent"><b>Excellent</b><span>Windows Healthy + чистая сетка + доступны reliability counters.</span></div>
+        <div className="good"><b>Good</b><span>Ошибок чтения нет; SMART/reliability может быть недоступен через USB bridge.</span></div>
+        <div className="warning"><b>Warning</b><span>Есть заметно медленные области, lifetime error counters или Windows Warning.</span></div>
+        <div className="bad"><b>Bad</b><span>Есть raw read errors или Windows сообщает Unhealthy.</span></div>
+      </div>
+    </Panel>
+
+    <Panel title="Последние проверки">
+      <div className="snapshot-list">{history.map(run => <div key={run.id}>
+        <b>Disk {run.disk_number} · {run.rating || run.status}</b>
+        <span>{run.mode}</span>
+        <span>{run.started_at}</span>
+        <span>{run.read_errors} errors</span>
+      </div>)}</div>
+    </Panel>
+  </div>
+}
+
 
 export function RecoveryAdmin({ setError }) {
   const [inventory, setInventory] = useState([])

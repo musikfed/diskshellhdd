@@ -33,6 +33,7 @@ def create_app() -> Flask:
         diagnostics_bp,
         scans_bp,
         analytics_bp,
+        commander_bp,
         storage_bp,
         files_bp,
         people_bp,

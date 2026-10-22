@@ -347,7 +347,9 @@ export function DisksAdmin({ setError }) {
               {write.allowed && <button disabled={Boolean(diskBusy)} onClick={() => lock(d.number)}>🔒 Заблокировать запись</button>}
               {String(d.partition_style).toUpperCase() === 'RAW' && <button disabled={Boolean(diskBusy)} onClick={() => prepareInitialize(d.number)}>Инициализировать GPT</button>}
               {Number(d.largest_free_extent || 0) > 0 && String(d.partition_style).toUpperCase() !== 'RAW' && <button disabled={Boolean(diskBusy)} onClick={() => newPartition(d)}>+ Раздел / том</button>}
-              <button className="danger-outline" disabled={Boolean(diskBusy)} onClick={() => prepareFormat(d.number)}>Очистить + первый том</button>
+              <button className="danger-outline" disabled={Boolean(diskBusy)} onClick={() => prepareFormat(d.number)}>
+                {String(d.partition_style).toUpperCase() === 'RAW' ? 'GPT + первый том' : 'Очистить + первый том'}
+              </button>
             </div>}
 
         <div className="partition-table">
@@ -389,7 +391,12 @@ export function DisksAdmin({ setError }) {
       <button className="danger-button" disabled={Boolean(diskBusy) || initializeConfirm !== initializePlan.confirmation || !diskByNumber(initializePlan.disk.number)?.write_access?.allowed} onClick={executeInitialize}>Initialize GPT</button>
     </Panel>}
 
-    {formatPlan && <Panel title="Очистить диск → GPT → создать первый том" className="danger-card">
+    {formatPlan && <Panel
+      title={String(formatPlan.disk.partition_style).toUpperCase() === 'RAW'
+        ? 'Подготовить RAW disk → GPT → первый том'
+        : 'Очистить диск → GPT → создать первый том'}
+      className="danger-card"
+    >
       <p className="warning">⚠ {formatPlan.warning}</p>
       <div className="wizard-grid">
         <div>

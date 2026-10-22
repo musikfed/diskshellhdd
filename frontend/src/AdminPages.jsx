@@ -1711,6 +1711,18 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    const revive = (side, pane) => {
+      if (pane.sourceType !== 'local' || pane.endpointStatus?.state !== 'offline') return
+      const root = pane.endpointStatus.root
+      if (root && roots.some(item => item.path === root && item.available !== false)) {
+        load(side, pane.path, pane)
+      }
+    }
+    revive('left', left)
+    revive('right', right)
+  }, [roots]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     localStorage.setItem('commanderActiveSide', activeSide)
   }, [activeSide])
   useEffect(() => {

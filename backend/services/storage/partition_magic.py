@@ -11,6 +11,7 @@ from backend.services.storage.filesystem_profiles import (
     validate_volume_size,
 )
 from backend.services.storage.windows_disks import list_windows_disks
+from backend.services.storage.windows_privileges import require_process_elevated
 from backend.services.storage.write_authorization import (
     DiskWriteBlocked,
     require_disk_write_authorized,
@@ -133,6 +134,7 @@ def execute_format(
         drive_letter=drive_letter,
     )
     require_disk_write_authorized(plan["disk"])
+    require_process_elevated()
     if confirmation != plan["confirmation"]:
         raise DiskWriteBlocked("Typed confirmation does not match")
 

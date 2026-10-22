@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.6
+# DiskShell HDD 0.6.7
 
 Русский · [English](README.md)
 
@@ -242,3 +242,18 @@ VAULT WRITE LOCKED ⇄ VAULT WRITE ENABLED
 ```
 
 Включение хранится только в RAM backend и автоматически сбрасывается после restart backend. Этот gate управляет **Create Vault**, Import/Encrypt и Export. Если `DS_ALLOW_VAULT_WRITES=1`, это постоянный environment override и UI-toggle отключён как избыточный.
+
+
+## SFTP / SSH large-file reliability 0.6.7
+
+Для длинных SFTP-передач Commander теперь не рассчитывает на одну идеально стабильную SSH-сессию:
+
+- SSH keepalive отправляется каждые **30 секунд**;
+- дополнительно включается TCP keepalive, где это поддерживает ОС;
+- зависший SFTP channel имеет I/O timeout **120 секунд**, после чего transfer переходит к reconnect вместо вечного зависания;
+- при transient network/SSH error Commander делает до **4 reconnect attempts** с backoff 1/2/4/8 секунд;
+- после reconnect размер уже записанного target перечитывается и upload/download продолжается **с этого offset**, а не с нуля;
+- после завершения по-прежнему выполняется size verification; только после успешной проверки Move удаляет source;
+- UI показывает число reconnects, retry attempt и приблизительный resume offset.
+
+Resume работает пока жив backend job. Полный restart backend не восстанавливает незавершённый job: это отдельный будущий persistent-transfer слой.

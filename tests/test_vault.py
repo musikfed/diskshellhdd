@@ -129,3 +129,38 @@ def test_env_vault_root_cannot_be_overridden_from_ui(tmp_path, monkeypatch):
             "correct horse battery staple",
             root=tmp_path / "other-vault",
         )
+
+
+
+def test_vault_runtime_write_toggle_enables_writes_until_reset(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        vault,
+        "settings",
+        SimpleNamespace(
+            vault_root=tmp_path / "vault",
+            vault_root_raw="",
+            data_dir=tmp_path / "data",
+            allow_vault_writes=False,
+        ),
+    )
+    vault.set_runtime_vault_writes(False)
+
+    locked = vault.vault_write_state()
+    assert locked["allowed"] is False
+    assert locked["runtime_enabled"] is False
+    assert locked["global_override"] is False
+
+    enabled = vault.set_runtime_vault_writes(True)
+    assert enabled["allowed"] is True
+    assert enabled["runtime_enabled"] is True
+    assert enabled["mode"] == "manual_until_restart"
+
+    created = vault.create_vault(
+        "operator",
+        "correct horse battery staple",
+        root=tmp_path / "storage" / "DiskShellVault",
+    )
+    assert created["status"] == "created"
+
+    vault.set_runtime_vault_writes(False)
+    assert vault.vault_write_state()["allowed"] is False

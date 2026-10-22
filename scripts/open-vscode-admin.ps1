@@ -9,8 +9,18 @@ Set-StrictMode -Version Latest
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $code = Get-Command code -ErrorAction Stop
+$source = $code.Source
 
-Start-Process -FilePath $code.Source -Verb RunAs -ArgumentList @(
-    "--reuse-window",
-    $ProjectRoot
-)
+if ([IO.Path]::GetExtension($source) -ieq ".cmd") {
+    $command = '"' + $source + '" --reuse-window "' + $ProjectRoot + '"'
+    Start-Process -FilePath $env:ComSpec -Verb RunAs -ArgumentList @(
+        "/d",
+        "/c",
+        $command
+    )
+} else {
+    Start-Process -FilePath $source -Verb RunAs -ArgumentList @(
+        "--reuse-window",
+        ('"' + $ProjectRoot + '"')
+    )
+}

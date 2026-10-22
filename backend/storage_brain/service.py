@@ -295,6 +295,9 @@ def create_placement_plan(
             )
             same_volume = _same_volume(source, storage_root)
             action = "move_same_volume" if same_volume else "copy_cross_volume"
+            # This is a target logical layout policy only. The current writer does not
+            # force NTFS extent placement; executor verification later compares the
+            # actual NTFS-visible extent count with this macro-band target.
             layout_lane, target_band_bytes = _layout_hint(str(file_row["category"]))
             if not same_volume:
                 additional_target_bytes += int(file_row["size"])
@@ -379,6 +382,65 @@ def create_placement_plan(
     return result
 
 
+def _decorate_plan(result: dict) -> dict:
+    items = result["items"]
+    for item in items:
+        raw_layout = item.get("layout_verification")
+        if isinstance(raw_layout, str) and raw_layout:
+            try:
+                item["layout_verification"] = json.loads(raw_layout)
+            except json.JSONDecodeError:
+                item["layout_verification"] = {
+                    "status": "unknown",
+                    "detail": raw_layout,
+                }
+
+    selected = [item for item in items if bool(item.get("selected", 1))]
+    result["same_volume_items"] = sum(
+        1 for item in items if item["action"] == "move_same_volume"
+    )
+    result["cross_volume_items"] = sum(
+        1 for item in items if item["action"] == "copy_cross_volume"
+    )
+    result["additional_target_bytes"] = sum(
+        int(item["size"])
+        for item in items
+        if item["action"] == "copy_cross_volume"
+    )
+    result["selected_items"] = len(selected)
+    result["selected_bytes"] = sum(int(item["size"]) for item in selected)
+    result["selected_cross_volume_items"] = sum(
+        1 for item in selected if item["action"] == "copy_cross_volume"
+    )
+    result["selected_additional_target_bytes"] = sum(
+        int(item["size"])
+        for item in selected
+        if item["action"] == "copy_cross_volume"
+    )
+    result["layout_checks"] = {
+        "conforming": sum(
+            1
+            for item in selected
+            if isinstance(item.get("layout_verification"), dict)
+            and item["layout_verification"].get("status") == "conforming"
+        ),
+        "drift": sum(
+            1
+            for item in selected
+            if isinstance(item.get("layout_verification"), dict)
+            and item["layout_verification"].get("status") == "drift"
+        ),
+        "unavailable": sum(
+            1
+            for item in selected
+            if isinstance(item.get("layout_verification"), dict)
+            and item["layout_verification"].get("status") == "unavailable"
+        ),
+    }
+    result["confirmation"] = f"APPLY PLAN {result['id']}"
+    return result
+
+
 def get_plan(plan_id: int) -> dict:
     with connect() as connection:
         plan = connection.execute(
@@ -397,19 +459,47 @@ def get_plan(plan_id: int) -> dict:
     result = dict(plan)
     result["warnings"] = json.loads(result["warnings"] or "[]")
     result["items"] = [dict(row) for row in items]
-    result["same_volume_items"] = sum(
-        1 for item in result["items"] if item["action"] == "move_same_volume"
-    )
-    result["cross_volume_items"] = sum(
-        1 for item in result["items"] if item["action"] == "copy_cross_volume"
-    )
-    result["additional_target_bytes"] = sum(
-        int(item["size"])
-        for item in result["items"]
-        if item["action"] == "copy_cross_volume"
-    )
-    result["confirmation"] = f"APPLY PLAN {plan_id}"
-    return result
+    return _decorate_plan(result)
+
+
+def update_plan_selection(
+    plan_id: int,
+    *,
+    selected: bool,
+    item_ids: list[int] | None = None,
+    all_items: bool = False,
+) -> dict:
+    with connect() as connection:
+        plan = connection.execute(
+            "SELECT status FROM placement_plans WHERE id = ?",
+            (int(plan_id),),
+        ).fetchone()
+        if plan is None:
+            raise KeyError(plan_id)
+        if plan["status"] == "running":
+            raise ValueError("Cannot change selection while the plan is running")
+
+        value = 1 if selected else 0
+        if all_items:
+            connection.execute(
+                "UPDATE placement_plan_items SET selected=? WHERE plan_id=?",
+                (value, int(plan_id)),
+            )
+        else:
+            ids = [int(item_id) for item_id in (item_ids or [])]
+            if not ids:
+                raise ValueError("item_ids is required unless all_items=true")
+            placeholders = ",".join("?" for _ in ids)
+            connection.execute(
+                f"""
+                UPDATE placement_plan_items
+                SET selected=?
+                WHERE plan_id=? AND id IN ({placeholders})
+                """,
+                (value, int(plan_id), *ids),
+            )
+        connection.commit()
+    return get_plan(plan_id)
 
 
 def get_latest_plan(scan_id: int | None = None) -> dict:

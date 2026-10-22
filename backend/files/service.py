@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+
+import psutil
 from pathlib import Path
 
 from send2trash import send2trash
@@ -102,3 +104,30 @@ def rename_item(source: str | Path, destination: str | Path) -> dict:
         "source": str(src),
         "destination": str(dst),
     }
+
+
+def list_roots() -> dict:
+    roots: list[dict] = []
+    seen: set[str] = set()
+    for partition in psutil.disk_partitions(all=False):
+        mountpoint = str(partition.mountpoint)
+        key = mountpoint.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            usage = shutil.disk_usage(mountpoint)
+        except OSError:
+            usage = None
+        roots.append(
+            {
+                "path": mountpoint,
+                "device": str(partition.device),
+                "filesystem": str(partition.fstype or ""),
+                "options": str(partition.opts or ""),
+                "total": int(usage.total) if usage else None,
+                "free": int(usage.free) if usage else None,
+            }
+        )
+    roots.sort(key=lambda row: row["path"].casefold())
+    return {"roots": roots}

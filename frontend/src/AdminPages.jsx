@@ -39,6 +39,7 @@ export function DisksAdmin({ setError }) {
   const [unlockPlan, setUnlockPlan] = useState(null)
   const [unlockConfirm, setUnlockConfirm] = useState('')
   const [formatPlan, setFormatPlan] = useState(null)
+  const [formatDirty, setFormatDirty] = useState(false)
   const [formatConfirm, setFormatConfirm] = useState('')
   const [fs, setFs] = useState('NTFS')
   const [cluster, setCluster] = useState(16384)
@@ -106,6 +107,7 @@ export function DisksAdmin({ setError }) {
         }),
       })
       setFormatPlan(value)
+      setFormatDirty(false)
       setFormatConfirm('')
     } catch (e) { setError(e.message) }
   }
@@ -124,6 +126,7 @@ export function DisksAdmin({ setError }) {
         }),
       })
       setFormatPlan(null)
+      setFormatDirty(false)
       await reload()
     } catch (e) { setError(e.message) }
   }
@@ -241,7 +244,11 @@ export function DisksAdmin({ setError }) {
       const write = d.write_access || {}
       return <Panel key={d.number} title={`Disk ${d.number} · ${d.friendly_name}`} className="disk-card">
         <div className="disk-head">
-          <div className="metrics">
+          {formatDirty && <div className="plan-stale">
+        Параметры изменены. Перед destructive execution пересчитай план.
+        <button onClick={() => prepareFormat(formatPlan.disk.number)}>Пересчитать план</button>
+      </div>}
+      <div className="metrics">
             <Metric label="Размер" value={fmtBytes(d.size)} />
             <Metric label="Bus" value={d.bus_type} />
             <Metric label="Partition style" value={d.partition_style} />
@@ -317,28 +324,28 @@ export function DisksAdmin({ setError }) {
             setFs(next)
             const profile = filesystemProfile(next)
             if (profile?.recommended_cluster) setCluster(profile.recommended_cluster)
-            setFormatPlan(null)
+            setFormatDirty(true)
           }}>
             {(capabilities.filesystems || []).map(item => <option key={item.key} value={item.key}>{item.title}</option>)}
           </select>
         </div>
         <div>
           <label>Cluster / allocation unit</label>
-          <select value={cluster} onChange={e => { setCluster(Number(e.target.value)); setFormatPlan(null) }}>
+          <select value={cluster} onChange={e => { setCluster(Number(e.target.value)); setFormatDirty(true) }}>
             {(filesystemProfile(fs)?.clusters || [4096, 16384, 65536]).map(x => <option key={x} value={x}>{x < 1024 ** 2 ? `${x / 1024} KiB` : `${x / 1024 ** 2} MiB`}</option>)}
           </select>
         </div>
         <div>
           <label>Метка тома</label>
-          <input value={label} onChange={e => { setLabel(e.target.value); setFormatPlan(null) }} />
+          <input value={label} onChange={e => { setLabel(e.target.value); setFormatDirty(true) }} />
         </div>
         <div>
           <label>Размер первого тома, GiB</label>
-          <input placeholder="пусто = максимум" value={formatSizeGiB} onChange={e => { setFormatSizeGiB(e.target.value); setFormatPlan(null) }} />
+          <input placeholder="пусто = максимум" value={formatSizeGiB} onChange={e => { setFormatSizeGiB(e.target.value); setFormatDirty(true) }} />
         </div>
         <div>
           <label>Буква</label>
-          <input maxLength={2} placeholder="auto" value={formatDriveLetter} onChange={e => { setFormatDriveLetter(e.target.value.toUpperCase().replace(':', '')); setFormatPlan(null) }} />
+          <input maxLength={2} placeholder="auto" value={formatDriveLetter} onChange={e => { setFormatDriveLetter(e.target.value.toUpperCase().replace(':', '')); setFormatDirty(true) }} />
         </div>
       </div>
       <div className="preset-hint">
@@ -353,7 +360,7 @@ export function DisksAdmin({ setError }) {
       {(formatPlan.warnings || []).slice(1).map(item => <p className="muted" key={item}>• {item}</p>)}
       <label>Для выполнения введи: <b>{formatPlan.confirmation}</b></label>
       <input value={formatConfirm} onChange={e => setFormatConfirm(e.target.value)} />
-      <button className="danger-button" disabled={formatConfirm !== formatPlan.confirmation || !diskByNumber(formatPlan.disk.number)?.write_access?.allowed} onClick={executeFormat}>Очистить и создать том</button>
+      <button className="danger-button" disabled={formatDirty || formatConfirm !== formatPlan.confirmation || !diskByNumber(formatPlan.disk.number)?.write_access?.allowed} onClick={executeFormat}>Очистить и создать том</button>
     </Panel>}
 
     {partitionDraft && <Panel title={`Создать раздел / том на Disk ${partitionDraft.diskNumber}`}>
@@ -751,6 +758,7 @@ export function SecurityAdmin({ setError }) {
       <div className="actions"><button className="primary" disabled={running} onClick={start}>Scan</button><button className="stop-button" disabled={!running || !jobId} onClick={stop}>■ Stop</button></div>
       {job && <>
         <div className="metrics"><Metric label="Engine" value={job.engine_title} /><Metric label="Status" value={job.status} /><Metric label="Threats" value={job.threats ?? '—'} /><Metric label="Exit" value={job.exit_code ?? '—'} /></div>
+        <JobProgress running={running} label="Движок Defender/ClamAV не сообщает DiskShell надёжный общий объём работы." />
         {job.output && <pre className="security-output">{job.output}</pre>}
       </>}
     </Panel>

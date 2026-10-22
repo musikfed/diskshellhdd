@@ -65,6 +65,9 @@ def start_file_job(operation: str, source: str, destination: str) -> dict[str, A
         "status": "queued",
         "files": 0,
         "bytes": 0,
+        "total_files": None,
+        "total_bytes": None,
+        "progress_percent": None,
         "current_path": str(src),
         "started_at": None,
         "finished_at": None,
@@ -89,8 +92,57 @@ def _update(job_id: str, **values: Any) -> None:
         _jobs[job_id].update(values)
 
 
-def _copy_file(job_id: str, source: Path, destination: Path, event: threading.Event) -> None:
-    partial = destination.with_name(f".{destination.name}.diskshell-partial-{uuid.uuid4().hex}")
+def _refresh_percent(job_id: str) -> None:
+    with _lock:
+        job = _jobs[job_id]
+        total = int(job.get("total_bytes") or 0)
+        copied = int(job.get("bytes") or 0)
+        job["progress_percent"] = (
+            min(100.0, copied * 100.0 / total) if total > 0 else None
+        )
+
+
+def _measure_source(source: Path, event: threading.Event) -> tuple[int, int]:
+    _check_cancel(event)
+    if source.is_file():
+        return 1, int(source.stat().st_size)
+
+    files_count = 0
+    bytes_total = 0
+    for root, dirs, files in os.walk(source, followlinks=False):
+        _check_cancel(event)
+        root_path = Path(root)
+
+        kept_dirs: list[str] = []
+        for name in dirs:
+            child = root_path / name
+            if child.is_symlink() or getattr(child, "is_junction", lambda: False)():
+                continue
+            kept_dirs.append(name)
+        dirs[:] = kept_dirs
+
+        for name in files:
+            _check_cancel(event)
+            child = root_path / name
+            if child.is_symlink():
+                continue
+            try:
+                bytes_total += int(child.stat().st_size)
+                files_count += 1
+            except (FileNotFoundError, PermissionError, OSError):
+                continue
+    return files_count, bytes_total
+
+
+def _copy_file(
+    job_id: str,
+    source: Path,
+    destination: Path,
+    event: threading.Event,
+) -> None:
+    partial = destination.with_name(
+        f".{destination.name}.diskshell-partial-{uuid.uuid4().hex}"
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         with source.open("rb") as src, partial.open("xb") as dst:
@@ -104,11 +156,14 @@ def _copy_file(job_id: str, source: Path, destination: Path, event: threading.Ev
                     job = _jobs[job_id]
                     job["bytes"] += len(chunk)
                     job["current_path"] = str(source)
+                _refresh_percent(job_id)
             dst.flush()
             os.fsync(dst.fileno())
+
         shutil.copystat(source, partial, follow_symlinks=False)
         if partial.stat().st_size != source.stat().st_size:
             raise OSError("Copied file size verification failed")
+
         _check_cancel(event)
         os.replace(partial, destination)
         with _lock:
@@ -118,7 +173,12 @@ def _copy_file(job_id: str, source: Path, destination: Path, event: threading.Ev
             partial.unlink(missing_ok=True)
 
 
-def _copy_tree(job_id: str, source: Path, destination: Path, event: threading.Event) -> None:
+def _copy_tree(
+    job_id: str,
+    source: Path,
+    destination: Path,
+    event: threading.Event,
+) -> None:
     destination.mkdir(parents=True, exist_ok=False)
     try:
         for root, dirs, files in os.walk(source, followlinks=False):
@@ -163,15 +223,29 @@ def _run_job(
     destination: Path,
     event: threading.Event,
 ) -> None:
-    _update(job_id, status="running", started_at=_now())
+    _update(job_id, status="measuring", started_at=_now())
     try:
         _check_cancel(event)
+        total_files, total_bytes = _measure_source(source, event)
+        _update(
+            job_id,
+            total_files=total_files,
+            total_bytes=total_bytes,
+            progress_percent=0.0 if total_bytes > 0 else None,
+            status="running",
+        )
+
         if operation == "move" and _same_volume(source, destination):
             destination.parent.mkdir(parents=True, exist_ok=True)
             _check_cancel(event)
             os.replace(source, destination)
-            size = destination.stat().st_size if destination.is_file() else 0
-            _update(job_id, files=1, bytes=size, current_path=str(destination))
+            _update(
+                job_id,
+                files=total_files,
+                bytes=total_bytes,
+                progress_percent=100.0,
+                current_path=str(destination),
+            )
         else:
             _copy(job_id, source, destination, event)
             _check_cancel(event)
@@ -191,8 +265,6 @@ def _run_job(
         return
     except Exception as exc:  # noqa: BLE001
         if destination.exists() and operation == "move":
-            # Cross-volume move never removes source until copy completed.
-            # If publish failed, remove our destination and keep the source.
             try:
                 if destination.is_dir():
                     shutil.rmtree(destination, ignore_errors=True)
@@ -211,7 +283,7 @@ def _run_job(
         with _lock:
             _cancel_events.pop(job_id, None)
 
-    _update(job_id, status="completed", finished_at=_now())
+    _update(job_id, status="completed", progress_percent=100.0, finished_at=_now())
 
 
 def cancel_file_job(job_id: str) -> dict[str, Any]:

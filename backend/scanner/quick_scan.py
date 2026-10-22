@@ -17,6 +17,11 @@ PROGRESS_FILE_INTERVAL = 250
 SKIP_DIRECTORY_NAMES = {"system volume information"}
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+CancelCallback = Callable[[], bool]
+
+
+class ScanCancelled(RuntimeError):
+    pass
 
 
 def _is_link_or_junction(path: Path) -> bool:
@@ -26,7 +31,11 @@ def _is_link_or_junction(path: Path) -> bool:
     return bool(is_junction and is_junction())
 
 
-def scan(root: Path, progress_callback: ProgressCallback | None = None) -> int:
+def scan(
+    root: Path,
+    progress_callback: ProgressCallback | None = None,
+    cancel_callback: CancelCallback | None = None,
+) -> int:
     root = root.resolve(strict=True)
     if not root.is_dir():
         raise NotADirectoryError(root)
@@ -68,9 +77,14 @@ def scan(root: Path, progress_callback: ProgressCallback | None = None) -> int:
                 }
             )
 
+        def check_cancel() -> None:
+            if cancel_callback is not None and cancel_callback():
+                raise ScanCancelled("Scan cancelled by operator")
+
         report(str(root))
 
         while stack:
+            check_cancel()
             current = stack.pop()
             current_str = str(current)
             parent_str = None if current == root else str(current.parent)
@@ -82,6 +96,7 @@ def scan(root: Path, progress_callback: ProgressCallback | None = None) -> int:
             try:
                 with os.scandir(current) as entries:
                     for entry in entries:
+                        check_cancel()
                         try:
                             entry_path = Path(entry.path)
                             if _is_link_or_junction(entry_path):
@@ -199,6 +214,17 @@ def scan(root: Path, progress_callback: ProgressCallback | None = None) -> int:
         print(f"Errors:      {errors_count:,}")
         return scan_id
 
+    except ScanCancelled:
+        if scan_id is not None:
+            _mark_scan_cancelled(
+                connection,
+                scan_id,
+                files_count,
+                directories_count,
+                bytes_total,
+                errors_count,
+            )
+        raise
     except (sqlite3.Error, OSError, ValueError):
         if scan_id is not None:
             _mark_scan_failed(connection, scan_id, files_count, directories_count, bytes_total, errors_count)
@@ -217,6 +243,28 @@ def _write_file_batch(connection: sqlite3.Connection, rows: list[tuple[Any, ...]
         """,
         rows,
     )
+
+
+def _mark_scan_cancelled(
+    connection: sqlite3.Connection,
+    scan_id: int,
+    files_count: int,
+    directories_count: int,
+    bytes_total: int,
+    errors_count: int,
+) -> None:
+    try:
+        connection.execute(
+            """
+            UPDATE scan_sessions SET completed_at = CURRENT_TIMESTAMP, status = 'cancelled',
+                files_count = ?, directories_count = ?, bytes_total = ?, errors_count = ?
+            WHERE id = ?
+            """,
+            (files_count, directories_count, bytes_total, errors_count, scan_id),
+        )
+        connection.commit()
+    except sqlite3.Error:
+        return
 
 
 def _mark_scan_failed(

@@ -1,6 +1,6 @@
-# Развёртывание DiskShell 0.6.0
+# Развёртывание DiskShell 0.6.3
 
-DiskShell 0.6.0 — первая зафиксированная рабочая admin baseline. GitHub `main` считается источником истины.
+DiskShell 0.6.3 развивает первую рабочую admin baseline; GitHub `main` считается источником истины. GitHub `main` считается источником истины.
 
 ## Важно про права администратора
 
@@ -150,3 +150,8 @@ SQLite находится в `data/diskshell.db` по умолчанию. Миг
 Если база и история важны, перед жёстким reset репозитория сделай копию `data/`.
 
 См. также [SAFETY.ru.md](SAFETY.ru.md) и [ARCHITECTURE.ru.md](ARCHITECTURE.ru.md).
+
+
+### Commander 0.6.3
+
+После обновления frontend поддерживает групповое выделение `Ctrl+Click`, `Shift+Click`, `Ctrl+A`, Select all / Clear. Copy/Move выполняются одним batch job с общим прогрессом. Rename/View/Extract намеренно остаются single-item операциями.

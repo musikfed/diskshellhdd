@@ -8,7 +8,7 @@ from backend.vault.service import (
     VaultLocked,
     create_vault,
     export_file,
-    import_file,
+    import_path,
     list_items,
     lock,
     unlock,
@@ -96,7 +96,7 @@ def items():
 def import_item():
     payload = request.get_json(silent=True) or {}
     try:
-        return jsonify(import_file(_token(), str(payload["source"]))), 201
+        return jsonify(import_path(_token(), str(payload["source"]))), 201
     except (KeyError, FileNotFoundError, VaultError, VaultLocked, OSError) as exc:
         return jsonify({"error": "vault_import_failed", "message": str(exc)}), 400
 

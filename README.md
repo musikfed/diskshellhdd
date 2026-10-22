@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.1
+# DiskShell HDD 0.6.2
 
 [Русская версия](README.ru.md) · English
 
@@ -140,3 +140,12 @@ System / Boot / Application disks remain backend-protected. Typed confirmation f
 - Commander remembers LEFT/RIGHT paths, active pane, Smart folders, and archive format;
 - a page-level React error boundary shows runtime errors instead of a blank dark page;
 - CI runs ESLint `no-undef` before the Vite build.
+
+## Vault logical volume / folder workflow 0.6.2
+
+- Vault operates on mounted logical volumes (`C:\\`, `F:\\`, `W:\\`), not directly on physical disks;
+- an integrated browser navigates folders and files inside the selected volume;
+- the operator can select one file or the current folder tree;
+- folder import is recursive and preserves relative paths;
+- export selects a logical volume and destination directory, restoring nested paths;
+- physical disk selectors remain reserved for partitioning, raw access and surface diagnostics.

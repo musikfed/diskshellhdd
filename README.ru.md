@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.1
+# DiskShell HDD 0.6.2
 
 Русский · [English](README.md)
 
@@ -184,3 +184,12 @@ System / Boot / Application disk остаются backend-protected и тумб�
 - Commander сохраняет LEFT/RIGHT path, активную панель, Smart folders и archive format;
 - page-level React error boundary показывает текст ошибки вместо пустого тёмного экрана;
 - CI теперь запускает ESLint `no-undef` перед Vite build.
+
+## Vault logical volume / folder workflow 0.6.2
+
+- Vault выбирает не physical disk, а смонтированный логический том (`C:\\`, `F:\\`, `W:\\`);
+- внутри выбранного тома доступен встроенный browser каталогов и файлов;
+- можно выбрать один файл или текущую папку целиком;
+- импорт папки выполняется рекурсивно с сохранением относительных путей;
+- при экспорте выбирается логический том и каталог назначения; вложенная структура восстанавливается;
+- physical disk selector по-прежнему используется только там, где речь о разметке, RAW access или диагностике поверхности.

@@ -1,4 +1,4 @@
-# Deploying DiskShell 0.5 on Windows 11
+# Deploying DiskShell 0.5.1.1 on Windows 11
 
 ## Clean installation / recovery
 
@@ -42,7 +42,7 @@ System / Boot / Application disks cannot be unlocked.
 
 ## Stop buttons
 
-Quick Index, Placement Executor, and Security Scan support cooperative cancellation.
+Quick Index, Placement Executor, two-pane Files Copy/Move, and Security Scan support cooperative cancellation.
 
 ## Recovery
 

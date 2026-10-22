@@ -22,7 +22,7 @@ from backend.files.write_authorization import file_write_state
 from backend.storage_brain.service import ensure_defaults
 
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 
 
 def create_app() -> Flask:

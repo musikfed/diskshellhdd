@@ -10,7 +10,6 @@ from backend.storage_brain.service import (
     capacity_policy,
     create_placement_plan,
     get_latest_plan,
-    get_plan,
     get_plan_page,
     list_storage_classes,
     update_plan_selection,

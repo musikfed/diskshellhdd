@@ -4,7 +4,13 @@ import io
 
 from flask import Blueprint, jsonify, request, send_file
 
-from backend.archives.service import ArchiveWriteBlocked, UnsupportedArchive, extract_archive, list_archive
+from backend.archives.service import (
+    ArchiveWriteBlocked,
+    UnsupportedArchive,
+    create_archive,
+    extract_archive,
+    list_archive,
+)
 from backend.preview.service import preview_metadata, thumbnail_bytes
 from backend.vision.service import capabilities, detect_faces
 
@@ -71,3 +77,29 @@ def faces():
         return jsonify(detect_faces(path))
     except (FileNotFoundError, OSError, ValueError) as exc:
         return jsonify({"error": "face_detection_failed", "message": str(exc)}), 400
+
+
+@bp.post("/archive/create")
+def create():
+    payload = request.get_json(silent=True) or {}
+    try:
+        sources = [str(item) for item in payload["sources"]]
+        return jsonify(
+            create_archive(
+                sources=sources,
+                destination=str(payload["destination"]),
+                archive_format=str(payload.get("format", "zip")),
+            )
+        ), 201
+    except ArchiveWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
+    except (
+        KeyError,
+        TypeError,
+        FileNotFoundError,
+        FileExistsError,
+        OSError,
+        UnsupportedArchive,
+        ValueError,
+    ) as exc:
+        return jsonify({"error": "archive_create_failed", "message": str(exc)}), 400

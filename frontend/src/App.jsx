@@ -296,7 +296,7 @@ function People({ scanId, setError }) {
     {selected && <Card title={selected.name}><div className="tabs">{['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}</div><div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div></Card>}</div>
 }
 
-function Vault({ health, setError }) {
+function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
   const [status, setStatus] = useState(null)
   const [identity, setIdentity] = useState('')
   const [secret, setSecret] = useState('')
@@ -304,10 +304,16 @@ function Vault({ health, setError }) {
   const [recoveryShown, setRecoveryShown] = useState('')
   const [unlocked, setUnlocked] = useState(false)
   const [items, setItems] = useState([])
-  const [source, setSource] = useState('')
-  const [destination, setDestination] = useState('')
+  const [source, setSource] = useState(() => localStorage.getItem('vaultSourcePath') || activeVolume || '')
+  const [destination, setDestination] = useState(() => localStorage.getItem('vaultDestinationPath') || activeVolume || '')
   const refreshStatus = () => api('/api/vault/status').then(setStatus).catch(e => setError(e.message))
   useEffect(refreshStatus, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (source) localStorage.setItem('vaultSourcePath', source)
+  }, [source])
+  useEffect(() => {
+    if (destination) localStorage.setItem('vaultDestinationPath', destination)
+  }, [destination])
   async function loadItems() { try { const x = await api('/api/vault/items'); setItems(x.items || []); setUnlocked(true) } catch { setUnlocked(false) } }
   async function create() { try { const x = await api('/api/vault/create', { method:'POST', body:JSON.stringify({ identity, secret }) }); setRecoveryShown(x.recovery_key); refreshStatus() } catch (e) { setError(e.message) } }
   async function unlock() { try { await api('/api/vault/unlock', { method:'POST', body:JSON.stringify({ identity, secret }) }); await loadItems() } catch (e) { setError(e.message) } }
@@ -318,7 +324,53 @@ function Vault({ health, setError }) {
   return <div className="stack"><Card title="Encrypted Vault"><div className="hero"><div className="mascot">🔐</div><div><h2>Argon2id + AES-256-GCM</h2><p>Chunked encryption для больших файлов. Unlock key остаётся в RAM backend; браузер получает HttpOnly SameSite cookie.</p><p className="path">{status?.root}</p></div></div></Card>
     {!status?.initialized && <Card title="Создать Vault"><input placeholder="Идентификатор (например СНИЛС)" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Дополнительная секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button disabled={!health?.safety?.vault_writes} onClick={create}>Создать</button>{recoveryShown && <div className="recovery"><b>Recovery key — сохрани отдельно:</b><code>{recoveryShown}</code></div>}</Card>}
     {status?.initialized && !unlocked && <div className="grid two"><Card title="Unlock"><input placeholder="Идентификатор" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button className="primary" onClick={unlock}>Unlock</button></Card><Card title="Recovery"><input placeholder="Recovery key" value={recovery} onChange={e=>setRecovery(e.target.value)} /><button onClick={unlockRecovery}>Unlock recovery</button></Card></div>}
-    {unlocked && <Card title="Vault objects"><div className="actions"><button onClick={lock}>Lock now</button><input placeholder="Путь файла для импорта" value={source} onChange={e=>setSource(e.target.value)} /><button disabled={!health?.safety?.vault_writes || !source} onClick={importItem}>Encrypt + import</button></div><label>Export destination</label><input value={destination} onChange={e=>setDestination(e.target.value)} /><div className="vault-list">{items.map(i => <div key={i.id}><span>🔒 {i.name}</span><span>{fmtBytes(i.size)}</span><button disabled={!health?.safety?.vault_writes || !destination} onClick={()=>exportItem(i)}>Export</button></div>)}</div></Card>}
+    {unlocked && <Card title="Vault objects">
+      <div className="vault-path-grid">
+        <div>
+          <label>Import source volume</label>
+          <select
+            value={roots.some(item => source.startsWith(item.path)) ? roots.find(item => source.startsWith(item.path))?.path || '' : ''}
+            onChange={e => {
+              const value = e.target.value
+              if (!value) return
+              setActiveVolume(value)
+              setSource(value)
+            }}
+          >
+            <option value="">Выбрать том…</option>
+            {roots.map(item => <option key={item.path} value={item.path}>
+              {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+            </option>)}
+          </select>
+          <label>Файл / путь для шифрования</label>
+          <input placeholder="Путь файла для импорта" value={source} onChange={e=>setSource(e.target.value)} />
+        </div>
+        <div>
+          <label>Export destination volume</label>
+          <select
+            value={roots.some(item => destination.startsWith(item.path)) ? roots.find(item => destination.startsWith(item.path))?.path || '' : ''}
+            onChange={e => {
+              const value = e.target.value
+              if (!value) return
+              setActiveVolume(value)
+              setDestination(value)
+            }}
+          >
+            <option value="">Выбрать том…</option>
+            {roots.map(item => <option key={item.path} value={item.path}>
+              {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+            </option>)}
+          </select>
+          <label>Export destination</label>
+          <input value={destination} onChange={e=>setDestination(e.target.value)} />
+        </div>
+      </div>
+      <div className="actions">
+        <button onClick={lock}>Lock now</button>
+        <button disabled={!health?.safety?.vault_writes || !source} onClick={importItem}>Encrypt + import</button>
+      </div>
+      <div className="vault-list">{items.map(i => <div key={i.id}><span>🔒 {i.name}</span><span>{fmtBytes(i.size)}</span><button disabled={!health?.safety?.vault_writes || !destination} onClick={()=>exportItem(i)}>Export</button></div>)}</div>
+    </Card>}
   </div>
 }
 

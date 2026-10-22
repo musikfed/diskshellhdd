@@ -97,9 +97,14 @@ def bind_local_volume(endpoint: dict[str, Any]) -> dict[str, Any]:
         return dict(endpoint)
     result = dict(endpoint)
     probe = local_volume_probe(result["path"])
-    if probe["available"] and probe["identity"]:
+    result["volume_root"] = probe["root"]
+    if probe["identity"]:
         result["volume_identity"] = probe["identity"]
-        result["volume_root"] = probe["root"]
+    elif os.name == "nt":
+        # Never auto-resume onto an unknown Windows volume that merely reused
+        # the same drive letter. The operator must restart the transfer after
+        # that volume is online and can be bound to a concrete identity.
+        result["volume_identity_required"] = True
     return result
 
 
@@ -113,6 +118,14 @@ def local_endpoint_state(endpoint: dict[str, Any]) -> dict[str, Any]:
             "reason": "volume_offline",
             "root": probe["root"],
             "expected_identity": expected,
+            "current_identity": current,
+        }
+    if endpoint.get("volume_identity_required") and not expected:
+        return {
+            "available": False,
+            "reason": "volume_identity_unbound",
+            "root": probe["root"],
+            "expected_identity": None,
             "current_identity": current,
         }
     if expected and current and expected != current:

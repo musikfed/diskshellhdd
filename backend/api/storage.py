@@ -51,7 +51,30 @@ def create_plan():
     try:
         scan_id = int(payload["scan_id"])
         root = Path(str(payload["storage_root"]))
-        return jsonify(create_placement_plan(scan_id, root)), 201
+        source_roots = [
+            str(value)
+            for value in (payload.get("source_roots") or [])
+            if str(value).strip()
+        ]
+        excluded_roots = [
+            str(value)
+            for value in (payload.get("excluded_roots") or [])
+            if str(value).strip()
+        ]
+        return (
+            jsonify(
+                create_placement_plan(
+                    scan_id,
+                    root,
+                    source_roots=source_roots or None,
+                    excluded_roots=excluded_roots,
+                    cross_volume_policy=str(
+                        payload.get("cross_volume_policy", "copy_keep_source")
+                    ),
+                )
+            ),
+            201,
+        )
     except (KeyError, TypeError, ValueError, FileNotFoundError, OSError) as exc:
         return jsonify({"error": "plan_failed", "message": str(exc)}), 400
 

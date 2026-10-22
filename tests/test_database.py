@@ -98,7 +98,14 @@ def test_legacy_database_is_migrated_before_indexes(tmp_path, monkeypatch):
             row[1]
             for row in connection.execute("PRAGMA index_list(files)").fetchall()
         }
+        placement_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(placement_plan_items)"
+            ).fetchall()
+        }
 
     assert {"category", "storage_class", "accessed_ns", "created_ns"} <= file_columns
     assert {"category", "storage_class"} <= directory_columns
+    assert {"selected", "layout_verification"} <= placement_columns
     assert "idx_files_scan_category" in indexes

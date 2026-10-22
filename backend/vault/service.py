@@ -18,6 +18,7 @@ from backend.config import settings
 SESSION_TTL_SECONDS = 15 * 60
 OBJECT_CHUNK_SIZE = 4 * 1024 * 1024
 OBJECT_MAGIC = b"DSVO1\0"
+VAULT_LOCATION_FILE = "vault-location.json"
 _sessions: dict[str, dict] = {}
 
 
@@ -29,12 +30,76 @@ class VaultLocked(VaultError):
     pass
 
 
+def _vault_location_path() -> Path | None:
+    data_dir = getattr(settings, "data_dir", None)
+    if data_dir is None:
+        return None
+    return Path(data_dir).resolve() / VAULT_LOCATION_FILE
+
+
+def _configured_vault_root() -> str:
+    return str(getattr(settings, "vault_root_raw", "") or "").strip()
+
+
+def _saved_vault_root() -> Path | None:
+    locator = _vault_location_path()
+    if locator is None or not locator.exists():
+        return None
+    try:
+        payload = json.loads(locator.read_text(encoding="utf-8"))
+        raw = str(payload["root"]).strip()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise VaultError(f"Invalid Vault location file: {locator}") from exc
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise VaultError(f"Saved Vault location must be absolute: {raw}")
+    return path.resolve()
+
+
+def _effective_vault_root() -> tuple[Path, str]:
+    if _configured_vault_root():
+        return Path(settings.vault_root).resolve(), "environment"
+    saved = _saved_vault_root()
+    if saved is not None:
+        return saved, "saved"
+    return Path(settings.vault_root).resolve(), "default"
+
+
+def _persist_vault_location(root: Path) -> None:
+    if _configured_vault_root():
+        return
+    locator = _vault_location_path()
+    if locator is None:
+        return
+    locator.parent.mkdir(parents=True, exist_ok=True)
+    temp = locator.with_suffix(".tmp")
+    temp.write_text(json.dumps({"version": 1, "root": str(root)}, indent=2), encoding="utf-8")
+    os.replace(temp, locator)
+
+
+def _validate_creation_root(value: str | Path) -> Path:
+    raw = Path(value).expanduser()
+    if not raw.is_absolute():
+        raise VaultError("Vault location must be an absolute path")
+    root = raw.resolve()
+    if root.anchor and root == Path(root.anchor):
+        raise VaultError("Choose a folder inside the volume, not the volume root itself")
+    if root.exists() and not root.is_dir():
+        raise VaultError("Vault location points to a file, not a directory")
+    return root
+
+
 def vault_status() -> dict:
-    root = settings.vault_root
+    root, location_mode = _effective_vault_root()
     header = root / "vault.json"
+    locator = _vault_location_path()
+    initialized = header.exists()
     return {
-        "initialized": header.exists(),
+        "initialized": initialized,
         "root": str(root),
+        "location_mode": location_mode,
+        "location_editable": bool(not initialized and location_mode != "environment"),
+        "location_file": str(locator) if locator is not None else None,
         "writes_allowed": settings.allow_vault_writes,
         "session_ttl_seconds": SESSION_TTL_SECONDS,
         "encryption": "AES-256-GCM chunked objects + encrypted catalog",
@@ -43,7 +108,7 @@ def vault_status() -> dict:
 
 
 def _vault_root(create: bool = True) -> Path:
-    root = settings.vault_root
+    root, _location_mode = _effective_vault_root()
     if create:
         root.mkdir(parents=True, exist_ok=True)
     return root
@@ -79,7 +144,7 @@ def _unb64(value: str) -> bytes:
     return base64.urlsafe_b64decode(value.encode("ascii"))
 
 
-def create_vault(identity: str, secret: str) -> dict:
+def create_vault(identity: str, secret: str, root: str | Path | None = None) -> dict:
     if not settings.allow_vault_writes:
         raise VaultError("DS_ALLOW_VAULT_WRITES is disabled")
     if not identity.strip():
@@ -87,10 +152,24 @@ def create_vault(identity: str, secret: str) -> dict:
     if len(secret) < 8:
         raise VaultError("Vault secret must be at least 8 characters")
 
-    root = _vault_root()
-    header_path = root / "vault.json"
+    current_root, location_mode = _effective_vault_root()
+    if root is not None and str(root).strip():
+        requested_root = _validate_creation_root(root)
+        if location_mode == "environment" and requested_root != current_root:
+            raise VaultError(
+                "Vault location is fixed by DS_VAULT_ROOT; change the environment setting "
+                "and restart the backend to use another location"
+            )
+        target_root = current_root if location_mode == "environment" else requested_root
+    else:
+        target_root = _validate_creation_root(current_root)
+
+    header_path = target_root / "vault.json"
     if header_path.exists():
         raise VaultError("Vault already exists")
+    if target_root.exists() and any(target_root.iterdir()):
+        raise VaultError("Selected Vault folder must be empty")
+    target_root.mkdir(parents=True, exist_ok=True)
 
     salt = os.urandom(16)
     master_key = os.urandom(32)
@@ -111,9 +190,10 @@ def create_vault(identity: str, secret: str) -> dict:
         "object_format": "DSVO1",
     }
     header_path.write_text(json.dumps(header, indent=2), encoding="utf-8")
-    (root / "objects").mkdir(exist_ok=True)
-    _save_catalog(master_key, [])
-    return {"status": "created", "recovery_key": _b64(recovery_key)}
+    (target_root / "objects").mkdir(exist_ok=True)
+    _save_catalog(master_key, [], root=target_root)
+    _persist_vault_location(target_root)
+    return {"status": "created", "root": str(target_root), "recovery_key": _b64(recovery_key)}
 
 
 def unlock(identity: str, secret: str) -> dict:
@@ -175,16 +255,17 @@ def _read_header() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _catalog_path() -> Path:
-    return _vault_root() / "catalog.bin"
+def _catalog_path(root: Path | None = None) -> Path:
+    return (root if root is not None else _vault_root()) / "catalog.bin"
 
 
-def _save_catalog(master_key: bytes, entries: list[dict]) -> None:
+def _save_catalog(master_key: bytes, entries: list[dict], root: Path | None = None) -> None:
     payload = json.dumps(entries, ensure_ascii=False).encode("utf-8")
     nonce, ciphertext = _seal(master_key, payload, b"diskshell-vault-catalog")
-    temp = _catalog_path().with_suffix(".tmp")
+    path = _catalog_path(root)
+    temp = path.with_suffix(".tmp")
     temp.write_bytes(nonce + ciphertext)
-    os.replace(temp, _catalog_path())
+    os.replace(temp, path)
 
 
 def _load_catalog(master_key: bytes) -> list[dict]:

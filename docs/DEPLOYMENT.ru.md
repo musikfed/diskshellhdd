@@ -1,6 +1,6 @@
-# Развёртывание DiskShell 0.6.3
+# Развёртывание DiskShell 0.6.4
 
-DiskShell 0.6.3 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
+DiskShell 0.6.4 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
 
 ## Важно про права администратора
 
@@ -192,6 +192,31 @@ DS_ALLOW_EXTENT_MOVES=0
 - System / Boot / Application disks остаются backend-protected.
 - `DS_ALLOW_EXTENT_MOVES=0`: реальное принудительное перемещение NTFS extents отключено.
 
+## Первое создание Vault и место хранения
+
+Обычно `DS_VAULT_ROOT` оставляют пустым. На странице **Vault → Создать Vault** выбери логический том и отдельную папку:
+
+```text
+Том: W:\\
+Папка: DiskShellVault
+Итог: W:\\DiskShellVault
+```
+
+DiskShell создаст:
+
+```text
+W:\\DiskShellVault\\
+├── vault.json
+├── catalog.bin
+└── objects\\
+```
+
+Выбранный путь сохраняется в `data/vault-location.json`. Это locator без ключей и паролей; он нужен только для повторного обнаружения Vault после restart backend.
+
+Корень тома `W:\\` использовать как сам Vault нельзя — backend это блокирует. Если требуется фиксированный путь через конфигурацию, задай `DS_VAULT_ROOT=W:\\DiskShellVault`; тогда это жёсткий override и выбор location в UI будет заблокирован.
+
+После создания обязательно сохрани показанный recovery key **вне диска с Vault**. После закрытия предупреждения DiskShell повторно показать его не сможет.
+
 ## Первый рабочий цикл
 
 1. **Диски** — проверь identity диска, topology, filesystem и Health.
@@ -228,6 +253,6 @@ SQLite находится в `data/diskshell.db` по умолчанию. Миг
 См. также [SAFETY.ru.md](SAFETY.ru.md) и [ARCHITECTURE.ru.md](ARCHITECTURE.ru.md).
 
 
-### Commander 0.6.3
+### Commander 0.6.4
 
 После обновления frontend поддерживает групповое выделение `Ctrl+Click`, `Shift+Click`, `Ctrl+A`, Select all / Clear. Copy/Move выполняются одним batch job с общим прогрессом. Rename/View/Extract намеренно остаются single-item операциями.

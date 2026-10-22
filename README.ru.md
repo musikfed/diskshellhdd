@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.3
+# DiskShell HDD 0.6.4
 
 Русский · [English](README.md)
 
@@ -199,7 +199,20 @@ System / Boot / Application disk остаются backend-protected и тумб�
 - physical disk selector по-прежнему используется только там, где речь о разметке, RAW access или диагностике поверхности.
 
 
-## Commander multi-selection 0.6.3
+## Vault location / first creation
+
+При первом создании Vault место хранения теперь выбирается прямо в UI: **логический том + папка**, например `W:\\DiskShellVault`.
+
+- Общий `Active volume` больше не является скрытой настройкой Vault: итоговый путь явно показан до создания.
+- В корень тома (`W:\\`) Vault создать нельзя — нужна отдельная папка.
+- После Create DiskShell создаёт внутри выбранной папки `vault.json`, `catalog.bin` и `objects\\`.
+- Выбранный путь сохраняется в `data/vault-location.json`, поэтому после перезапуска backend открывается тот же Vault.
+- Locator хранит только путь, без identity, secret, master key и recovery key.
+- `DS_VAULT_ROOT` остаётся жёстким admin override: если он задан, UI не даёт выбрать другое место.
+- Существующий Vault автоматически не переносится; выбор location относится к первому созданию.
+- Recovery key после Create остаётся виден до явного подтверждения «Я сохранил recovery key».
+
+## Commander multi-selection 0.6.4
 
 - обычный клик — выбрать один объект;
 - `Ctrl+Click` — добавить/убрать отдельный файл или папку;

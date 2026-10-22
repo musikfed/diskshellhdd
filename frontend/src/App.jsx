@@ -403,26 +403,195 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
   const [recoveryShown, setRecoveryShown] = useState('')
   const [unlocked, setUnlocked] = useState(false)
   const [items, setItems] = useState([])
+  const [vaultVolume, setVaultVolume] = useState(() => activeVolume || '')
+  const [vaultFolder, setVaultFolder] = useState('DiskShellVault')
   const [source, setSource] = useState(() => localStorage.getItem('vaultSourcePath') || activeVolume || '')
   const [destination, setDestination] = useState(() => localStorage.getItem('vaultDestinationPath') || activeVolume || '')
   const refreshStatus = () => api('/api/vault/status').then(setStatus).catch(e => setError(e.message))
+
   useEffect(refreshStatus, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!vaultVolume && (activeVolume || roots[0]?.path)) {
+      setVaultVolume(activeVolume || roots[0]?.path || '')
+    }
+  }, [activeVolume, roots, vaultVolume])
   useEffect(() => {
     if (source) localStorage.setItem('vaultSourcePath', source)
   }, [source])
   useEffect(() => {
     if (destination) localStorage.setItem('vaultDestinationPath', destination)
   }, [destination])
-  async function loadItems() { try { const x = await api('/api/vault/items'); setItems(x.items || []); setUnlocked(true) } catch { setUnlocked(false) } }
-  async function create() { try { const x = await api('/api/vault/create', { method:'POST', body:JSON.stringify({ identity, secret }) }); setRecoveryShown(x.recovery_key); refreshStatus() } catch (e) { setError(e.message) } }
-  async function unlock() { try { await api('/api/vault/unlock', { method:'POST', body:JSON.stringify({ identity, secret }) }); await loadItems() } catch (e) { setError(e.message) } }
-  async function unlockRecovery() { try { await api('/api/vault/unlock-recovery', { method:'POST', body:JSON.stringify({ recovery_key: recovery }) }); await loadItems() } catch (e) { setError(e.message) } }
-  async function lock() { await api('/api/vault/lock', { method:'POST', body:'{}' }); setUnlocked(false); setItems([]) }
-  async function importItem() { try { await api('/api/vault/import', { method:'POST', body:JSON.stringify({ source }) }); await loadItems() } catch (e) { setError(e.message) } }
-  async function exportItem(item) { try { await api('/api/vault/export', { method:'POST', body:JSON.stringify({ object_id:item.id, destination }) }) } catch (e) { setError(e.message) } }
-  return <div className="stack"><Card title="Encrypted Vault"><div className="hero"><div className="mascot">🔐</div><div><h2>Argon2id + AES-256-GCM</h2><p>Chunked encryption для больших файлов. Unlock key остаётся в RAM backend; браузер получает HttpOnly SameSite cookie.</p><p className="path">{status?.root}</p></div></div></Card>
-    {!status?.initialized && <Card title="Создать Vault"><input placeholder="Идентификатор (например СНИЛС)" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Дополнительная секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button disabled={!health?.safety?.vault_writes} onClick={create}>Создать</button>{recoveryShown && <div className="recovery"><b>Recovery key — сохрани отдельно:</b><code>{recoveryShown}</code></div>}</Card>}
-    {status?.initialized && !unlocked && <div className="grid two"><Card title="Unlock"><input placeholder="Идентификатор" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button className="primary" onClick={unlock}>Unlock</button></Card><Card title="Recovery"><input placeholder="Recovery key" value={recovery} onChange={e=>setRecovery(e.target.value)} /><button onClick={unlockRecovery}>Unlock recovery</button></Card></div>}
+
+  const locationEditable = status?.location_editable !== false
+  const folderName = vaultFolder.trim().replace(/^[\\/]+/, '')
+  const createRoot = locationEditable
+    ? (vaultVolume && folderName ? joinPath(vaultVolume, folderName) : '')
+    : (status?.root || '')
+
+  async function loadItems() {
+    try {
+      const x = await api('/api/vault/items')
+      setItems(x.items || [])
+      setUnlocked(true)
+    } catch {
+      setUnlocked(false)
+    }
+  }
+
+  async function create() {
+    try {
+      const x = await api('/api/vault/create', {
+        method: 'POST',
+        body: JSON.stringify({ identity, secret, root: createRoot }),
+      })
+      setRecoveryShown(x.recovery_key)
+      await refreshStatus()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  async function unlock() {
+    try {
+      await api('/api/vault/unlock', {
+        method: 'POST',
+        body: JSON.stringify({ identity, secret }),
+      })
+      await loadItems()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  async function unlockRecovery() {
+    try {
+      await api('/api/vault/unlock-recovery', {
+        method: 'POST',
+        body: JSON.stringify({ recovery_key: recovery }),
+      })
+      await loadItems()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  async function lock() {
+    await api('/api/vault/lock', { method: 'POST', body: '{}' })
+    setUnlocked(false)
+    setItems([])
+  }
+
+  async function importItem() {
+    try {
+      await api('/api/vault/import', {
+        method: 'POST',
+        body: JSON.stringify({ source }),
+      })
+      await loadItems()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  async function exportItem(item) {
+    try {
+      await api('/api/vault/export', {
+        method: 'POST',
+        body: JSON.stringify({ object_id: item.id, destination }),
+      })
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  return <div className="stack">
+    <Card title="Encrypted Vault">
+      <div className="hero">
+        <div className="mascot">🔐</div>
+        <div>
+          <h2>Argon2id + AES-256-GCM</h2>
+          <p>Chunked encryption для больших файлов. Unlock key остаётся в RAM backend; браузер получает HttpOnly SameSite cookie.</p>
+          <p className="path">{status?.root}</p>
+          <small>
+            {status?.initialized
+              ? 'Это фактическое постоянное местоположение Vault.'
+              : status?.location_mode === 'environment'
+                ? 'Путь зафиксирован через DS_VAULT_ROOT.'
+                : 'До первого создания это только путь по умолчанию; место можно выбрать ниже.'}
+          </small>
+        </div>
+      </div>
+    </Card>
+
+    {!status?.initialized && <Card title="Создать Vault">
+      <label>Том для зашифрованного Vault</label>
+      <select
+        value={vaultVolume}
+        disabled={!locationEditable}
+        onChange={e => {
+          const value = e.target.value
+          setVaultVolume(value)
+          if (value) setActiveVolume(value)
+        }}
+      >
+        <option value="">Выбрать логический том…</option>
+        {roots.map(item => <option key={item.path} value={item.path}>
+          {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+        </option>)}
+      </select>
+
+      <label>Папка Vault на выбранном томе</label>
+      <input
+        disabled={!locationEditable}
+        placeholder="DiskShellVault"
+        value={vaultFolder}
+        onChange={e => setVaultFolder(e.target.value)}
+      />
+
+      <div className="vault-browser-selected">
+        <small>Будет создано</small>
+        <code>{createRoot || 'Выбери том и папку'}</code>
+      </div>
+      <p className="muted">
+        DiskShell создаст внутри этой папки <code>vault.json</code>, <code>catalog.bin</code> и <code>objects\</code>.
+        Корень тома вроде <code>W:\</code> использовать нельзя.
+      </p>
+      {status?.location_mode === 'environment' && <p className="muted">
+        Место хранения задано через <code>DS_VAULT_ROOT</code>; выбор в UI заблокирован до изменения .env и перезапуска backend.
+      </p>}
+
+      <input placeholder="Идентификатор (например СНИЛС)" value={identity} onChange={e => setIdentity(e.target.value)} />
+      <input type="password" placeholder="Дополнительная секретная фраза" value={secret} onChange={e => setSecret(e.target.value)} />
+      <button
+        disabled={!health?.safety?.vault_writes || !createRoot || !identity.trim() || secret.length < 8}
+        onClick={create}
+      >
+        Создать Vault
+      </button>
+    </Card>}
+
+    {recoveryShown && <Card title="Recovery key · сохранить сейчас" className="danger-card">
+      <p className="warning">
+        Это резервный ключ доступа к Vault. Сохрани его отдельно от диска с Vault. После закрытия этого блока DiskShell больше не сможет показать его из сохранённых данных.
+      </p>
+      <code className="recovery">{recoveryShown}</code>
+      <div className="actions">
+        <button onClick={() => setRecoveryShown('')}>Я сохранил recovery key</button>
+      </div>
+    </Card>}
+
+    {status?.initialized && !unlocked && <div className="grid two">
+      <Card title="Unlock">
+        <input placeholder="Идентификатор" value={identity} onChange={e=>setIdentity(e.target.value)} />
+        <input type="password" placeholder="Секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} />
+        <button className="primary" onClick={unlock}>Unlock</button>
+      </Card>
+      <Card title="Recovery">
+        <input placeholder="Recovery key" value={recovery} onChange={e=>setRecovery(e.target.value)} />
+        <button onClick={unlockRecovery}>Unlock recovery</button>
+      </Card>
+    </div>}
+
     {unlocked && <Card title="Vault objects">
       <div className="vault-path-grid">
         <VaultPathBrowser
@@ -450,8 +619,15 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
           Encrypt file / folder
         </button>
       </div>
-      <p className="muted">Если выбрана папка, Vault шифрует все файлы рекурсивно и сохраняет относительные пути. При экспорте структура каталогов восстанавливается внутри выбранной папки назначения.</p>
-      <div className="vault-list">{items.map(i => <div key={i.id}><span>🔒 {i.relative_path || i.name}</span><span>{fmtBytes(i.size)}</span><button disabled={!health?.safety?.vault_writes || !destination} onClick={()=>exportItem(i)}>Export</button></div>)}</div>
+      <p className="muted">
+        Если выбрана папка, Vault шифрует все файлы рекурсивно и сохраняет относительные пути.
+        При экспорте структура каталогов восстанавливается внутри выбранной папки назначения.
+      </p>
+      <div className="vault-list">{items.map(i => <div key={i.id}>
+        <span>🔒 {i.relative_path || i.name}</span>
+        <span>{fmtBytes(i.size)}</span>
+        <button disabled={!health?.safety?.vault_writes || !destination} onClick={() => exportItem(i)}>Export</button>
+      </div>)}</div>
     </Card>}
   </div>
 }

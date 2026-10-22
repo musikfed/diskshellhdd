@@ -620,7 +620,8 @@ def test_commander_waits_for_offline_endpoint_then_auto_resumes(tmp_path, monkey
 
     calls = {"destination": 0}
 
-    def endpoint_state(endpoint):
+    def endpoint_state(endpoint, connect_remote=True):
+        del connect_remote
         if endpoint["path"] == str(destination):
             calls["destination"] += 1
             if calls["destination"] <= 2:

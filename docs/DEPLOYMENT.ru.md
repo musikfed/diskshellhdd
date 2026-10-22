@@ -1,4 +1,4 @@
-# Развёртывание DiskShell 0.5 на Windows 11
+# Развёртывание DiskShell 0.5.1.1 на Windows 11
 
 ## Чистая установка / восстановление
 
@@ -59,7 +59,7 @@ System / Boot / Application disk разблокировать нельзя.
 
 ## Stop buttons
 
-Stop доступен для Quick Index, Placement Executor и Security Scan. Отмена cooperative: уже завершённая атомарная операция не отменяется молча.
+Stop доступен для Quick Index, Placement Executor, двухпанельных Files Copy/Move и Security Scan. Отмена cooperative: уже завершённая атомарная операция не отменяется молча.
 
 ## Recovery
 

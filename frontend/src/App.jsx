@@ -113,7 +113,10 @@ export default function App() {
       clearInterval(timer)
     }
   }, [])
-  useEffect(() => { localStorage.setItem('activePage', page) }, [page])
+  useEffect(() => {
+    localStorage.setItem('activePage', page)
+    setError('')
+  }, [page])
   useEffect(() => {
     const key = `pageScroll:${page}`
     const restore = requestAnimationFrame(() => {

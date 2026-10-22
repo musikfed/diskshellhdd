@@ -297,10 +297,12 @@ function StorageLab({ scanId, setError }) {
         <div className="metrics">
           <Metric label="Bands" value={data.metrics?.bands ?? '—'} />
           <Metric label="Extents" value={data.metrics?.extents ?? '—'} />
-          <Metric label="Fragmented files" value={data.metrics?.fragmented_files ?? '—'} />
+          <Metric label="Split files" value={data.metrics?.fragmented_files ?? '—'} />
           <Metric label="Max extents / file" value={data.metrics?.max_extents_per_file ?? '—'} />
           <Metric label="Median extent" value={fmtBytes(data.metrics?.median_extent_bytes || 0)} />
-          <Metric label="Smallest extent" value={fmtBytes(data.metrics?.smallest_extent_bytes || 0)} />
+          <Metric label="Smallest split extent" value={fmtBytes(data.metrics?.smallest_split_extent_bytes || 0)} />
+          <Metric label="Tiny split extents" value={data.metrics?.tiny_split_extents ?? '—'} />
+          <Metric label="Layout quality" value={data.metrics?.quality ?? '—'} />
         </div>
 
         <div className="lane-policy-grid">

@@ -4,6 +4,7 @@ import os
 import shutil
 import threading
 import uuid
+from contextlib import ExitStack
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -11,10 +12,12 @@ from typing import Any
 
 from backend.files.service import FileWriteBlocked
 from backend.files.write_authorization import file_writes_allowed
-from backend.remote.service import RemoteNotFound, open_session
+from backend.remote.service import RemoteConnectionError, RemoteNotFound, open_session
 
 
 CHUNK_SIZE = 8 * 1024 * 1024
+TRANSFER_RETRY_LIMIT = 4
+TRANSFER_RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
 
 
 class CommanderCancelled(RuntimeError):
@@ -199,47 +202,152 @@ def _rename_native(source: dict[str, Any], destination: dict[str, Any]) -> None:
         session.rename(_remote_path(source), _remote_path(destination))
 
 
+def _partial_destination_size(endpoint: dict[str, Any]) -> int:
+    if endpoint["kind"] == "local":
+        path = _local_path(endpoint)
+        if not path.exists():
+            return 0
+        if not path.is_file():
+            raise IsADirectoryError(path)
+        return int(path.stat().st_size)
+
+    try:
+        with open_session(endpoint["connection_id"]) as session:
+            entry = session.stat(_remote_path(endpoint))
+    except RemoteNotFound:
+        return 0
+    if entry.is_dir:
+        raise IsADirectoryError(endpoint["path"])
+    return int(entry.size)
+
+
+def _retryable_transfer_error(exc: Exception) -> bool:
+    if isinstance(
+        exc,
+        (
+            CommanderCancelled,
+            PermissionError,
+            FileNotFoundError,
+            FileExistsError,
+            IsADirectoryError,
+            NotADirectoryError,
+            ValueError,
+        ),
+    ):
+        return False
+    if isinstance(
+        exc,
+        (
+            RemoteConnectionError,
+            ConnectionError,
+            TimeoutError,
+            EOFError,
+            OSError,
+        ),
+    ):
+        return True
+    # Paramiko raises SSHException/ChannelException directly for some transport
+    # failures during an already-open SFTPFile read/write.
+    return exc.__class__.__module__.startswith("paramiko")
+
+
 def _copy_file(
     source: dict[str, Any],
     destination: dict[str, Any],
+    expected_size: int,
     event: threading.Event,
     progress,
+    retry_status,
 ) -> None:
-    if destination["kind"] == "local":
-        path = _local_path(destination)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        destination_stream = path.open("xb")
-        destination_session = None
-    else:
-        destination_session = open_session(destination["connection_id"]).__enter__()
-        parent = str(PurePosixPath(_remote_path(destination)).parent)
-        destination_session.makedirs(parent)
-        destination_stream = destination_session.open_write(_remote_path(destination))
+    has_remote = source["kind"] == "remote" or destination["kind"] == "remote"
+    reported = 0
+    retries = 0
 
-    try:
-        if source["kind"] == "local":
-            source_stream = _local_path(source, strict=True).open("rb")
-            source_session = None
-        else:
-            source_session = open_session(source["connection_id"]).__enter__()
-            source_stream = source_session.open_read(_remote_path(source))
-
+    while True:
+        _check_cancel(event)
         try:
-            with source_stream, destination_stream:
-                while True:
+            offset = _partial_destination_size(destination)
+            if offset > int(expected_size):
+                raise OSError(
+                    f"Partial target is larger than source: {offset} > {expected_size}"
+                )
+            if offset != reported:
+                progress(offset - reported, source["path"])
+                reported = offset
+
+            # A disconnect can happen while closing the remote stream after all
+            # data reached the server. Do not retransmit an already-complete file.
+            if offset == int(expected_size):
+                return
+
+            with ExitStack() as stack:
+                if source["kind"] == "local":
+                    source_stream = stack.enter_context(
+                        _local_path(source, strict=True).open("rb")
+                    )
+                    source_stream.seek(offset)
+                else:
+                    source_session = stack.enter_context(
+                        open_session(source["connection_id"])
+                    )
+                    source_stream = stack.enter_context(
+                        source_session.open_read(_remote_path(source), offset=offset)
+                    )
+
+                if destination["kind"] == "local":
+                    path = _local_path(destination)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    mode = "r+b" if path.exists() else "xb"
+                    destination_stream = stack.enter_context(path.open(mode))
+                    destination_stream.seek(offset)
+                else:
+                    destination_session = stack.enter_context(
+                        open_session(destination["connection_id"])
+                    )
+                    parent = str(PurePosixPath(_remote_path(destination)).parent)
+                    destination_session.makedirs(parent)
+                    destination_stream = stack.enter_context(
+                        destination_session.open_write(
+                            _remote_path(destination),
+                            offset=offset,
+                        )
+                    )
+
+                while reported < int(expected_size):
                     _check_cancel(event)
-                    chunk = source_stream.read(CHUNK_SIZE)
+                    remaining = int(expected_size) - reported
+                    chunk = source_stream.read(min(CHUNK_SIZE, remaining))
                     if not chunk:
                         break
                     destination_stream.write(chunk)
                     destination_stream.flush()
+                    reported += len(chunk)
                     progress(len(chunk), source["path"])
-        finally:
-            if source_session is not None:
-                source_session.__exit__(None, None, None)
-    finally:
-        if destination_session is not None:
-            destination_session.__exit__(None, None, None)
+
+            return
+        except CommanderCancelled:
+            raise
+        except Exception as exc:
+            if (
+                not has_remote
+                or retries >= TRANSFER_RETRY_LIMIT
+                or not _retryable_transfer_error(exc)
+            ):
+                raise
+
+            retries += 1
+            retry_status(
+                retries,
+                TRANSFER_RETRY_LIMIT,
+                reported,
+                f"{type(exc).__name__}: {exc}",
+                source["path"],
+            )
+            delay = TRANSFER_RETRY_BACKOFF_SECONDS[
+                min(retries - 1, len(TRANSFER_RETRY_BACKOFF_SECONDS) - 1)
+            ]
+            if event.wait(delay):
+                raise CommanderCancelled("Operation cancelled by operator") from exc
 
 
 def _verify_size(endpoint: dict[str, Any], expected: int) -> None:
@@ -343,6 +451,12 @@ def start_commander_batch_job(
         "progress_percent": 0.0 if total_bytes else None,
         "current_item": 0,
         "current_path": first["source"]["path"],
+        "retries": 0,
+        "retrying": False,
+        "retry_attempt": 0,
+        "retry_limit": TRANSFER_RETRY_LIMIT,
+        "resume_offset": 0,
+        "last_retry_error": None,
         "started_at": None,
         "finished_at": None,
         "error": None,
@@ -386,7 +500,7 @@ def _run_batch_job(
     def progress(count: int, current_path: str) -> None:
         with _lock:
             job = _jobs[job_id]
-            job["bytes"] += int(count)
+            job["bytes"] = max(0, job["bytes"] + int(count))
             job["current_path"] = current_path
             total = int(job["total_bytes"] or 0)
             job["progress_percent"] = (
@@ -394,6 +508,23 @@ def _run_batch_job(
                 if total
                 else None
             )
+
+    def retry_status(
+        attempt: int,
+        retry_limit: int,
+        resume_offset: int,
+        error: str,
+        current_path: str,
+    ) -> None:
+        with _lock:
+            job = _jobs[job_id]
+            job["retries"] += 1
+            job["retrying"] = True
+            job["retry_attempt"] = attempt
+            job["retry_limit"] = retry_limit
+            job["resume_offset"] = int(resume_offset)
+            job["last_retry_error"] = error
+            job["current_path"] = current_path
 
     try:
         for index, transfer in enumerate(transfers, start=1):
@@ -444,12 +575,17 @@ def _run_batch_job(
                         _copy_file(
                             source_file,
                             destination_file,
+                            expected_size,
                             event,
                             progress,
+                            retry_status,
                         )
                         _verify_size(destination_file, expected_size)
                         with _lock:
                             _jobs[job_id]["files"] += 1
+                            _jobs[job_id]["retrying"] = False
+                            _jobs[job_id]["retry_attempt"] = 0
+                            _jobs[job_id]["resume_offset"] = 0
 
                     _check_cancel(event)
                     if operation == "move":

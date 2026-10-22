@@ -2139,6 +2139,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
           <Metric label="Items" value={`${job.items || 0}/${job.total_items || 1}`} />
           <Metric label="Files" value={`${job.files || 0}/${job.total_files || 0}`} />
           <Metric label="Transferred" value={fmtBytes(job.bytes || 0)} />
+          <Metric label="Reconnects" value={job.retries || 0} />
         </div>
         <JobProgress
           percent={job.progress_percent}
@@ -2146,6 +2147,11 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
           label={`${fmtBytes(job.bytes || 0)} / ${fmtBytes(job.total_bytes || 0)}`}
         />
         <p className="path">{job.current_path}</p>
+        {job.retrying && <p className="warning">
+          Remote connection interrupted — reconnect {job.retry_attempt}/{job.retry_limit}.
+          Resume from approximately {fmtBytes(job.resume_offset || 0)}; completed bytes are not restarted.
+          {job.last_retry_error ? ` Last error: ${job.last_retry_error}` : ''}
+        </p>}
         {job.error && <p className="warning">{job.error}</p>}
       </>}
       {!fileWritesAllowed && <small>FILE WRITE LOCKED — Copy/Move/MkDir/Rename/Delete/Archive отключены. Включи тумблер сверху.</small>}

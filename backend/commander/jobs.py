@@ -804,9 +804,10 @@ def _run_batch_job(
                 if transfer["replace_existing"]:
                     _delete_endpoint(destination)
 
-                if operation == "move" and _same_native_location(
-                    source,
-                    destination,
+                if (
+                    operation == "move"
+                    and not transfer["resume_existing"]
+                    and _same_native_location(source, destination)
                 ):
                     _rename_native(source, destination)
                     created_target = True

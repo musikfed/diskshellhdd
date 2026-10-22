@@ -12,6 +12,7 @@ from backend.files.service import (
     copy_item,
     hash_file,
     list_directory,
+    list_roots,
     make_directory,
     move_item,
     rename_item,
@@ -152,3 +153,8 @@ def smart_destination():
         )
     except (KeyError, ValueError, FileNotFoundError, OSError) as exc:
         return jsonify({"error": "smart_destination_failed", "message": str(exc)}), 400
+
+
+@bp.get("/roots")
+def roots():
+    return jsonify(list_roots())

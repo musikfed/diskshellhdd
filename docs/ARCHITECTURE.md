@@ -1,13 +1,27 @@
-# DiskShell 0.4 architecture
+# DiskShell 0.5 architecture
 
-DiskShell is layered as UI → application API → Storage Brain/content services → safe executors → filesystem/Windows adapters. PowerShell is only a Windows adapter, not the product model.
+DiskShell is layered as React/Vite Admin Workbench → Flask API → Storage Brain/content services → cancellable safe executors → filesystem/Windows storage adapters.
 
-The read side contains disk discovery, indexing, analytics, previews, archive/ISO browsing, duplicate analysis, local Photos/People, NTFS extent queries and benchmarks. Write domains are independently gated: files, Vault, disk/partition writes and future extent moves.
+PowerShell is a Windows storage adapter only.
 
-The Placement Executor distinguishes same-volume atomic moves from cross-volume verified copies. Cross-volume originals are intentionally retained after verification. Same-volume operations are journalled and can be rolled back.
+## Per-disk authorization
 
-Storage Classes are logical policy zones, not fixed partitions. Capacity policy keeps a working-space reserve and soft/hard fill limits.
+`DS_ALLOW_DISK_WRITES=0` disables the global override but does not prevent an administrator from temporarily unlocking one selected non-protected physical disk. Runtime authorization is bound to physical identity and expires after 15 minutes. System / Boot / Application disks remain protected.
 
-Vault uses Argon2id envelope encryption and chunked AES-256-GCM objects. Local Photos/People uses optional YuNet/SFace models with no cloud dependency.
+## Partition / Volume layer
 
-Storage Lab models logical Managed Interleave and filesystem extents only; HDD firmware physical geometry remains outside application control. Actual extent relocation remains locked pending target-hardware benchmarks.
+The volume manager supports disk initialization, partition creation in unallocated space, NTFS/exFAT volume formatting, allocation-unit selection, and drive-letter assignment. Whole-disk clear/format is a separate explicitly destructive workflow.
+
+## Cancellable jobs
+
+Quick Index and Placement Executor are cooperative-cancellable. Cross-volume copies use chunks and removable partial targets. Security scans run as cancellable local scanner processes.
+
+## Persistence
+
+SQLite stores scan facts, placement plans, operation journal, Recovery snapshots, and Security results. The UI keeps only active IDs/preferences in localStorage and restores persistent plans after refresh.
+
+## Recovery / Security
+
+Recovery is read-only topology/signature inspection. Security adapters integrate Microsoft Defender and ClamAV without remediation.
+
+Storage Lab still models logical Managed Interleave and NTFS-visible extents only; HDD firmware geometry and actual extent relocation remain separate.

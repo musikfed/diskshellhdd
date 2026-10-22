@@ -256,10 +256,40 @@ def _remove_source_after_move(endpoint: dict[str, Any]) -> None:
     _delete_endpoint(endpoint)
 
 
-def start_commander_job(
+def _endpoint_key(endpoint: dict[str, Any]) -> tuple[str, str, str]:
+    if endpoint["kind"] == "local":
+        path = str(_local_path(endpoint))
+        if os.name == "nt":
+            path = path.casefold()
+        return ("local", "", path)
+    return (
+        "remote",
+        str(endpoint["connection_id"]),
+        _remote_path(endpoint),
+    )
+
+
+def _prepare_transfer(raw: dict[str, Any]) -> dict[str, Any]:
+    src = _validate_endpoint(dict(raw["source"]))
+    dst = _validate_endpoint(dict(raw["destination"]))
+    if _destination_exists(dst):
+        raise FileExistsError(dst["path"])
+
+    is_dir, directories, files = _source_manifest(src)
+    return {
+        "source": src,
+        "destination": dst,
+        "is_dir": is_dir,
+        "directories": directories,
+        "files": files,
+        "total_files": len(files),
+        "total_bytes": sum(size for _relative, size in files),
+    }
+
+
+def start_commander_batch_job(
     operation: str,
-    source: dict[str, Any],
-    destination: dict[str, Any],
+    transfers: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if not file_writes_allowed():
         raise FileWriteBlocked("File writes are locked")
@@ -267,31 +297,52 @@ def start_commander_job(
     op = str(operation).casefold()
     if op not in {"copy", "move"}:
         raise ValueError("operation must be copy or move")
+    if not isinstance(transfers, list) or not transfers:
+        raise ValueError("at least one transfer is required")
+    if len(transfers) > 4000:
+        raise ValueError("too many transfer items; maximum is 4000")
 
-    src = _validate_endpoint(source)
-    dst = _validate_endpoint(destination)
-    if _destination_exists(dst):
-        raise FileExistsError(dst["path"])
+    prepared = [_prepare_transfer(dict(item)) for item in transfers]
 
-    is_dir, directories, files = _source_manifest(src)
-    total_bytes = sum(size for _relative, size in files)
+    destination_keys = [_endpoint_key(item["destination"]) for item in prepared]
+    if len(set(destination_keys)) != len(destination_keys):
+        raise ValueError("batch contains duplicate destination paths")
+
+    total_bytes = sum(int(item["total_bytes"]) for item in prepared)
+    total_files = sum(int(item["total_files"]) for item in prepared)
+    first = prepared[0]
 
     job_id = uuid.uuid4().hex
     event = threading.Event()
     job = {
         "id": job_id,
-        "type": "commander_transfer",
+        "type": (
+            "commander_transfer_batch"
+            if len(prepared) > 1
+            else "commander_transfer"
+        ),
         "operation": op,
-        "source": _public_endpoint(src),
-        "destination": _public_endpoint(dst),
-        "status": "queued",
-        "is_dir": is_dir,
+        "source": _public_endpoint(first["source"]),
+        "destination": _public_endpoint(first["destination"]),
+        "transfers": [
+            {
+                "source": _public_endpoint(item["source"]),
+                "destination": _public_endpoint(item["destination"]),
+                "is_dir": bool(item["is_dir"]),
+                "total_files": int(item["total_files"]),
+                "total_bytes": int(item["total_bytes"]),
+            }
+            for item in prepared
+        ],
+        "items": 0,
+        "total_items": len(prepared),
         "files": 0,
-        "total_files": len(files),
+        "total_files": total_files,
         "bytes": 0,
         "total_bytes": total_bytes,
         "progress_percent": 0.0 if total_bytes else None,
-        "current_path": src["path"],
+        "current_item": 0,
+        "current_path": first["source"]["path"],
         "started_at": None,
         "finished_at": None,
         "error": None,
@@ -302,29 +353,35 @@ def start_commander_job(
         _cancel_events[job_id] = event
 
     threading.Thread(
-        target=_run_job,
-        args=(job_id, op, src, dst, is_dir, directories, files, event),
+        target=_run_batch_job,
+        args=(job_id, op, prepared, event),
         daemon=True,
         name=f"commander-{job_id[:8]}",
     ).start()
     return get_commander_job(job_id)
 
 
-def _run_job(
-    job_id: str,
+def start_commander_job(
     operation: str,
     source: dict[str, Any],
     destination: dict[str, Any],
-    is_dir: bool,
-    directories: list[str],
-    files: list[tuple[str, int]],
+) -> dict[str, Any]:
+    """Backward-compatible single-object Commander job."""
+    return start_commander_batch_job(
+        operation,
+        [{"source": source, "destination": destination}],
+    )
+
+
+def _run_batch_job(
+    job_id: str,
+    operation: str,
+    transfers: list[dict[str, Any]],
     event: threading.Event,
 ) -> None:
     with _lock:
         _jobs[job_id]["status"] = "running"
         _jobs[job_id]["started_at"] = _now()
-
-    created_target = False
 
     def progress(count: int, current_path: str) -> None:
         with _lock:
@@ -333,61 +390,95 @@ def _run_job(
             job["current_path"] = current_path
             total = int(job["total_bytes"] or 0)
             job["progress_percent"] = (
-                min(100.0, job["bytes"] * 100.0 / total) if total else None
+                min(100.0, job["bytes"] * 100.0 / total)
+                if total
+                else None
             )
 
     try:
-        _check_cancel(event)
+        for index, transfer in enumerate(transfers, start=1):
+            _check_cancel(event)
+            source = transfer["source"]
+            destination = transfer["destination"]
+            is_dir = bool(transfer["is_dir"])
+            directories = transfer["directories"]
+            files = transfer["files"]
+            created_target = False
 
-        if operation == "move" and _same_native_location(source, destination):
-            _rename_native(source, destination)
-            created_target = True
             with _lock:
                 job = _jobs[job_id]
-                job["bytes"] = job["total_bytes"]
-                job["files"] = job["total_files"]
-                job["progress_percent"] = 100.0
-                job["current_path"] = destination["path"]
-        else:
-            if is_dir:
-                _make_directory(destination)
-                created_target = True
-                for relative in directories:
-                    if relative:
-                        _make_directory(_join_endpoint(destination, relative))
-            else:
-                created_target = True
+                job["current_item"] = index
+                job["current_path"] = source["path"]
 
-            for relative, expected_size in files:
-                _check_cancel(event)
-                source_file = _join_endpoint(source, relative)
-                destination_file = _join_endpoint(destination, relative)
-                _copy_file(source_file, destination_file, event, progress)
-                _verify_size(destination_file, expected_size)
+            try:
+                if operation == "move" and _same_native_location(
+                    source,
+                    destination,
+                ):
+                    _rename_native(source, destination)
+                    created_target = True
+                    with _lock:
+                        job = _jobs[job_id]
+                        job["bytes"] += int(transfer["total_bytes"])
+                        job["files"] += int(transfer["total_files"])
+                        job["current_path"] = destination["path"]
+                else:
+                    if is_dir:
+                        _make_directory(destination)
+                        created_target = True
+                        for relative in directories:
+                            if relative:
+                                _make_directory(
+                                    _join_endpoint(destination, relative)
+                                )
+                    else:
+                        created_target = True
+
+                    for relative, expected_size in files:
+                        _check_cancel(event)
+                        source_file = _join_endpoint(source, relative)
+                        destination_file = _join_endpoint(
+                            destination,
+                            relative,
+                        )
+                        _copy_file(
+                            source_file,
+                            destination_file,
+                            event,
+                            progress,
+                        )
+                        _verify_size(destination_file, expected_size)
+                        with _lock:
+                            _jobs[job_id]["files"] += 1
+
+                    _check_cancel(event)
+                    if operation == "move":
+                        _remove_source_after_move(source)
+
                 with _lock:
-                    _jobs[job_id]["files"] += 1
-
-            _check_cancel(event)
-            if operation == "move":
-                _remove_source_after_move(source)
+                    job = _jobs[job_id]
+                    job["items"] += 1
+                    total = int(job["total_bytes"] or 0)
+                    if total:
+                        job["progress_percent"] = min(
+                            100.0,
+                            job["bytes"] * 100.0 / total,
+                        )
+            except (CommanderCancelled, Exception):
+                if created_target:
+                    try:
+                        _delete_endpoint(destination)
+                    except Exception:  # noqa: BLE001
+                        pass
+                raise
 
     except CommanderCancelled:
-        if created_target:
-            try:
-                _delete_endpoint(destination)
-            except Exception:  # noqa: BLE001
-                pass
         with _lock:
             job = _jobs[job_id]
             job["status"] = "cancelled"
             job["finished_at"] = _now()
         return
     except Exception as exc:  # noqa: BLE001
-        if created_target:
-            try:
-                _delete_endpoint(destination)
-            except Exception:  # noqa: BLE001
-                pass
         with _lock:
             job = _jobs[job_id]
             job["status"] = "failed"

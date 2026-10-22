@@ -158,6 +158,39 @@ def smart_destination():
         return jsonify({"error": "smart_destination_failed", "message": str(exc)}), 400
 
 
+@bp.post("/smart-destinations")
+def smart_destinations():
+    payload = request.get_json(silent=True) or {}
+    try:
+        raw_items = list(payload["items"])
+        if not raw_items:
+            return jsonify({"items": []})
+        if len(raw_items) > 4000:
+            raise ValueError("too many items; maximum is 4000")
+        storage_root = Path(str(payload["storage_root"]))
+        results = []
+        for item in raw_items:
+            source_path = str(item.get("source_path") or item["name"])
+            result = suggest_managed_destination(
+                source_name=str(item["name"]),
+                source_path=source_path,
+                size=int(item.get("size") or 0),
+                modified_ns=(
+                    int(item["modified_ns"])
+                    if item.get("modified_ns") is not None
+                    else None
+                ),
+                storage_root=storage_root,
+            )
+            result["source_path"] = source_path
+            results.append(result)
+        return jsonify({"items": results})
+    except (KeyError, TypeError, ValueError, FileNotFoundError, OSError) as exc:
+        return jsonify(
+            {"error": "smart_destinations_failed", "message": str(exc)}
+        ), 400
+
+
 @bp.get("/roots")
 def roots():
     return jsonify(list_roots())

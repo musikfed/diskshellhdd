@@ -74,3 +74,52 @@ def test_smart_destination_does_not_create_target_directories(tmp_path):
     assert result["target_class"] == "photos"
     assert result["layout_lane"] == "B-photo-mixed"
     assert not (storage_root / "Photos").exists()
+
+
+def test_commander_batch_copy_reports_items_and_total_progress(tmp_path, monkeypatch):
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    source_a = tmp_path / "a.bin"
+    source_b = tmp_path / "b.bin"
+    destination = tmp_path / "target"
+    destination.mkdir()
+    source_a.write_bytes(b"a" * 1024)
+    source_b.write_bytes(b"b" * 2048)
+
+    job = commander_jobs.start_commander_batch_job(
+        "copy",
+        [
+            {
+                "source": {"kind": "local", "path": str(source_a)},
+                "destination": {
+                    "kind": "local",
+                    "path": str(destination / source_a.name),
+                },
+            },
+            {
+                "source": {"kind": "local", "path": str(source_b)},
+                "destination": {
+                    "kind": "local",
+                    "path": str(destination / source_b.name),
+                },
+            },
+        ],
+    )
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = commander_jobs.get_commander_job(job["id"])
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            break
+        time.sleep(0.02)
+
+    assert job["status"] == "completed"
+    assert job["type"] == "commander_transfer_batch"
+    assert job["items"] == 2
+    assert job["total_items"] == 2
+    assert job["files"] == 2
+    assert job["total_files"] == 2
+    assert job["bytes"] == 3072
+    assert job["total_bytes"] == 3072
+    assert job["progress_percent"] == 100.0
+    assert (destination / "a.bin").read_bytes() == source_a.read_bytes()
+    assert (destination / "b.bin").read_bytes() == source_b.read_bytes()

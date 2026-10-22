@@ -937,3 +937,44 @@ textarea{
   .vault-browser-toolbar{grid-template-columns:auto 1fr auto}
   .vault-browser-toolbar .primary{grid-column:1/-1}
 }
+
+
+/* 0.6.3 Commander multi-selection */
+.commander-selection-toolbar{
+  display:grid;
+  grid-template-columns:auto minmax(160px,1fr) auto;
+  gap:10px;
+  align-items:center;
+  padding:7px 2px;
+}
+.commander-selection-toolbar>div{
+  display:flex;
+  gap:6px;
+}
+.commander-selection-toolbar button{
+  padding:6px 9px;
+  font-size:11px;
+}
+.commander-selection-toolbar>span{
+  color:#c8d8f0;
+  font-size:12px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.commander-selection-toolbar>small{
+  color:#7188aa;
+  white-space:nowrap;
+}
+.commander-list>button.selected{
+  background:rgba(72,111,180,.36);
+  box-shadow:inset 3px 0 0 rgba(117,157,255,.9);
+}
+.commander-list>button.selected:hover{
+  background:rgba(72,111,180,.46);
+}
+@media(max-width:1100px){
+  .commander-selection-toolbar{
+    grid-template-columns:1fr;
+  }
+}

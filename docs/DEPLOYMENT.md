@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.6.0
+# Deploying DiskShell 0.6.3
 
-DiskShell 0.6.0 is the first frozen working admin baseline. GitHub `main` is the source of truth.
+DiskShell 0.6.3 builds on the first frozen admin baseline; GitHub `main` is the source of truth. GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -138,3 +138,8 @@ This is logical NTFS layout verification. DiskShell cannot see exact hidden plat
 The forced Managed Interleave writer/rebalancer remains a later experimental milestone and stays disabled while `DS_ALLOW_EXTENT_MOVES=0`.
 
 See [SAFETY.md](SAFETY.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
+
+
+### Commander 0.6.3
+
+The frontend supports multi-selection with `Ctrl+Click`, `Shift+Click`, `Ctrl+A`, and explicit Select all / Clear controls. Copy/Move run as one batch job with aggregate progress. Rename/View/Extract intentionally remain single-item operations.

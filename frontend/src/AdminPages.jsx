@@ -547,6 +547,17 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
     } catch (e) { setError(e.message) }
   }
 
+  async function toggleFileWrites() {
+    try {
+      const next = await api('/api/files/write-access', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: !fileWrite?.allowed }),
+      })
+      setFileWrite(next)
+      if (refreshHealth) await refreshHealth()
+    } catch (e) { setError(e.message) }
+  }
+
   async function stop() {
     try {
       const value = await api(`/api/scans/${jobId}/cancel`, { method: 'POST', body: '{}' })
@@ -1197,13 +1208,19 @@ function CommanderPane({
         onDoubleClick={() => item.is_dir && !busy && load(side, item.path)}
       >
         <span title={item.path}>{item.is_dir ? '📁' : '📄'} {item.name}</span>
-        <span>{item.is_dir ? '<DIR>' : fmtBytes(item.size)}</span>
+        <span title={item.is_dir && item.size_known ? `indexed by scan ${item.indexed_scan_id}` : ''}>
+          {item.is_dir ? (item.size_known ? fmtBytes(item.size) : '—') : fmtBytes(item.size)}
+        </span>
         <span>{item.modified_ns ? new Date(item.modified_ns / 1e6).toLocaleString() : ''}</span>
       </button>)}
     </div>
     <div className="pane-status">
       <span>{state.data?.items?.length || 0} items</span>
-      <span>{state.selected ? `${state.selected.name} · ${state.selected.is_dir ? '<DIR>' : fmtBytes(state.selected.size)}` : 'nothing selected'}</span>
+      <span>{state.selected
+        ? `${state.selected.name} · ${state.selected.is_dir
+          ? (state.selected.size_known ? fmtBytes(state.selected.size) : 'size not indexed')
+          : fmtBytes(state.selected.size)}`
+        : 'nothing selected'}</span>
     </div>
   </Panel>
 }
@@ -1236,7 +1253,7 @@ function CommanderInspector({ preview, archive, remoteOrigin }) {
   </Panel>
 }
 
-export function FilesAdmin({ health, setError }) {
+export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
   const makePane = (side) => ({
     sourceType: 'local',
     path: localStorage.getItem(`file${side}Path`) || 'F:\\',
@@ -1269,6 +1286,7 @@ export function FilesAdmin({ health, setError }) {
   const [archive, setArchive] = useState(null)
   const [remoteOrigin, setRemoteOrigin] = useState('')
   const [archiveFormat, setArchiveFormat] = useState('zip')
+  const [fileWrite, setFileWrite] = useState(null)
 
   const terminal = useMemo(() => new Set(['completed', 'failed', 'cancelled']), [])
   const activePane = activeSide === 'left' ? left : right
@@ -1276,20 +1294,23 @@ export function FilesAdmin({ health, setError }) {
 
   async function refreshMeta() {
     try {
-      const [rootData, connectionData] = await Promise.all([
+      const [rootData, connectionData, writeData] = await Promise.all([
         api('/api/files/roots'),
         api('/api/commander/connections'),
+        api('/api/files/write-access'),
       ])
       setRoots(rootData.roots || [])
       setConnections(connectionData.connections || [])
+      setFileWrite(writeData)
     } catch (e) { setError(e.message) }
   }
 
   async function load(side, path, forcedPane = null) {
     const pane = forcedPane || (side === 'left' ? left : right)
     try {
+      const scanQuery = scanId ? `&scan_id=${encodeURIComponent(scanId)}` : ''
       const data = pane.sourceType === 'local'
-        ? await api(`/api/files?path=${encodeURIComponent(path)}`)
+        ? await api(`/api/files?path=${encodeURIComponent(path)}${scanQuery}`)
         : await api(`/api/commander/remote?connection_id=${encodeURIComponent(pane.connectionId)}&path=${encodeURIComponent(path)}`)
       const next = { ...pane, path: data.path, data, selected: null }
       if (side === 'left') {
@@ -1386,11 +1407,11 @@ export function FilesAdmin({ health, setError }) {
     } catch (e) { setError(e.message) }
   }
 
-  async function transfer(operation) {
-    const sourcePane = activePane
-    const destinationPane = passivePane
+  async function transfer(operation, sourceSide = activeSide) {
+    const sourcePane = sourceSide === 'left' ? left : right
+    const destinationPane = sourceSide === 'left' ? right : left
     const selected = sourcePane.selected
-    if (!selected || !health?.safety?.file_writes) return
+    if (!selected || !fileWrite?.allowed) return
 
     try {
       let destinationPath = destinationPane.sourceType === 'local'
@@ -1598,6 +1619,17 @@ export function FilesAdmin({ health, setError }) {
   }
 
   const busy = Boolean(jobId && job && !terminal.has(job.status))
+  const fileWritesAllowed = Boolean(fileWrite?.allowed)
+  const directTarget = (sourceSide) => {
+    const sourcePane = sourceSide === 'left' ? left : right
+    const targetPane = sourceSide === 'left' ? right : left
+    const selected = sourcePane.selected
+    if (!selected) return 'выбери файл/папку'
+    const target = targetPane.sourceType === 'local'
+      ? joinPath(targetPane.path, selected.name)
+      : remoteJoin(targetPane.path, selected.name)
+    return `${selected.path} → ${target}`
+  }
 
   useEffect(() => {
     const handler = event => {
@@ -1610,9 +1642,9 @@ export function FilesAdmin({ health, setError }) {
       } else if (event.key === 'F3') {
         event.preventDefault(); inspectSelected()
       } else if (event.key === 'F5') {
-        event.preventDefault(); transfer('copy')
+        event.preventDefault(); transfer('copy', activeSide)
       } else if (event.key === 'F6') {
-        event.preventDefault(); transfer('move')
+        event.preventDefault(); transfer('move', activeSide)
       } else if (event.key === 'F7') {
         event.preventDefault(); makeDirectory()
       } else if (event.key === 'F8') {
@@ -1633,13 +1665,21 @@ export function FilesAdmin({ health, setError }) {
         <b>DiskShell Commander</b>
         <span>Local · SFTP/SSH · FTP/FTPS · Preview · Archives</span>
       </div>
+      <label className={`disk-write-toggle ${fileWritesAllowed ? 'enabled' : 'locked'}`}>
+        <input type="checkbox" checked={fileWritesAllowed} onChange={toggleFileWrites} />
+        <span className="toggle-track"><i /></span>
+        <span className="toggle-copy">
+          <b>{fileWritesAllowed ? 'FILE WRITE ENABLED' : 'FILE WRITE LOCKED'}</b>
+          <small>{fileWrite?.global_override ? 'DS_ALLOW_FILE_WRITES=1' : 'RAM toggle · until backend restart'}</small>
+        </span>
+      </label>
       <label className="smart-transfer-toggle">
         <input
           type="checkbox"
           checked={smartTransfer}
           onChange={e => setSmartTransfer(e.target.checked)}
         />
-        <span><b>Smart placement</b><small>OFF = direct path · ON = classify into HDD storage classes</small></span>
+        <span><b>Smart folders</b><small>OFF = exact destination · ON = classify into HDD folders; no forced extent layout</small></span>
       </label>
       <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)}>
         <option value="zip">ZIP</option>
@@ -1669,17 +1709,17 @@ export function FilesAdmin({ health, setError }) {
 
       <div className="file-actions commander-actions">
         <button disabled={!activePane.selected || busy} onClick={inspectSelected}>F3 View</button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={() => transfer('copy')}>
-          {activeSide === 'left' ? 'F5 Copy →' : '← F5 Copy'}
-        </button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={() => transfer('move')}>
-          {activeSide === 'left' ? 'F6 Move →' : '← F6 Move'}
-        </button>
-        <button disabled={!health?.safety?.file_writes || busy} onClick={makeDirectory}>F7 MkDir</button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={renameSelected}>F2 Rename</button>
-        <button className="trash" disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={deleteSelected}>F8 Trash/Delete</button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={createArchive}>F9 Archive</button>
-        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={extractArchive}>Extract → other</button>
+        <small className="transfer-direction" title={directTarget('left')}>{directTarget('left')}</small>
+        <button disabled={!fileWritesAllowed || !left.selected || busy} onClick={() => transfer('copy', 'left')}>F5 Copy →</button>
+        <button disabled={!fileWritesAllowed || !left.selected || busy} onClick={() => transfer('move', 'left')}>F6 Move →</button>
+        <small className="transfer-direction" title={directTarget('right')}>{directTarget('right')}</small>
+        <button disabled={!fileWritesAllowed || !right.selected || busy} onClick={() => transfer('copy', 'right')}>← Copy</button>
+        <button disabled={!fileWritesAllowed || !right.selected || busy} onClick={() => transfer('move', 'right')}>← Move</button>
+        <button disabled={!fileWritesAllowed || busy} onClick={makeDirectory}>F7 MkDir</button>
+        <button disabled={!fileWritesAllowed || !activePane.selected || busy} onClick={renameSelected}>F2 Rename</button>
+        <button className="trash" disabled={!fileWritesAllowed || !activePane.selected || busy} onClick={deleteSelected}>F8 Trash/Delete</button>
+        <button disabled={!fileWritesAllowed || !activePane.selected || busy} onClick={createArchive}>F9 Archive</button>
+        <button disabled={!fileWritesAllowed || !activePane.selected || busy} onClick={extractArchive}>Extract → other</button>
         <button className="stop-button" disabled={!busy || !jobId} onClick={stop}>■ Stop / Esc</button>
       </div>
 
@@ -1702,7 +1742,7 @@ export function FilesAdmin({ health, setError }) {
     </div>
 
     {smartTransfer && <Panel title="Smart transfer policy">
-      <p><b>Direct transfer remains available.</b> Smart mode changes only the destination path for a file going into a local managed-storage root. The byte transfer is still the same verified Commander job.</p>
+      <p><b>Smart folders не означает шахматную фрагментацию.</b> Этот режим меняет только папку назначения по Storage Class. Direct transfer всегда остаётся доступным. Фактическую NTFS-нарезку проверяет Storage Brain / Storage Lab после managed transfer.</p>
       {smartHint && <div className="metrics">
         <Metric label="Class" value={smartHint.target_class} />
         <Metric label="Category" value={smartHint.category} />
@@ -1710,7 +1750,7 @@ export function FilesAdmin({ health, setError }) {
         <Metric label="Target band" value={fmtBytes(smartHint.target_band_bytes)} />
       </div>}
       {smartHint && <p className="path">{smartHint.destination}</p>}
-      <p className="muted">Smart fragmentation / extent-layout verification remains read-only/experimental until Storage Lab can compare actual NTFS extents against this lane/band policy.</p>
+      <p className="muted">Принудительный extent-placement пока выключен. Проверка фактических NTFS extents уже read-only; writer/rebalancer будет отдельным следующим этапом.</p>
     </Panel>}
 
     <Panel title="Commander transfer job">
@@ -1730,7 +1770,7 @@ export function FilesAdmin({ health, setError }) {
         <p className="path">{job.current_path}</p>
         {job.error && <p className="warning">{job.error}</p>}
       </>}
-      {!health?.safety?.file_writes && <small>DS_ALLOW_FILE_WRITES=0 — write operations are locked.</small>}
+      {!fileWritesAllowed && <small>FILE WRITE LOCKED — Copy/Move/MkDir/Rename/Delete/Archive отключены. Включи тумблер сверху.</small>}
     </Panel>
 
     <CommanderInspector preview={preview} archive={archive} remoteOrigin={remoteOrigin} />

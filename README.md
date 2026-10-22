@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.8
+# DiskShell HDD 0.6.9
 
 [Русская версия](README.ru.md) · English
 
@@ -204,3 +204,12 @@ Resume applies while the backend job is alive; backend-restart recovery is not y
 ## Zero-byte file transfer fix 0.6.8
 
 Commander now creates zero-byte files correctly during Copy/Move, including cross-volume and remote workflows. Previously a missing empty target could be mistaken for a completed transfer because both its offset and expected size were zero, causing the following size verification to raise FileNotFoundError. The job current path is also updated before every file, including empty files.
+
+
+## Commander conflicts / resume / missing sources 0.6.9
+
+Copy/Move now requires an explicit policy when a destination already exists: **Continue partial**, **Replace all**, **Keep both** using `name (1)`, `name (2)`, and so on, **Skip conflicts**, or Cancel. There is no implicit overwrite.
+
+Stop and exhausted reconnect attempts retain the incomplete target instead of deleting it. The transfer job exposes `partial_retained` and the UI offers **Continue partial**. A retry can resume from the actual destination size; directory resume merges file-by-file using the same size-based continuation rule.
+
+If a selected source disappears between browsing and transfer start, or an individual source file disappears while walking a directory, the batch records it as missing/skipped, reports a warning, and continues the remaining items. Replace rechecks that the source still exists before deleting any existing destination.

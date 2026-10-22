@@ -69,8 +69,16 @@ def format_plan(
             )
     validate_volume_size(fs, cluster, target_size)
 
+    is_raw = str(disk.get("partition_style") or "").upper() == "RAW"
+    destructive_warning = (
+        "RAW disk has no recognized partition table. DiskShell will initialize GPT "
+        "and create/format the first volume. RAW does not prove the medium is empty; "
+        "recoverable previous data may be overwritten."
+        if is_raw
+        else "This operation destroys all existing partitions and data on the selected disk."
+    )
     warnings = [
-        "This operation destroys all existing partitions and data on the selected disk.",
+        destructive_warning,
         profile["warning"],
     ]
     if requested is not None:

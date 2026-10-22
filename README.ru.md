@@ -54,12 +54,16 @@ npm run ui:install
 npm run build
 ```
 
-**Backend для storage-admin функций запускай из PowerShell / Windows Terminal «От имени администратора»:**
+**Backend для storage-admin функций запускай elevated. Самый удобный способ из обычного PowerShell или VS Code terminal:**
 
 ```powershell
 Set-Location "F:\diskshellhdd"
-uv run python -m backend.app
+.\scripts\start-admin.ps1
 ```
+
+Скрипт сам вызывает UAC только для backend. В VS Code также доступен task `DiskShell: Backend as Administrator`; отдельный task `DiskShell: Reopen VS Code as Administrator` повышает весь редактор и его extensions, поэтому используй его только для доверенного workspace.
+
+Подробно, включая `runas`, см. [docs/DEPLOYMENT.ru.md](docs/DEPLOYMENT.ru.md).
 
 При `DS_DEBUG=0` используется Waitress. Открыть: `http://127.0.0.1:8765/`.
 

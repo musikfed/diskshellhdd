@@ -9,6 +9,7 @@ from typing import Any
 from backend.services.storage.filesystem_profiles import (
     filesystem_names,
     validate_allocation_unit,
+    validate_volume_size,
 )
 from backend.services.storage.windows_disks import DiskDetectionError, list_windows_disks
 from backend.services.storage.write_authorization import DiskWriteBlocked, require_disk_write_authorized
@@ -126,6 +127,7 @@ def create_partition_plan(
     requested = largest if size_bytes in {None, 0} else int(size_bytes)
     if requested <= 0 or requested > largest:
         raise ValueError("Requested partition size exceeds the largest free extent")
+    validate_volume_size(fs, cluster, requested)
 
     return {
         "disk": disk,

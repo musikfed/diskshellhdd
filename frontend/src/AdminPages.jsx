@@ -30,6 +30,68 @@ function JobProgress({ percent = null, running = false, label = '' }) {
   </div>
 }
 
+function diskSegments(disk) {
+  const size = Number(disk?.size || 0)
+  if (!size) return []
+  if (String(disk.partition_style).toUpperCase() === 'RAW') {
+    return [{ key: 'raw', kind: 'free', size, label: 'RAW / Unallocated' }]
+  }
+
+  const partitions = [...(disk.partitions || [])]
+    .filter(item => Number(item.size || 0) > 0)
+    .sort((a, b) => Number(a.offset || 0) - Number(b.offset || 0))
+
+  const result = []
+  let cursor = 0
+  for (const partition of partitions) {
+    const offset = Math.max(0, Number(partition.offset || 0))
+    if (offset > cursor) {
+      result.push({
+        key: `free-${cursor}`,
+        kind: 'free',
+        size: offset - cursor,
+        label: 'Unallocated',
+      })
+    }
+    result.push({
+      key: `partition-${partition.partition_number}`,
+      kind: 'partition',
+      size: Number(partition.size || 0),
+      label: `${partition.drive_letter || `#${partition.partition_number}`} · ${partition.filesystem || 'RAW volume'}`,
+    })
+    cursor = Math.max(cursor, offset + Number(partition.size || 0))
+  }
+  if (cursor < size) {
+    result.push({ key: `free-${cursor}`, kind: 'free', size: size - cursor, label: 'Unallocated' })
+  }
+  return result
+}
+
+function DiskLayoutBar({ disk }) {
+  const segments = diskSegments(disk)
+  const total = Number(disk?.size || 1)
+  return <div className="disk-layout">
+    <div className="disk-layout-bar">
+      {segments.map(segment => {
+        const percent = Math.max(0.15, segment.size * 100 / total)
+        return <div
+          key={segment.key}
+          className={`disk-segment ${segment.kind}`}
+          style={{ flexBasis: `${percent}%` }}
+          title={`${segment.label} · ${fmtBytes(segment.size)} · ${(segment.size * 100 / total).toFixed(2)}%`}
+        >
+          {percent >= 8 && <span>{segment.label}</span>}
+        </div>
+      })}
+    </div>
+    <div className="disk-layout-legend">
+      {segments.filter(segment => segment.size / total >= 0.001).map(segment => <span key={`legend-${segment.key}`}>
+        <i className={segment.kind} /> {segment.label}: <b>{fmtBytes(segment.size)}</b>
+      </span>)}
+    </div>
+  </div>
+}
+
 function gibToBytes(value) {
   if (value === '' || value === null || value === undefined) return null
   const number = Number(value)
@@ -274,8 +336,9 @@ export function DisksAdmin({ setError }) {
         <div className="disk-identity">
           <span>Serial: <b>{d.serial_number || '—'}</b></span>
           <span>UniqueId: <b>{d.unique_id || '—'}</b></span>
-          <span>Unallocated: <b>{String(d.partition_style).toUpperCase() === 'RAW' ? 'после Initialize' : fmtBytes(d.largest_free_extent)}</b></span>
+          <span>Largest free extent: <b>{String(d.partition_style).toUpperCase() === 'RAW' ? 'после Initialize' : fmtBytes(d.largest_free_extent)}</b></span>
         </div>
+        <DiskLayoutBar disk={d} />
 
         {d.protected
           ? <p className="protected">🔒 {d.protection_reasons.join(', ')}</p>

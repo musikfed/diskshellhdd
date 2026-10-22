@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.4
+# DiskShell HDD 0.6.5
 
 Русский · [English](README.md)
 
@@ -212,7 +212,7 @@ System / Boot / Application disk остаются backend-protected и тумб�
 - Существующий Vault автоматически не переносится; выбор location относится к первому созданию.
 - Recovery key после Create остаётся виден до явного подтверждения «Я сохранил recovery key».
 
-## Commander multi-selection 0.6.4
+## Commander multi-selection 0.6.5
 
 - обычный клик — выбрать один объект;
 - `Ctrl+Click` — добавить/убрать отдельный файл или папку;
@@ -226,3 +226,8 @@ System / Boot / Application disk остаются backend-protected и тумб�
 - F8 Trash/Delete и F9 Archive работают с группой;
 - F2 Rename, F3 View и Extract требуют ровно один выбранный объект;
 - Stop отменяет текущий незавершённый transfer item и очищает его partial target; уже завершённые и проверенные items остаются завершёнными.
+
+
+## Vault create diagnostics 0.6.5
+
+Если кнопка **Создать Vault** недоступна, UI теперь показывает точные блокирующие условия: Vault WRITE gate, выбранный путь, непустой идентификатор и секретная фраза минимум 8 символов. Серую кнопку без объяснения больше не нужно диагностировать вручную.

@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.6.7
+# Deploying DiskShell 0.6.9
 
-DiskShell 0.6.7 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
+DiskShell 0.6.9 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -247,3 +247,12 @@ Keep `DS_ALLOW_VAULT_WRITES=0` as the normal default. Enable `VAULT WRITE` from 
 Commander requires no extra switch for SFTP resilience. Version 0.6.7 uses a 30-second SSH keepalive, OS TCP keepalive when available, a 120-second SFTP I/O timeout, and up to four reconnect attempts with 1/2/4/8-second backoff. After reconnect, the current transfer resumes from the partial target size and is size-verified before completion.
 
 This retry/resume state lives in the running backend job; restarting the backend does not yet persist or restore unfinished transfers.
+
+
+## Commander: disconnects, partial targets, and name conflicts
+
+From 0.6.9, an existing destination never triggers an implicit overwrite. The UI requires an explicit **Continue partial / Replace / Keep both / Skip / Cancel** decision. Keep both allocates the next free indexed name such as `file (1).ext` or `Folder (1)`.
+
+After reconnect attempts are exhausted, or after Stop, the incomplete target is retained. **Continue partial** starts a new job using the actual target size as the resume offset. Missing sources are recorded as missing/skipped and do not terminate the rest of the batch. Replace rechecks source existence before deleting the existing destination, and Move removes a source only after verified completion.
+
+Local partial files remain available across backend restarts. Remote continuation after restart requires reconnecting the remote profile because credentials remain RAM-only.

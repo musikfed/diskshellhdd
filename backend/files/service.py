@@ -8,7 +8,6 @@ from pathlib import Path
 
 from send2trash import send2trash
 
-from backend.config import settings
 from backend.core.database import connect
 from backend.files.write_authorization import file_writes_allowed
 

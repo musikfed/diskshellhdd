@@ -28,6 +28,8 @@ def test_database_schema_exists():
         "photos",
         "faces",
         "persons",
+        "recovery_snapshots",
+        "security_scan_results",
     }
     assert required <= tables
 

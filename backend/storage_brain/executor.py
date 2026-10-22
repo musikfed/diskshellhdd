@@ -218,10 +218,53 @@ def apply_plan(
                     raise FileNotFoundError(source)
                 if not source.is_file():
                     raise ValueError("Placement executor currently handles files only")
+                source_size = source.stat().st_size
                 if target.exists():
+                    if (
+                        item["action"] == "move_cross_volume"
+                        and target.is_file()
+                        and target.stat().st_size == source_size
+                    ):
+                        expected_digest = (
+                            _digest(source, cancel_callback)
+                            if verify == "sha256"
+                            else None
+                        )
+                        verification = _verify(
+                            source_size,
+                            target,
+                            expected_digest,
+                            cancel_callback,
+                        )
+                        _check_cancel(cancel_callback)
+                        source.unlink()
+                        moved += 1
+                        with connect() as connection:
+                            connection.execute(
+                                """
+                                UPDATE placement_plan_items
+                                SET status='completed', verification=?, error=NULL
+                                WHERE id=?
+                                """,
+                                (verification, item["id"]),
+                            )
+                            _journal(
+                                connection,
+                                plan_id,
+                                item["id"],
+                                item["action"],
+                                source,
+                                target,
+                                "completed",
+                                f"{verification}; existing target verified; source removed",
+                            )
+                            connection.commit()
+                        completed += 1
+                        processed_bytes += source_size
+                        report(item)
+                        continue
                     raise FileExistsError(target)
 
-                source_size = source.stat().st_size
                 if source_size != item["size"]:
                     raise OSError("Source changed since the scan; rebuild the plan")
 
@@ -273,7 +316,12 @@ def apply_plan(
                     finally:
                         if partial.exists():
                             partial.unlink(missing_ok=True)
-                    copied += 1
+                    if item["action"] == "move_cross_volume":
+                        _check_cancel(cancel_callback)
+                        source.unlink()
+                        moved += 1
+                    else:
+                        copied += 1
 
                 with connect() as connection:
                     connection.execute(
@@ -292,7 +340,11 @@ def apply_plan(
                         source,
                         target,
                         "completed",
-                        verification,
+                        (
+                            f"{verification}; source removed"
+                            if item["action"] == "move_cross_volume"
+                            else verification
+                        ),
                     )
                     connection.commit()
                 completed += 1
@@ -335,10 +387,16 @@ def apply_plan(
         "status": status,
         "completed": completed,
         "failed": failed,
-        "same_volume_moves": moved,
+        "moves": moved,
         "verified_cross_volume_copies": copied,
-        "cross_volume_source_policy": "kept",
-        "note": "Cross-volume originals are intentionally kept. Remove them only after review.",
+        "cross_volume_source_policy": plan.get(
+            "cross_volume_policy", "copy_keep_source"
+        ),
+        "note": (
+            "Cross-volume sources were removed only after successful verification."
+            if plan.get("cross_volume_policy") == "move_after_verify"
+            else "Cross-volume originals were intentionally kept for review."
+        ),
     }
 
 

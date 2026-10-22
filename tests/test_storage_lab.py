@@ -1,20 +1,19 @@
-from backend.storage_lab.service import CLASS_LANES
+from collections import deque
+
+from backend.storage_lab.service import (
+    CLASS_LANES,
+    GIB,
+    LANE_POLICIES,
+    MIB,
+    _choose_lane,
+    _effective_policy,
+    _segment_lengths,
+)
 
 
 def test_storage_lab_has_mixed_lanes():
     assert CLASS_LANES["video"] != CLASS_LANES["photo"]
     assert CLASS_LANES["document"] == CLASS_LANES["code"]
-
-from collections import deque
-
-from backend.storage_lab.service import (
-    GIB,
-    MIB,
-    LANE_POLICIES,
-    _choose_lane,
-    _effective_policy,
-    _segment_lengths,
-)
 
 
 def test_large_file_uses_bounded_equalized_extents():
@@ -66,7 +65,7 @@ def test_weighted_scheduler_avoids_same_lane_when_alternative_exists():
         "A-media-sequential": deque([1, 2, 3]),
         "B-photo-mixed": deque([1, 2, 3]),
     }
-    deficits = {}
+    deficits: dict[str, int] = {}
 
     first = _choose_lane(queues, deficits, policies, None)
     second = _choose_lane(queues, deficits, policies, first)

@@ -162,6 +162,7 @@ def create_partition(
         drive_letter=drive_letter,
     )
     require_disk_write_authorized(plan["disk"])
+    require_process_elevated()
     if confirmation != plan["confirmation"]:
         raise DiskWriteBlocked("Typed confirmation does not match")
 

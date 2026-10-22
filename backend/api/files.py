@@ -5,6 +5,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request
 
 from backend.files.jobs import cancel_file_job, get_file_job, start_file_job
+from backend.files.write_authorization import file_write_state, set_runtime_file_writes
 from backend.storage_brain.service import suggest_managed_destination
 
 from backend.files.service import (
@@ -28,9 +29,11 @@ def browse():
     path = request.args.get("path")
     if not path:
         return jsonify({"error": "missing_path"}), 400
+    raw_scan_id = request.args.get("scan_id")
+    scan_id = int(raw_scan_id) if raw_scan_id not in {None, ""} else None
     try:
-        return jsonify(list_directory(path))
-    except (FileNotFoundError, NotADirectoryError, OSError) as exc:
+        return jsonify(list_directory(path, scan_id=scan_id))
+    except (ValueError, FileNotFoundError, NotADirectoryError, OSError) as exc:
         return jsonify({"error": "browse_failed", "message": str(exc)}), 400
 
 
@@ -158,3 +161,16 @@ def smart_destination():
 @bp.get("/roots")
 def roots():
     return jsonify(list_roots())
+
+
+@bp.get("/write-access")
+def get_write_access():
+    return jsonify(file_write_state())
+
+
+@bp.post("/write-access")
+def set_write_access():
+    payload = request.get_json(silent=True) or {}
+    if "enabled" not in payload:
+        return jsonify({"error": "missing_enabled"}), 400
+    return jsonify(set_runtime_file_writes(bool(payload["enabled"])))

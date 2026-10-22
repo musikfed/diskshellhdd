@@ -122,15 +122,43 @@ export function DisksAdmin({ setError }) {
   const [letterConfirm, setLetterConfirm] = useState('')
   const [diskBusy, setDiskBusy] = useState(null)
   const [diskNotice, setDiskNotice] = useState('')
+  const [inventoryError, setInventoryError] = useState('')
 
-  const reload = () => api('/api/disks').then(setData).catch(e => setError(e.message))
+  const reload = async () => {
+    try {
+      const next = await api('/api/disks')
+      setData(next)
+      setInventoryError('')
+    } catch (e) {
+      setInventoryError(e.message)
+    }
+  }
   useEffect(() => {
-    Promise.all([api('/api/disks'), api('/api/disks/capabilities')])
-      .then(([disks, caps]) => { setData(disks); setCapabilities(caps) })
-      .catch(e => setError(e.message))
+    let stopped = false
+    const refresh = async () => {
+      const [diskResult, capabilityResult] = await Promise.allSettled([
+        api('/api/disks'),
+        api('/api/disks/capabilities'),
+      ])
+      if (stopped) return
+      if (diskResult.status === 'fulfilled') {
+        setData(diskResult.value)
+        setInventoryError('')
+      } else {
+        setInventoryError(diskResult.reason?.message || 'Disk inventory temporarily unavailable')
+      }
+      if (capabilityResult.status === 'fulfilled') setCapabilities(capabilityResult.value)
+    }
+    refresh()
+    const timer = setInterval(refresh, 4000)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filesystemProfile = key => capabilities.filesystems?.find(item => item.key === key)
+  const filesystemList = Array.isArray(capabilities.filesystems) ? capabilities.filesystems : []
+  const filesystemProfile = key => filesystemList.find(item => item.key === key)
   const elevated = capabilities.process_elevated === true
   const diskByNumber = number => (data?.disks || []).find(d => d.number === number)
 
@@ -296,6 +324,11 @@ export function DisksAdmin({ setError }) {
   }
 
   return <div className="stack admin-workbench">
+    {inventoryError && <div className="warning">
+      <b>Disk inventory temporarily unavailable.</b> {inventoryError}
+      <span>Hot-unplug не должен ронять DiskShell: destructive controls остаются закрыты до следующего успешного inventory.</span>
+      <button onClick={reload}>Retry inventory</button>
+    </div>}
     {capabilities.process_elevated === false && <div className="elevation-warning">
       <b>Backend запущен без Administrator privileges.</b>
       <span>Просмотр работает, но Initialize / partition / format Windows заблокирует. Перезапусти PowerShell/Terminal «Запуск от имени администратора» и снова запусти backend.</span>
@@ -316,7 +349,7 @@ export function DisksAdmin({ setError }) {
       </div>
     </div>
 
-    {(data?.disks || []).map(d => {
+    {(Array.isArray(data?.disks) ? data.disks : []).map(d => {
       const write = d.write_access || {}
       return <Panel key={d.number} title={`Disk ${d.number} · ${d.friendly_name}`} className="disk-card">
         <div className="disk-head">
@@ -350,7 +383,7 @@ export function DisksAdmin({ setError }) {
         </div>}
 
         {d.protected
-          ? <p className="protected">🔒 {d.protection_reasons.join(', ')}</p>
+          ? <p className="protected">🔒 {(Array.isArray(d.protection_reasons) ? d.protection_reasons : []).join(', ') || 'protected'}</p>
           : <div className="actions disk-write-actions">
               <label className={`disk-write-toggle ${write.allowed ? 'enabled' : 'locked'}`}>
                 <input
@@ -410,7 +443,7 @@ export function DisksAdmin({ setError }) {
             if (profile?.recommended_cluster) setCluster(profile.recommended_cluster)
             setFormatDirty(true)
           }}>
-            {(capabilities.filesystems || []).map(item => <option key={item.key} value={item.key}>{item.title}</option>)}
+            {filesystemList.map(item => <option key={item.key} value={item.key}>{item.title}</option>)}
           </select>
         </div>
         <div>

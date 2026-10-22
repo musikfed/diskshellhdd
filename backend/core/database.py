@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS files (
     UNIQUE(scan_id, path)
 );
 
+CREATE TABLE IF NOT EXISTS file_hashes (
+    file_id INTEGER PRIMARY KEY,
+    algorithm TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    hashed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS storage_classes (
     key TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -88,6 +97,8 @@ CREATE TABLE IF NOT EXISTS placement_plans (
     storage_root TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'draft',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at TEXT,
+    completed_at TEXT,
     total_items INTEGER NOT NULL DEFAULT 0,
     total_bytes INTEGER NOT NULL DEFAULT 0,
     projected_used_bytes INTEGER NOT NULL DEFAULT 0,
@@ -106,7 +117,62 @@ CREATE TABLE IF NOT EXISTS placement_plan_items (
     size INTEGER NOT NULL,
     reason TEXT NOT NULL,
     action TEXT NOT NULL DEFAULT 'move',
+    status TEXT NOT NULL DEFAULT 'pending',
+    verification TEXT,
+    error TEXT,
     FOREIGN KEY (plan_id) REFERENCES placement_plans(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS operation_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER,
+    plan_item_id INTEGER,
+    operation TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    target_path TEXT,
+    status TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (plan_id) REFERENCES placement_plans(id) ON DELETE SET NULL,
+    FOREIGN KEY (plan_item_id) REFERENCES placement_plan_items(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    faces_count INTEGER NOT NULL DEFAULT 0,
+    analyzed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (scan_id) REFERENCES scan_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
+    UNIQUE(scan_id, file_id)
+);
+
+CREATE TABLE IF NOT EXISTS persons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    auto_cluster INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (scan_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS faces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id INTEGER NOT NULL,
+    person_id INTEGER,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    score REAL NOT NULL,
+    embedding BLOB,
+    embedding_dim INTEGER,
+    FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+    FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS access_samples (
@@ -122,9 +188,14 @@ CREATE INDEX IF NOT EXISTS idx_files_scan_parent ON files(scan_id, parent_path);
 CREATE INDEX IF NOT EXISTS idx_files_scan_size ON files(scan_id, size DESC);
 CREATE INDEX IF NOT EXISTS idx_files_scan_category ON files(scan_id, category);
 CREATE INDEX IF NOT EXISTS idx_files_scan_storage_class ON files(scan_id, storage_class);
+CREATE INDEX IF NOT EXISTS idx_hash_digest ON file_hashes(algorithm, digest, size);
 CREATE INDEX IF NOT EXISTS idx_directories_scan_parent ON directories(scan_id, parent_path);
 CREATE INDEX IF NOT EXISTS idx_directories_scan_size ON directories(scan_id, total_size DESC);
-CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON placement_plan_items(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON placement_plan_items(plan_id, status);
+CREATE INDEX IF NOT EXISTS idx_photos_scan ON photos(scan_id);
+CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
+CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);
 """
 
 
@@ -156,7 +227,7 @@ def _ensure_columns(
 def init_database() -> None:
     with connect() as connection:
         connection.executescript(SCHEMA)
-        # Lightweight migration from baseline 0.2 databases.
+        # Lightweight migrations from 0.2/0.3. Runtime state is kept intact.
         _ensure_columns(
             connection,
             "files",
@@ -173,6 +244,23 @@ def init_database() -> None:
             [
                 ("category", "TEXT NOT NULL DEFAULT 'directory'"),
                 ("storage_class", "TEXT"),
+            ],
+        )
+        _ensure_columns(
+            connection,
+            "placement_plans",
+            [
+                ("started_at", "TEXT"),
+                ("completed_at", "TEXT"),
+            ],
+        )
+        _ensure_columns(
+            connection,
+            "placement_plan_items",
+            [
+                ("status", "TEXT NOT NULL DEFAULT 'pending'"),
+                ("verification", "TEXT"),
+                ("error", "TEXT"),
             ],
         )
         connection.commit()

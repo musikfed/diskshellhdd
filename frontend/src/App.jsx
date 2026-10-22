@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, fmtBytes } from './api.js'
+import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
 
 const NAV = [
-  ['dashboard', '🏠', 'Dashboard'],
-  ['disks', '💽', 'Disks'],
-  ['scan', '🔎', 'Examine'],
-  ['analytics', '🦊', 'Analytics'],
+  ['dashboard', '🐙', 'Главная'],
+  ['disks', '🐧', 'Диски'],
+  ['scan', '🔎', 'Обследование'],
+  ['analytics', '🦊', 'Аналитика'],
   ['storage', '🧠', 'Storage Brain'],
-  ['files', '🐻', 'Files'],
+  ['files', '🐻', 'Файлы'],
+  ['content', '🐙', 'Preview / Archives'],
+  ['people', '🦉', 'Photos / People'],
   ['vault', '🔐', 'Vault'],
   ['lab', '🧪', 'Storage Lab'],
 ]
@@ -18,15 +20,10 @@ function Card({ title, children, className = '' }) {
 
 function Safety({ health }) {
   const s = health?.safety || {}
-  return (
-    <div className="safety">
-      <strong>Safety gates</strong>
-      <span className={s.file_writes ? 'on' : 'off'}>Files {s.file_writes ? 'ON' : 'LOCKED'}</span>
-      <span className={s.vault_writes ? 'on' : 'off'}>Vault {s.vault_writes ? 'ON' : 'LOCKED'}</span>
-      <span className={s.disk_writes ? 'danger' : 'off'}>Disk writes {s.disk_writes ? 'ON' : 'LOCKED'}</span>
-      <span className={s.extent_moves ? 'danger' : 'off'}>Extent moves {s.extent_moves ? 'ON' : 'LOCKED'}</span>
-    </div>
-  )
+  const rows = [
+    ['Файлы', s.file_writes], ['Vault', s.vault_writes], ['Разметка', s.disk_writes], ['Extents', s.extent_moves],
+  ]
+  return <div className="safety"><strong>Safety gates</strong>{rows.map(([label, on]) => <span key={label} className={on ? 'danger' : 'off'}>{label}: {on ? 'ON' : 'LOCKED'}</span>)}</div>
 }
 
 export default function App() {
@@ -34,58 +31,77 @@ export default function App() {
   const [health, setHealth] = useState(null)
   const [scanId, setScanId] = useState(localStorage.getItem('scanId') || '')
   const [error, setError] = useState('')
-
   useEffect(() => { api('/api/health').then(setHealth).catch(e => setError(e.message)) }, [])
   useEffect(() => { if (scanId) localStorage.setItem('scanId', scanId) }, [scanId])
-
-  const context = useMemo(() => ({ scanId, setScanId, setError }), [scanId])
+  const context = useMemo(() => ({ scanId, setScanId, setError, health }), [scanId, health])
   const pages = {
-    dashboard: <Dashboard health={health} scanId={scanId} />,
-    disks: <Disks />,
+    dashboard: <Dashboard {...context} setPage={setPage} />,
+    disks: <Disks {...context} />,
     scan: <Scan {...context} />,
     analytics: <Analytics {...context} />,
     storage: <StorageBrain {...context} />,
-    files: <Files />,
-    vault: <Vault />,
+    files: <Files {...context} />,
+    content: <Content {...context} />,
+    people: <People {...context} />,
+    vault: <Vault {...context} />,
     lab: <StorageLab {...context} />,
   }
-
-  return (
-    <div className="app">
-      <aside>
-        <div className="brand"><div className="shell">🐚</div><div><b>DiskShell</b><small>Storage brain</small></div></div>
-        <nav>{NAV.map(([id, icon, label]) => (
-          <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}>
-            <span>{icon}</span>{label}
-          </button>
-        ))}</nav>
-        <Safety health={health} />
-      </aside>
-      <main>
-        <header><div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Python-only local storage workspace</p></div><div className="scan-chip">Scan: {scanId || '—'}</div></header>
-        {error && <div className="error" onClick={() => setError('')}>{error}</div>}
-        {pages[page]}
-      </main>
-    </div>
-  )
-}
-
-function Dashboard({ health, scanId }) {
-  return <div className="grid">
-    <Card title="DiskShell 0.3"><div className="hero"><div className="mascot">🐙</div><div><h2>Storage, not shell commands</h2><p>DiskShell understands content, storage classes, capacity reserve and placement plans. Windows commands live only inside adapters.</p></div></div></Card>
-    <Card title="Current mode"><p>Version: <b>{health?.version || '...'}</b></p><p>Active scan: <b>{scanId || 'not selected'}</b></p><p>Local-only backend by default.</p></Card>
-    <Card title="Workflow"><ol><li>Examine a disk or folder</li><li>Review Analytics</li><li>Build a Storage Plan</li><li>Enable writes only when you want to apply it</li></ol></Card>
+  return <div className="app">
+    <aside>
+      <div className="brand"><div className="shell">🐚</div><div><b>DiskShell</b><small>Storage Brain</small></div></div>
+      <nav>{NAV.map(([id, icon, label]) => <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}><span>{icon}</span>{label}</button>)}</nav>
+      <Safety health={health} />
+    </aside>
+    <main>
+      <header><div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Локальное управление хранением · Python only</p></div><div className="scan-chip">Scan: {scanId || '—'}</div></header>
+      {error && <div className="error" onClick={() => setError('')}>{error}</div>}
+      {pages[page]}
+    </main>
   </div>
 }
 
-function Disks() {
+function Dashboard({ health, scanId, setPage }) {
+  return <div className="stack">
+    <Card title="DiskShell 0.4 · диск как система хранения"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
+    <div className="grid three">
+      <Card title="Сейчас"><Metric label="Версия" value={health?.version || '...'} /><Metric label="Активный scan" value={scanId || 'нет'} /><Metric label="Режим" value="localhost / local-first" /></Card>
+      <Card title="Правильный цикл"><ol><li>Обследовать</li><li>Понять Analytics</li><li>Построить placement plan</li><li>Сохранить резерв</li><li>Применить только нужное</li></ol></Card>
+      <Card title="Защита"><p>System / Boot / Application disk блокируются независимо от UI.</p><p>Опасные области имеют отдельные environment gates.</p></Card>
+    </div>
+  </div>
+}
+
+function Disks({ health, setError }) {
   const [data, setData] = useState(null)
-  useEffect(() => { api('/api/disks').then(setData).catch(() => setData({ disks: [] })) }, [])
-  return <div className="stack">{(data?.disks || []).map(d => <Card key={d.number} title={`${d.friendly_name} · Disk ${d.number}`}>
-    <div className="metrics"><Metric label="Size" value={fmtBytes(d.size)} /><Metric label="Bus" value={d.bus_type} /><Metric label="Style" value={d.partition_style} /><Metric label="Health" value={d.health_status} /></div>
-    <p className={d.protected ? 'protected' : 'muted'}>{d.protected ? `Protected: ${d.protection_reasons.join(', ')}` : 'Not a system/app disk; write gate is still locked by default.'}</p>
-    <div className="partitions">{d.partitions?.map(p => <div key={p.partition_number}><b>{p.drive_letter || '—'}</b><span>{p.filesystem || 'unformatted'}</span><span>{fmtBytes(p.size)}</span></div>)}</div>
-  </Card>)}</div>
+  const [plan, setPlan] = useState(null)
+  const [confirm, setConfirm] = useState('')
+  const [fs, setFs] = useState('NTFS')
+  const [cluster, setCluster] = useState(4096)
+  const [label, setLabel] = useState('Storage')
+  const reload = () => api('/api/disks').then(setData).catch(e => setError(e.message))
+  useEffect(reload, []) // eslint-disable-line react-hooks/exhaustive-deps
+  async function planFormat(number) {
+    try { setPlan(await api(`/api/disks/${number}/format-plan`, { method: 'POST', body: JSON.stringify({ filesystem: fs, label, allocation_unit: cluster }) })); setConfirm('') } catch (e) { setError(e.message) }
+  }
+  async function executeFormat() {
+    if (!plan) return
+    try { await api(`/api/disks/${plan.disk.number}/format`, { method: 'POST', body: JSON.stringify({ filesystem: fs, label, allocation_unit: cluster, confirmation: confirm }) }); setPlan(null); reload() } catch (e) { setError(e.message) }
+  }
+  return <div className="stack">
+    {(data?.disks || []).map(d => <Card key={d.number} title={`${d.friendly_name} · Disk ${d.number}`}>
+      <div className="metrics"><Metric label="Размер" value={fmtBytes(d.size)} /><Metric label="Bus" value={d.bus_type} /><Metric label="Стиль" value={d.partition_style} /><Metric label="Health" value={d.health_status} /></div>
+      {d.reliability?.temperature_c != null && <div className="submetrics"><span>🌡 {d.reliability.temperature_c} °C</span><span>⏱ {d.reliability.power_on_hours ?? '—'} h</span><span>Read errors: {d.reliability.read_errors_total ?? '—'}</span></div>}
+      <p className={d.protected ? 'protected' : 'muted'}>{d.protected ? `🔒 Protected: ${d.protection_reasons.join(', ')}` : 'Не system/app disk. Но disk-write gate всё равно закрыт.'}</p>
+      <div className="partitions">{d.partitions?.map(p => <div key={p.partition_number}><b>{p.drive_letter || '—'}</b><span>{p.filesystem || 'unformatted'}</span><span>{fmtBytes(p.size)}</span><span>{p.label || ''}</span></div>)}</div>
+      {!d.protected && <button onClick={() => planFormat(d.number)}>Partition Magic · подготовить план</button>}
+    </Card>)}
+    {plan && <Card title="Partition Magic · destructive plan" className="danger-card"><p className="warning">⚠ {plan.warning}</p><div className="metrics"><Metric label="Disk" value={`${plan.disk.number} · ${plan.disk.friendly_name}`} /><Metric label="Размер" value={fmtBytes(plan.disk.size)} /><Metric label="FS" value={fs} /><Metric label="Cluster" value={`${cluster} B`} /></div>
+      <div className="form-row"><select value={fs} onChange={e => setFs(e.target.value)}><option>NTFS</option><option>EXFAT</option></select><select value={cluster} onChange={e => setCluster(Number(e.target.value))}>{[4096,8192,16384,32768,65536].map(x => <option key={x} value={x}>{x} B</option>)}</select><input value={label} onChange={e => setLabel(e.target.value)} /></div>
+      <label>Для выполнения введи: <b>{plan.confirmation}</b></label><input value={confirm} onChange={e => setConfirm(e.target.value)} />
+      <button className="danger-button" disabled={!health?.safety?.disk_writes || confirm !== plan.confirmation} onClick={executeFormat}>Форматировать выбранный диск</button>
+      {!health?.safety?.disk_writes && <p className="muted">DS_ALLOW_DISK_WRITES=0 — выполнение физически заблокировано backend.</p>}
+    </Card>}
+  </div>
 }
 
 function Scan({ scanId, setScanId, setError }) {
@@ -93,70 +109,133 @@ function Scan({ scanId, setScanId, setError }) {
   const [job, setJob] = useState(null)
   async function start() {
     try {
-      const j = await api('/api/scans', { method: 'POST', body: JSON.stringify({ path }) })
-      setJob(j)
+      const j = await api('/api/scans', { method: 'POST', body: JSON.stringify({ path }) }); setJob(j)
       const timer = setInterval(async () => {
-        try {
-          const next = await api(`/api/scans/${j.id}`)
-          setJob(next)
-          if (next.status === 'completed' || next.status === 'failed') {
-            clearInterval(timer)
-            if (next.scan_id) setScanId(String(next.scan_id))
-          }
-        } catch (e) { clearInterval(timer); setError(e.message) }
+        try { const next = await api(`/api/scans/${j.id}`); setJob(next); if (['completed','failed'].includes(next.status)) { clearInterval(timer); if (next.scan_id) setScanId(String(next.scan_id)) } }
+        catch (e) { clearInterval(timer); setError(e.message) }
       }, 500)
     } catch (e) { setError(e.message) }
   }
-  return <Card title="Read-only examination"><div className="hero"><div className="mascot">🔎</div><div className="grow"><label>Folder / volume root</label><input value={path} onChange={e => setPath(e.target.value)} /><button className="primary" onClick={start}>Start scan</button></div></div>
-    {job && <div className="metrics"><Metric label="Status" value={job.status} /><Metric label="Files" value={job.files} /><Metric label="Folders" value={job.directories} /><Metric label="Indexed" value={fmtBytes(job.bytes)} /></div>}
-    {job?.current_path && <p className="path">{job.current_path}</p>}
-    {scanId && <p>Current Analytics scan id: <b>{scanId}</b></p>}
-  </Card>
+  return <Card title="Read-only обследование"><div className="hero"><div className="mascot">🔎</div><div className="grow"><label>Папка или корень тома</label><input value={path} onChange={e => setPath(e.target.value)} /><button className="primary" onClick={start}>Начать Quick Index</button></div></div>{job && <div className="metrics"><Metric label="Status" value={job.status} /><Metric label="Файлы" value={job.files} /><Metric label="Папки" value={job.directories} /><Metric label="Объём" value={fmtBytes(job.bytes)} /></div>}{job?.current_path && <p className="path">{job.current_path}</p>}{scanId && <p>Текущий индекс: <b>scan {scanId}</b></p>}</Card>
 }
 
 function Analytics({ scanId, setError }) {
   const [data, setData] = useState(null)
+  const [duplicates, setDuplicates] = useState(null)
   useEffect(() => { if (scanId) api(`/api/analytics/${scanId}`).then(setData).catch(e => setError(e.message)) }, [scanId, setError])
-  if (!scanId) return <Card title="Analytics"><p>Run Examine first.</p></Card>
+  async function exact() { try { setDuplicates(await api(`/api/analytics/${scanId}/duplicates`, { method: 'POST', body: JSON.stringify({ min_size: 1024 * 1024, max_files: 4000 }) })) } catch (e) { setError(e.message) } }
+  if (!scanId) return <Card title="Аналитика"><p>Сначала запусти Обследование.</p></Card>
   return <div className="stack">
-    <Card title="Categories"><div className="bars">{data?.categories?.map(c => <Bar key={c.category} label={c.category} value={c.bytes} max={data.categories[0]?.bytes || 1} count={c.files} />)}</div></Card>
-    <div className="grid two"><Card title="Top folders">{data?.top_directories?.slice(0, 12).map(x => <Row key={x.path} name={x.path} value={fmtBytes(x.total_size)} />)}</Card><Card title="Top files">{data?.top_files?.slice(0, 12).map(x => <Row key={x.path} name={x.name} value={fmtBytes(x.size)} />)}</Card></div>
+    <Card title="Что занимает диск"><div className="bars">{data?.categories?.map(c => <Bar key={c.category} label={c.category} value={c.bytes} max={data.categories[0]?.bytes || 1} count={c.files} />)}</div></Card>
+    <div className="grid two"><Card title="Самые тяжёлые папки">{data?.top_directories?.slice(0,15).map(x => <Row key={x.path} name={x.path} value={fmtBytes(x.total_size)} />)}</Card><Card title="Самые тяжёлые файлы">{data?.top_files?.slice(0,15).map(x => <Row key={x.path} name={x.path} value={fmtBytes(x.size)} />)}</Card></div>
+    <Card title="Exact duplicates"><p>Быстрая оценка потенциальных повторов по размеру: <b>{fmtBytes(data?.duplicate_candidate_bytes)}</b>. Полная проверка SHA-256 запускается только вручную.</p><button onClick={exact}>Проверить точные дубликаты SHA-256</button>{duplicates && <><p>Потенциально освободить: <b>{fmtBytes(duplicates.potential_savings)}</b></p>{duplicates.groups.slice(0,20).map(g => <div className="duplicate" key={g.digest}><b>{fmtBytes(g.size)} × {g.count}</b>{g.files.map(f => <span key={f.path}>{f.path}</span>)}</div>)}</>}</Card>
   </div>
 }
 
-function StorageBrain({ scanId, setError }) {
+function StorageBrain({ scanId, setError, health }) {
   const [root, setRoot] = useState('F:\\Storage')
   const [classes, setClasses] = useState([])
   const [plan, setPlan] = useState(null)
+  const [confirmation, setConfirmation] = useState('')
+  const [verify, setVerify] = useState('size')
+  const [result, setResult] = useState(null)
   useEffect(() => { api('/api/storage/classes').then(x => setClasses(x.classes || [])).catch(e => setError(e.message)) }, [setError])
-  async function build() {
-    try { setPlan(await api('/api/storage/plans', { method: 'POST', body: JSON.stringify({ scan_id: Number(scanId), storage_root: root }) })) } catch (e) { setError(e.message) }
-  }
+  async function build() { try { const p = await api('/api/storage/plans', { method: 'POST', body: JSON.stringify({ scan_id: Number(scanId), storage_root: root }) }); setPlan(p); setConfirmation(''); setResult(null) } catch (e) { setError(e.message) } }
+  async function apply() { try { const r = await api(`/api/storage/plans/${plan.id}/apply`, { method: 'POST', body: JSON.stringify({ confirmation, verify }) }); setResult(r); setPlan(await api(`/api/storage/plans/${plan.id}`)) } catch (e) { setError(e.message) } }
   return <div className="stack"><Card title="Storage classes"><div className="class-grid">{classes.map(c => <div key={c.key}><b>{c.title}</b><small>{c.relative_root}</small><p>{c.description}</p></div>)}</div></Card>
-    <Card title="Placement planner"><label>Managed storage root</label><input value={root} onChange={e => setRoot(e.target.value)} /><button className="primary" disabled={!scanId} onClick={build}>Build plan from scan {scanId || '—'}</button>
-      {plan && <><div className="metrics"><Metric label="Items" value={plan.total_items} /><Metric label="Data" value={fmtBytes(plan.total_bytes)} /><Metric label="Reserve" value={fmtBytes(plan.reserve_bytes)} /><Metric label="Free" value={fmtBytes(plan.projected_free_bytes)} /></div>{plan.warnings?.map(w => <p className="warning" key={w}>{w}</p>)}<div className="plan">{plan.items?.slice(0, 30).map(i => <div key={i.id}><span>{i.source_path}</span><b>→ {i.target_class}</b><span>{fmtBytes(i.size)}</span></div>)}</div></>}
+    <Card title="Placement Planner"><label>Корень управляемого хранилища</label><input value={root} onChange={e => setRoot(e.target.value)} /><button className="primary" disabled={!scanId} onClick={build}>Построить план из scan {scanId || '—'}</button>
+      {plan && <><div className="metrics"><Metric label="Items" value={plan.total_items} /><Metric label="Данные" value={fmtBytes(plan.total_bytes)} /><Metric label="Рабочий резерв" value={fmtBytes(plan.reserve_bytes)} /><Metric label="После плана свободно" value={fmtBytes(plan.projected_free_bytes)} /></div>{plan.warnings?.map(w => <p className="warning" key={w}>{w}</p>)}<div className="plan">{plan.items?.slice(0,80).map(i => <div key={i.id} className={i.status}><span title={i.source_path}>{i.source_path}</span><b>→ {i.target_class}</b><span>{i.action}</span><span>{fmtBytes(i.size)}</span></div>)}</div>
+        <div className="apply-box"><p><b>Same-volume</b>: atomic move + rollback journal. <b>Cross-volume</b>: copy→verify, исходник сохраняется.</p><select value={verify} onChange={e => setVerify(e.target.value)}><option value="size">Verify size</option><option value="sha256">Verify SHA-256</option></select><label>Введи <b>{plan.confirmation}</b></label><input value={confirmation} onChange={e => setConfirmation(e.target.value)} /><button className="primary" disabled={!health?.safety?.file_writes || confirmation !== plan.confirmation} onClick={apply}>Применить план</button>{!health?.safety?.file_writes && <small>DS_ALLOW_FILE_WRITES=0 — применение заблокировано.</small>}</div></>}
+      {result && <p className="success">{result.status}: moved {result.same_volume_moves}, copied+verified {result.verified_cross_volume_copies}, failed {result.failed}</p>}
     </Card></div>
 }
 
-function Files() {
-  const [path, setPath] = useState('F:\\')
-  const [data, setData] = useState(null)
-  const [error, setError] = useState('')
-  async function open(p = path) { try { const d = await api(`/api/files?path=${encodeURIComponent(p)}`); setData(d); setPath(d.path); setError('') } catch (e) { setError(e.message) } }
-  useEffect(() => { open(path) }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  return <Card title="Two-pane foundation"><div className="file-toolbar"><input value={path} onChange={e => setPath(e.target.value)} /><button onClick={() => open()}>Open</button></div>{error && <p className="warning">{error}</p>}<div className="file-list">{data?.items?.slice(0, 500).map(i => <button key={i.path} onDoubleClick={() => i.is_dir && open(i.path)}><span>{i.is_dir ? '📁' : '📄'} {i.name}</span><span>{i.is_dir ? '' : fmtBytes(i.size)}</span></button>)}</div><p className="muted">Copy / move / trash endpoints exist, but remain locked until DS_ALLOW_FILE_WRITES=1.</p></Card>
+function Files({ health, setError }) {
+  const [left, setLeft] = useState({ path: 'F:\\', data: null, selected: null })
+  const [right, setRight] = useState({ path: 'F:\\', data: null, selected: null })
+  const [preview, setPreview] = useState(null)
+  async function load(side, path) { try { const data = await api(`/api/files?path=${encodeURIComponent(path)}`); const update = { path: data.path, data, selected: null }; side === 'left' ? setLeft(update) : setRight(update) } catch (e) { setError(e.message) } }
+  useEffect(() => { load('left', left.path); load('right', right.path) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  async function choose(side, item) { side === 'left' ? setLeft(x => ({ ...x, selected: item })) : setRight(x => ({ ...x, selected: item })); if (!item.is_dir) { try { setPreview(await api(`/api/content/preview?path=${encodeURIComponent(item.path)}`)) } catch { setPreview(null) } } }
+  async function transfer(kind, from, to, fromSide) { if (!from.selected) return; const destination = joinPath(to.path, from.selected.name); try { await api(`/api/files/${kind}`, { method: 'POST', body: JSON.stringify({ source: from.selected.path, destination }) }); await load(fromSide, from.path); await load(fromSide === 'left' ? 'right' : 'left', to.path) } catch (e) { setError(e.message) } }
+  async function trash(side, name) { if (!side.selected) return; try { await api('/api/files/trash', { method: 'POST', body: JSON.stringify({ path: side.selected.path }) }); await load(name, side.path) } catch (e) { setError(e.message) } }
+  return <div className="stack"><div className="file-manager"><FilePane title="LEFT" side="left" state={left} setState={setLeft} load={load} choose={choose} /><div className="file-actions"><button disabled={!health?.safety?.file_writes || !left.selected} onClick={() => transfer('copy', left, right, 'left')}>Copy →</button><button disabled={!health?.safety?.file_writes || !left.selected} onClick={() => transfer('move', left, right, 'left')}>Move →</button><button disabled={!health?.safety?.file_writes || !right.selected} onClick={() => transfer('copy', right, left, 'right')}>← Copy</button><button disabled={!health?.safety?.file_writes || !right.selected} onClick={() => transfer('move', right, left, 'right')}>← Move</button><button className="trash" disabled={!health?.safety?.file_writes || (!left.selected && !right.selected)} onClick={() => left.selected ? trash(left,'left') : trash(right,'right')}>Trash</button></div><FilePane title="RIGHT" side="right" state={right} setState={setRight} load={load} choose={choose} /></div>
+    {preview && <PreviewCard preview={preview} />}</div>
 }
 
-function Vault() {
-  return <Card title="Encrypted Vault"><div className="hero"><div className="mascot">🔐</div><div><h2>Envelope encryption</h2><p>Argon2id derives a key from identity + secret; a random master key encrypts catalog and objects with AES-GCM. Recovery key is independent. Vault writes are locked by default.</p><p className="muted">Use the API after explicitly enabling DS_ALLOW_VAULT_WRITES=1. Browser token handling will be hardened before remote access is enabled.</p></div></div></Card>
+function FilePane({ title, side, state, setState, load, choose }) {
+  return <Card title={title} className="pane"><div className="file-toolbar"><button disabled={!state.data?.parent} onClick={() => state.data?.parent && load(side, state.data.parent)}>↑</button><input value={state.path} onChange={e => setState(x => ({ ...x, path: e.target.value }))} /><button onClick={() => load(side, state.path)}>Open</button></div><div className="file-list">{state.data?.items?.slice(0,1000).map(i => <button key={i.path} className={state.selected?.path === i.path ? 'selected' : ''} onClick={() => choose(side,i)} onDoubleClick={() => i.is_dir && load(side,i.path)}><span>{i.is_dir ? '📁' : '📄'} {i.name}</span><span>{i.is_dir ? '' : fmtBytes(i.size)}</span></button>)}</div></Card>
+}
+
+function Content({ health, setError }) {
+  const [path, setPath] = useState('')
+  const [preview, setPreview] = useState(null)
+  const [archive, setArchive] = useState(null)
+  const [destination, setDestination] = useState('')
+  async function inspect() { setArchive(null); try { setPreview(await api(`/api/content/preview?path=${encodeURIComponent(path)}`)) } catch (e) { setError(e.message) } }
+  async function browseArchive() { try { setArchive(await api(`/api/content/archive?path=${encodeURIComponent(path)}`)) } catch (e) { setError(e.message) } }
+  async function extract() { try { await api('/api/content/archive/extract', { method:'POST', body:JSON.stringify({ path, destination }) }) } catch (e) { setError(e.message) } }
+  return <div className="stack"><Card title="Preview Provider"><input placeholder="Полный путь к файлу" value={path} onChange={e => setPath(e.target.value)} /><div className="actions"><button className="primary" onClick={inspect}>Preview</button><button onClick={browseArchive}>Browse archive / ISO</button></div></Card>{preview && <PreviewCard preview={preview} />}{archive && <Card title={`${archive.provider.toUpperCase()} · ${archive.path}`}><div className="archive-list">{archive.entries.slice(0,1000).map((x,i) => <div key={`${x.name}-${i}`}><span>{x.is_dir ? '📁' : '📄'} {x.name}</span><span>{x.size == null ? '' : fmtBytes(x.size)}</span></div>)}</div><label>Extract destination (ZIP/TAR only)</label><input value={destination} onChange={e => setDestination(e.target.value)} /><button disabled={!health?.safety?.file_writes || !destination} onClick={extract}>Safe extract</button></Card>}</div>
+}
+
+function PreviewCard({ preview }) {
+  const visual = ['image','pdf'].includes(preview.provider)
+  return <Card title={`Preview · ${preview.name}`}><div className="preview-grid">{visual && <img className="preview-image" src={thumbnailUrl(preview.path, 800)} alt={preview.name} />}<div><div className="metrics"><Metric label="Provider" value={preview.provider} /><Metric label="Size" value={fmtBytes(preview.size)} /><Metric label="Type" value={preview.mime} /><Metric label="Geometry" value={preview.width ? `${preview.width}×${preview.height}` : preview.pages ? `${preview.pages} pages` : '—'} /></div>{preview.text && <pre className="text-preview">{preview.text.slice(0,50000)}</pre>}</div></div></Card>
+}
+
+function People({ scanId, setError }) {
+  const [caps, setCaps] = useState(null)
+  const [people, setPeople] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [photos, setPhotos] = useState([])
+  const [mode, setMode] = useState('all')
+  const refresh = async () => { if (!scanId) return; const x = await api(`/api/people?scan_id=${scanId}`); setPeople(x.people || []) }
+  useEffect(() => { api('/api/people/capabilities').then(setCaps).catch(e => setError(e.message)); refresh().catch(()=>{}) }, [scanId]) // eslint-disable-line react-hooks/exhaustive-deps
+  async function analyze() { try { await api(`/api/people/analyze/${scanId}`, { method:'POST', body:'{}' }); await refresh() } catch (e) { setError(e.message) } }
+  async function openPerson(p, nextMode = mode) { setSelected(p); setMode(nextMode); try { const x = await api(`/api/people/${p.id}/photos?mode=${nextMode}`); setPhotos(x.photos || []) } catch (e) { setError(e.message) } }
+  return <div className="stack"><Card title="Local Face Engine"><div className="hero"><div className="mascot">🦉</div><div><p>OpenCV YuNet + SFace, только локально. Облако: <b>нет</b>.</p><p>Detector: {caps?.detector_ready ? 'ready' : 'model not configured'} · Recognizer: {caps?.recognizer_ready ? 'ready' : 'model not configured'}</p><button className="primary" disabled={!scanId || !caps?.ready} onClick={analyze}>Проанализировать фото из scan {scanId || '—'}</button></div></div></Card>
+    <div className="people-grid">{people.map(p => <button key={p.id} className="person" onClick={() => openPerson(p)}>{p.cover_face_id ? <img src={`/api/people/faces/${p.cover_face_id}/thumbnail`} /> : <div className="face-placeholder">👤</div>}<b>{p.name}</b><small>{p.photos} photos · {p.faces} faces</small></button>)}</div>
+    {selected && <Card title={selected.name}><div className="tabs">{['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}</div><div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div></Card>}</div>
+}
+
+function Vault({ health, setError }) {
+  const [status, setStatus] = useState(null)
+  const [identity, setIdentity] = useState('')
+  const [secret, setSecret] = useState('')
+  const [recovery, setRecovery] = useState('')
+  const [recoveryShown, setRecoveryShown] = useState('')
+  const [unlocked, setUnlocked] = useState(false)
+  const [items, setItems] = useState([])
+  const [source, setSource] = useState('')
+  const [destination, setDestination] = useState('')
+  const refreshStatus = () => api('/api/vault/status').then(setStatus).catch(e => setError(e.message))
+  useEffect(refreshStatus, []) // eslint-disable-line react-hooks/exhaustive-deps
+  async function loadItems() { try { const x = await api('/api/vault/items'); setItems(x.items || []); setUnlocked(true) } catch { setUnlocked(false) } }
+  async function create() { try { const x = await api('/api/vault/create', { method:'POST', body:JSON.stringify({ identity, secret }) }); setRecoveryShown(x.recovery_key); refreshStatus() } catch (e) { setError(e.message) } }
+  async function unlock() { try { await api('/api/vault/unlock', { method:'POST', body:JSON.stringify({ identity, secret }) }); await loadItems() } catch (e) { setError(e.message) } }
+  async function unlockRecovery() { try { await api('/api/vault/unlock-recovery', { method:'POST', body:JSON.stringify({ recovery_key: recovery }) }); await loadItems() } catch (e) { setError(e.message) } }
+  async function lock() { await api('/api/vault/lock', { method:'POST', body:'{}' }); setUnlocked(false); setItems([]) }
+  async function importItem() { try { await api('/api/vault/import', { method:'POST', body:JSON.stringify({ source }) }); await loadItems() } catch (e) { setError(e.message) } }
+  async function exportItem(item) { try { await api('/api/vault/export', { method:'POST', body:JSON.stringify({ object_id:item.id, destination }) }) } catch (e) { setError(e.message) } }
+  return <div className="stack"><Card title="Encrypted Vault"><div className="hero"><div className="mascot">🔐</div><div><h2>Argon2id + AES-256-GCM</h2><p>Chunked encryption для больших файлов. Unlock key остаётся в RAM backend; браузер получает HttpOnly SameSite cookie.</p><p className="path">{status?.root}</p></div></div></Card>
+    {!status?.initialized && <Card title="Создать Vault"><input placeholder="Идентификатор (например СНИЛС)" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Дополнительная секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button disabled={!health?.safety?.vault_writes} onClick={create}>Создать</button>{recoveryShown && <div className="recovery"><b>Recovery key — сохрани отдельно:</b><code>{recoveryShown}</code></div>}</Card>}
+    {status?.initialized && !unlocked && <div className="grid two"><Card title="Unlock"><input placeholder="Идентификатор" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button className="primary" onClick={unlock}>Unlock</button></Card><Card title="Recovery"><input placeholder="Recovery key" value={recovery} onChange={e=>setRecovery(e.target.value)} /><button onClick={unlockRecovery}>Unlock recovery</button></Card></div>}
+    {unlocked && <Card title="Vault objects"><div className="actions"><button onClick={lock}>Lock now</button><input placeholder="Путь файла для импорта" value={source} onChange={e=>setSource(e.target.value)} /><button disabled={!health?.safety?.vault_writes || !source} onClick={importItem}>Encrypt + import</button></div><label>Export destination</label><input value={destination} onChange={e=>setDestination(e.target.value)} /><div className="vault-list">{items.map(i => <div key={i.id}><span>🔒 {i.name}</span><span>{fmtBytes(i.size)}</span><button disabled={!health?.safety?.vault_writes || !destination} onClick={()=>exportItem(i)}>Export</button></div>)}</div></Card>}
+  </div>
 }
 
 function StorageLab({ scanId, setError }) {
   const [data, setData] = useState(null)
+  const [path, setPath] = useState('')
+  const [extents, setExtents] = useState(null)
+  const [bench, setBench] = useState(null)
   async function run() { try { setData(await api(`/api/storage-lab/simulate/${scanId}`)) } catch (e) { setError(e.message) } }
-  return <Card title="Managed Interleave Simulator"><div className="hero"><div className="mascot">🧪</div><div className="grow"><p>Models logical placement classes without pretending we control platter geometry hidden by HDD firmware.</p><button className="primary" disabled={!scanId} onClick={run}>Simulate scan {scanId || '—'}</button></div></div>{data && <><p>Lanes: {data.lanes?.join(' · ')}</p><div className="extent-strip">{data.extents?.slice(0, 180).map((x, idx) => <i key={idx} title={`${x.lane}\n${x.path}`} className={`lane-${x.lane[0]}`} />)}</div><p>{data.note}</p></>}</Card>
+  async function queryExtents() { try { setExtents(await api(`/api/storage-lab/extents?path=${encodeURIComponent(path)}`)) } catch (e) { setError(e.message) } }
+  async function benchmark() { try { setBench(await api('/api/storage-lab/benchmark', { method:'POST', body:JSON.stringify({ path, block_size:4*1024*1024, samples:48 }) })) } catch (e) { setError(e.message) } }
+  return <div className="stack"><Card title="Managed Interleave Simulator"><div className="hero"><div className="mascot">🧪</div><div className="grow"><p>Моделирует логический target layout. Не делает ложных утверждений о скрытой геометрии пластин.</p><button className="primary" disabled={!scanId} onClick={run}>Simulate scan {scanId || '—'}</button></div></div>{data && <><p>Lanes: {data.lanes?.join(' · ')}</p><div className="extent-strip">{data.extents?.slice(0,260).map((x,idx)=><i key={idx} title={`${x.lane}\n${x.path}`} className={`lane-${x.lane[0]}`} />)}</div><p>{data.note}</p></>}</Card>
+    <Card title="NTFS Extents + read benchmark"><input placeholder="Полный путь к большому тестовому файлу" value={path} onChange={e=>setPath(e.target.value)} /><div className="actions"><button onClick={queryExtents}>Query extents</button><button onClick={benchmark}>Read benchmark</button></div>{extents && <p>Extents: <b>{extents.extent_count ?? '—'}</b> · {extents.supported ? 'NTFS mapping available' : extents.reason}</p>}{bench && <div className="metrics"><Metric label="Sequential" value={`${bench.sequential.mib_per_second.toFixed(1)} MiB/s`} /><Metric label="Seq p95" value={`${bench.sequential.latency_ms_p95.toFixed(1)} ms`} /><Metric label="Random" value={`${bench.random.mib_per_second.toFixed(1)} MiB/s`} /><Metric label="Random p95" value={`${bench.random.latency_ms_p95.toFixed(1)} ms`} /></div>}</Card></div>
 }
 
 function Metric({ label, value }) { return <div><small>{label}</small><b>{value}</b></div> }
 function Row({ name, value }) { return <div className="row"><span title={name}>{name}</span><b>{value}</b></div> }
-function Bar({ label, value, max, count }) { return <div className="bar"><div><b>{label}</b><span>{fmtBytes(value)} · {count} files</span></div><em><i style={{ width: `${Math.max(2, value / max * 100)}%` }} /></em></div> }
+function Bar({ label, value, max, count }) { return <div className="bar"><div><b>{label}</b><span>{fmtBytes(value)} · {count} files</span></div><em><i style={{ width:`${Math.max(2,value/max*100)}%` }} /></em></div> }

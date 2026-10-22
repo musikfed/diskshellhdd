@@ -22,6 +22,11 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new()
 $items = @(
   Get-Disk | ForEach-Object {
     $disk = $_
+    $reliability = $null
+    try {
+      $physical = Get-PhysicalDisk -ErrorAction Stop | Where-Object { [string]$_.DeviceId -eq [string]$disk.Number } | Select-Object -First 1
+      if ($physical) { $reliability = $physical | Get-StorageReliabilityCounter -ErrorAction Stop }
+    } catch { $reliability = $null }
     $partitions = @(
       Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue | ForEach-Object {
         $partition = $_
@@ -62,6 +67,11 @@ $items = @(
       IsSystem = [bool]$disk.IsSystem
       IsReadOnly = [bool]$disk.IsReadOnly
       IsOffline = [bool]$disk.IsOffline
+      Temperature = if ($reliability) { $reliability.Temperature } else { $null }
+      PowerOnHours = if ($reliability) { $reliability.PowerOnHours } else { $null }
+      ReadErrorsTotal = if ($reliability) { $reliability.ReadErrorsTotal } else { $null }
+      WriteErrorsTotal = if ($reliability) { $reliability.WriteErrorsTotal } else { $null }
+      Wear = if ($reliability) { $reliability.Wear } else { $null }
       Partitions = $partitions
     }
   }
@@ -125,6 +135,13 @@ def _disk_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "is_system": raw.get("IsSystem"),
         "is_read_only": raw.get("IsReadOnly"),
         "is_offline": raw.get("IsOffline"),
+        "reliability": {
+            "temperature_c": raw.get("Temperature"),
+            "power_on_hours": raw.get("PowerOnHours"),
+            "read_errors_total": raw.get("ReadErrorsTotal"),
+            "write_errors_total": raw.get("WriteErrorsTotal"),
+            "wear": raw.get("Wear"),
+        },
         "protected": bool(reasons),
         "protection_reasons": reasons,
         "write_policy": "blocked" if reasons else "locked",

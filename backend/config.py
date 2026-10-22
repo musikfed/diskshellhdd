@@ -43,12 +43,23 @@ class Settings:
     hard_fill_limit: float = _env_float("DS_HARD_FILL_LIMIT", 0.95)
     reserve_fraction: float = _env_float("DS_RESERVE_FRACTION", 0.05)
 
+    vault_root_raw: str = os.getenv("DS_VAULT_ROOT", "")
+
     face_detector_model: str = os.getenv("DS_FACE_DETECTOR_MODEL", "")
     face_recognizer_model: str = os.getenv("DS_FACE_RECOGNIZER_MODEL", "")
 
     @property
     def project_root(self) -> Path:
         return PROJECT_ROOT
+
+    @property
+    def vault_root(self) -> Path:
+        if self.vault_root_raw:
+            raw = Path(self.vault_root_raw)
+            if not raw.is_absolute():
+                raw = PROJECT_ROOT / raw
+            return raw.resolve()
+        return (self.data_dir / "vault").resolve()
 
     @property
     def data_dir(self) -> Path:

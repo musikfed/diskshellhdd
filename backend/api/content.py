@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+import io
 
-from backend.archives.service import UnsupportedArchive, list_archive
-from backend.preview.service import preview_metadata
+from flask import Blueprint, jsonify, request, send_file
+
+from backend.archives.service import ArchiveWriteBlocked, UnsupportedArchive, extract_archive, list_archive
+from backend.preview.service import preview_metadata, thumbnail_bytes
 from backend.vision.service import capabilities, detect_faces
 
 
@@ -21,6 +23,18 @@ def preview():
         return jsonify({"error": "preview_failed", "message": str(exc)}), 400
 
 
+@bp.get("/thumbnail")
+def thumbnail():
+    path = request.args.get("path")
+    if not path:
+        return jsonify({"error": "missing_path"}), 400
+    try:
+        data, mime = thumbnail_bytes(path, int(request.args.get("size", "720")))
+        return send_file(io.BytesIO(data), mimetype=mime, max_age=60)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        return jsonify({"error": "thumbnail_failed", "message": str(exc)}), 400
+
+
 @bp.get("/archive")
 def archive():
     path = request.args.get("path")
@@ -30,6 +44,17 @@ def archive():
         return jsonify(list_archive(path))
     except (FileNotFoundError, OSError, UnsupportedArchive, ValueError) as exc:
         return jsonify({"error": "archive_failed", "message": str(exc)}), 400
+
+
+@bp.post("/archive/extract")
+def extract():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(extract_archive(str(payload["path"]), str(payload["destination"])))
+    except ArchiveWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
+    except (KeyError, FileNotFoundError, FileExistsError, OSError, UnsupportedArchive, ValueError) as exc:
+        return jsonify({"error": "extract_failed", "message": str(exc)}), 400
 
 
 @bp.get("/vision/capabilities")

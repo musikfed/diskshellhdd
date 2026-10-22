@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import secrets
+import struct
 import time
 import uuid
 from pathlib import Path
@@ -15,6 +16,8 @@ from backend.config import settings
 
 
 SESSION_TTL_SECONDS = 15 * 60
+OBJECT_CHUNK_SIZE = 4 * 1024 * 1024
+OBJECT_MAGIC = b"DSVO1\0"
 _sessions: dict[str, dict] = {}
 
 
@@ -26,9 +29,23 @@ class VaultLocked(VaultError):
     pass
 
 
-def _vault_root() -> Path:
-    root = settings.data_dir / "vault"
-    root.mkdir(parents=True, exist_ok=True)
+def vault_status() -> dict:
+    root = settings.vault_root
+    header = root / "vault.json"
+    return {
+        "initialized": header.exists(),
+        "root": str(root),
+        "writes_allowed": settings.allow_vault_writes,
+        "session_ttl_seconds": SESSION_TTL_SECONDS,
+        "encryption": "AES-256-GCM chunked objects + encrypted catalog",
+        "kdf": "Argon2id",
+    }
+
+
+def _vault_root(create: bool = True) -> Path:
+    root = settings.vault_root
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -65,12 +82,15 @@ def _unb64(value: str) -> bytes:
 def create_vault(identity: str, secret: str) -> dict:
     if not settings.allow_vault_writes:
         raise VaultError("DS_ALLOW_VAULT_WRITES is disabled")
+    if not identity.strip():
+        raise VaultError("Vault identity is required")
+    if len(secret) < 8:
+        raise VaultError("Vault secret must be at least 8 characters")
+
     root = _vault_root()
     header_path = root / "vault.json"
     if header_path.exists():
         raise VaultError("Vault already exists")
-    if len(secret) < 8:
-        raise VaultError("Vault secret must be at least 8 characters")
 
     salt = os.urandom(16)
     master_key = os.urandom(32)
@@ -82,12 +102,13 @@ def create_vault(identity: str, secret: str) -> dict:
         recovery_key, master_key, b"diskshell-vault-recovery"
     )
     header = {
-        "version": 1,
+        "version": 2,
         "salt": _b64(salt),
         "wrap_nonce": _b64(wrap_nonce),
         "wrapped_master": _b64(wrapped_master),
         "recovery_nonce": _b64(recovery_nonce),
         "recovery_wrapped": _b64(recovery_wrapped),
+        "object_format": "DSVO1",
     }
     header_path.write_text(json.dumps(header, indent=2), encoding="utf-8")
     (root / "objects").mkdir(exist_ok=True)
@@ -105,7 +126,7 @@ def unlock(identity: str, secret: str) -> dict:
             _unb64(header["wrapped_master"]),
             b"diskshell-vault-master",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # cryptography deliberately hides exact auth failure
         raise VaultError("Invalid Vault identity/secret") from exc
     return _new_session(master_key)
 
@@ -119,7 +140,7 @@ def unlock_recovery(recovery_key: str) -> dict:
             _unb64(header["recovery_wrapped"]),
             b"diskshell-vault-recovery",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise VaultError("Invalid recovery key") from exc
     return _new_session(master_key)
 
@@ -131,7 +152,9 @@ def _new_session(master_key: bytes) -> dict:
 
 
 def lock(token: str) -> None:
-    _sessions.pop(token, None)
+    session = _sessions.pop(token, None)
+    if session is not None:
+        session["key"] = b""
 
 
 def _session_key(token: str) -> bytes:
@@ -139,14 +162,14 @@ def _session_key(token: str) -> bytes:
     if session is None:
         raise VaultLocked("Vault is locked")
     if time.monotonic() - session["last_used"] > SESSION_TTL_SECONDS:
-        _sessions.pop(token, None)
+        lock(token)
         raise VaultLocked("Vault session expired")
     session["last_used"] = time.monotonic()
     return bytes(session["key"])
 
 
 def _read_header() -> dict:
-    path = _vault_root() / "vault.json"
+    path = _vault_root(create=False) / "vault.json"
     if not path.exists():
         raise VaultError("Vault is not initialized")
     return json.loads(path.read_text(encoding="utf-8"))
@@ -159,7 +182,9 @@ def _catalog_path() -> Path:
 def _save_catalog(master_key: bytes, entries: list[dict]) -> None:
     payload = json.dumps(entries, ensure_ascii=False).encode("utf-8")
     nonce, ciphertext = _seal(master_key, payload, b"diskshell-vault-catalog")
-    _catalog_path().write_bytes(nonce + ciphertext)
+    temp = _catalog_path().with_suffix(".tmp")
+    temp.write_bytes(nonce + ciphertext)
+    os.replace(temp, _catalog_path())
 
 
 def _load_catalog(master_key: bytes) -> list[dict]:
@@ -175,6 +200,61 @@ def list_items(token: str) -> list[dict]:
     return _load_catalog(_session_key(token))
 
 
+def _encrypt_object(master_key: bytes, object_id: str, source: Path, destination: Path) -> int:
+    cipher = AESGCM(master_key)
+    total = 0
+    temp = destination.with_suffix(".tmp")
+    with source.open("rb") as src, temp.open("wb") as dst:
+        dst.write(OBJECT_MAGIC)
+        dst.write(struct.pack(">I", OBJECT_CHUNK_SIZE))
+        index = 0
+        while True:
+            chunk = src.read(OBJECT_CHUNK_SIZE)
+            if not chunk:
+                break
+            nonce = os.urandom(12)
+            aad = f"{object_id}:{index}".encode("ascii")
+            encrypted = cipher.encrypt(nonce, chunk, aad)
+            dst.write(nonce)
+            dst.write(struct.pack(">I", len(encrypted)))
+            dst.write(encrypted)
+            total += len(chunk)
+            index += 1
+    os.replace(temp, destination)
+    return total
+
+
+def _decrypt_object(master_key: bytes, object_id: str, source: Path, destination: Path) -> int:
+    cipher = AESGCM(master_key)
+    total = 0
+    temp = destination.with_name(f".{destination.name}.diskshell-vault-export-{uuid.uuid4().hex}")
+    with source.open("rb") as src, temp.open("wb") as dst:
+        if src.read(len(OBJECT_MAGIC)) != OBJECT_MAGIC:
+            raise VaultError("Unsupported or damaged Vault object")
+        _chunk_size = struct.unpack(">I", src.read(4))[0]
+        index = 0
+        while True:
+            nonce = src.read(12)
+            if not nonce:
+                break
+            if len(nonce) != 12:
+                raise VaultError("Damaged Vault object")
+            length_raw = src.read(4)
+            if len(length_raw) != 4:
+                raise VaultError("Damaged Vault object")
+            encrypted_len = struct.unpack(">I", length_raw)[0]
+            encrypted = src.read(encrypted_len)
+            if len(encrypted) != encrypted_len:
+                raise VaultError("Damaged Vault object")
+            aad = f"{object_id}:{index}".encode("ascii")
+            plaintext = cipher.decrypt(nonce, encrypted, aad)
+            dst.write(plaintext)
+            total += len(plaintext)
+            index += 1
+    os.replace(temp, destination)
+    return total
+
+
 def import_file(token: str, source: str | Path) -> dict:
     if not settings.allow_vault_writes:
         raise VaultError("DS_ALLOW_VAULT_WRITES is disabled")
@@ -184,16 +264,17 @@ def import_file(token: str, source: str | Path) -> dict:
         raise FileNotFoundError(source_path)
 
     object_id = uuid.uuid4().hex
-    plaintext = source_path.read_bytes()
-    nonce, ciphertext = _seal(master_key, plaintext, object_id.encode("ascii"))
-    (_vault_root() / "objects" / object_id).write_bytes(nonce + ciphertext)
+    object_path = _vault_root() / "objects" / object_id
+    object_path.parent.mkdir(exist_ok=True)
+    size = _encrypt_object(master_key, object_id, source_path, object_path)
 
     catalog = _load_catalog(master_key)
     item = {
         "id": object_id,
         "name": source_path.name,
-        "size": len(plaintext),
+        "size": size,
         "source_path": str(source_path),
+        "imported_at": time.time(),
     }
     catalog.append(item)
     _save_catalog(master_key, catalog)
@@ -208,11 +289,11 @@ def export_file(token: str, object_id: str, destination: str | Path) -> dict:
     item = next((row for row in catalog if row["id"] == object_id), None)
     if item is None:
         raise FileNotFoundError(object_id)
-    raw = (_vault_root() / "objects" / object_id).read_bytes()
-    plaintext = _open(master_key, raw[:12], raw[12:], object_id.encode("ascii"))
     dest = Path(destination).expanduser().resolve()
-    if dest.is_dir():
+    if dest.exists() and dest.is_dir():
         dest = dest / item["name"]
+    if dest.exists():
+        raise FileExistsError(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(plaintext)
-    return {"status": "exported", "path": str(dest), "size": len(plaintext)}
+    size = _decrypt_object(master_key, object_id, _vault_root() / "objects" / object_id, dest)
+    return {"status": "exported", "path": str(dest), "size": size}

@@ -1,67 +1,11 @@
-# Deployment on Windows 11
+# Deploying DiskShell 0.4 on Windows 11
 
-## Install
+Clone, copy `.env.example` to `.env`, run `uv sync --group dev`, Ruff, pytest, build the Vite frontend with Node 22+, then start `uv run python -m backend.app`. The default listener is `127.0.0.1:8765`.
 
-```powershell
-git clone https://github.com/musikfed/diskshellhdd.git F:\diskshellhdd
-cd F:\diskshellhdd
-Copy-Item .env.example .env
-uv sync --group dev
-uv run ruff check backend tests
-uv run pytest -v
-```
+Use `--extra preview` for PyMuPDF/7Z/ISO providers and `--extra vision` for local YuNet/SFace Photos/People. Configure model paths in `.env`.
 
-Optional preview support:
+Keep all `DS_ALLOW_*` gates at `0` for inspection. Enable each write domain only for the specific intended task. Never enable disk writes for the current Windows system/application disks. Extent moves remain disabled.
 
-```powershell
-uv sync --group dev --extra preview
-```
+For upgrades from an existing local clone, back up `data`, fetch `origin`, hard-reset to `origin/main`, sync dependencies, rebuild the frontend, and run tests. SQLite schema migrations are applied automatically.
 
-Optional local vision runtime:
-
-```powershell
-uv sync --group dev --extra vision
-```
-
-Face models are not downloaded automatically. Configure local YuNet/SFace model paths in `.env`.
-
-## Build UI
-
-```powershell
-cd F:\diskshellhdd\frontend
-npm install
-npm run build
-cd ..
-```
-
-## Run
-
-```powershell
-uv run python -m backend.app
-```
-
-Open `http://127.0.0.1:8765/`.
-
-## Safety
-
-Keep all write gates at `0` during examination. Enable only the one domain you explicitly want. Never enable disk writes before verifying `/api/disks` marks all system/boot/application disks as protected.
-
-## Updating an existing local folder from GitHub
-
-Commit or back up local changes first, then:
-
-```powershell
-cd F:\diskshellhdd
-git fetch origin
-git switch main
-git reset --hard origin/main
-uv sync --group dev
-cd frontend
-npm install
-npm run build
-cd ..
-uv run ruff check backend tests
-uv run pytest -v
-```
-
-`git reset --hard` intentionally replaces tracked local files with GitHub. Runtime data under ignored `data/` paths is not part of the repository, but make a backup before major updates.
+Keep `DS_HOST=127.0.0.1` until remote authentication is implemented for LAN/WireGuard deployment.

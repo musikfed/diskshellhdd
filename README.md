@@ -1,32 +1,28 @@
-# DiskShell HDD 0.3
+# DiskShell HDD 0.4
 
-[Русский](README.ru.md) · English
+[Русская версия](README.ru.md) · English
 
-DiskShell is a **local-first storage workspace and storage brain**, not a PowerShell frontend. It is designed to help a person inspect disks, understand what is stored, keep working free-space reserve, classify information, plan where data should live, browse and preview files, work with archives and private Vault data, and experiment with logical HDD layout policies.
+**DiskShell is a local-first storage workspace for operating a drive correctly and comfortably.** It is not a PowerShell wrapper. Users work with disks, files, storage classes, working-space reserve, placement plans, analytics, previews, archives, an encrypted Vault and Storage Lab. PowerShell is hidden inside the Windows adapter only where Windows does not expose a suitable high-level Python API.
 
-PowerShell exists only inside the Windows storage adapter where Windows has no better high-level Python API for a specific operation. The product model is storage-oriented: **content → policy → placement → safe execution → filesystem adapter**.
+## 0.4 capabilities
 
-## What is included
+- Windows 11 physical disk / partition / volume inventory with system, boot and application-disk protection.
+- Fast `os.scandir` filesystem index persisted in SQLite.
+- Content classification: photos, video, audio, documents, archives, disk images, code/development, backups, cache, system and more.
+- Analytics: categories, top folders/files, extension distribution, size-based duplicate candidates and opt-in SHA-256 exact duplicates.
+- Storage Classes and a capacity-aware Placement Planner.
+- Same-volume atomic moves with rollback journal; cross-volume copy → verify while keeping the original.
+- Two-pane file workspace with browse/copy/move/Trash/hash behind an independent file-write gate.
+- Local previews for images, text/code and PDF, plus ffprobe media metadata when installed.
+- Read-only ZIP/TAR/7Z/ISO browsing and traversal-safe ZIP/TAR extraction.
+- Vault using Argon2id, a random master key, AES-256-GCM, independent recovery key, chunked large-file encryption and HttpOnly unlock cookie.
+- Optional local Photos/People pipeline using OpenCV YuNet + SFace ONNX models; embeddings and clusters remain local.
+- Partition Magic safety layer for GPT + one NTFS/exFAT partition, allocation-unit choice, disk identity re-check and typed confirmation.
+- Storage Lab with Managed Interleave simulation, read-only NTFS extent queries and read-only sequential/random file benchmarks.
+- React/Vite UI.
+- Python backend only; **no Rust**.
 
-- Physical disk / partition / volume discovery on Windows 11.
-- Quick read-only filesystem indexer with SQLite history.
-- File classification: photos, video, audio, documents, archives, ISO/images, code, development dependencies, cache, system data, and other.
-- Analytics: categories, largest directories, largest files, extension distribution.
-- Storage Classes and Placement Planner.
-- Capacity policy with soft/hard fill limits and working reserve.
-- File workspace backend: browse, hash, copy, move, Trash (write gate locked by default).
-- Preview metadata for images, text/code and optional PDF.
-- Read-only ZIP/TAR, optional 7Z and ISO browsing.
-- AES-GCM encrypted Vault with Argon2id key derivation, random master key, recovery key and in-memory unlock sessions.
-- Partition Magic safety layer with protected-disk checks and typed confirmation (disk write gate locked by default).
-- Storage Lab managed-interleave simulator and read-only NTFS extent query.
-- Optional local face detector pipeline using OpenCV YuNet model paths; no cloud.
-- React/Vite UI with Dashboard, Disks, Examine, Analytics, Storage Brain, Files, Vault and Storage Lab.
-- No Rust.
-
-## Safety gates
-
-All risky write domains are independent and **OFF by default**:
+## Independent safety gates
 
 ```text
 DS_ALLOW_FILE_WRITES=0
@@ -35,7 +31,7 @@ DS_ALLOW_DISK_WRITES=0
 DS_ALLOW_EXTENT_MOVES=0
 ```
 
-System, boot and the disk containing DiskShell itself are marked protected. Partition formatting requires a separate disk-write gate plus exact typed confirmation.
+All are OFF by default. Protected system/boot/application disks remain blocked even when the disk-write gate is enabled.
 
 ## Windows quick start
 
@@ -55,6 +51,22 @@ uv run python -m backend.app
 
 Open `http://127.0.0.1:8765/`.
 
-For development UI: run backend, then `cd frontend; npm run dev` and open `http://127.0.0.1:5173/`.
+Optional preview providers:
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+```powershell
+uv sync --group dev --extra preview
+```
+
+Optional local Photos/People engine:
+
+```powershell
+uv sync --group dev --extra vision
+```
+
+Then configure local YuNet/SFace model paths in `.env`.
+
+## HDD layout research
+
+DiskShell only claims control over logical filesystem-visible placement (paths and NTFS extents/LCNs). HDD firmware hides platter geometry, angular position, remapping and internal scheduling. Managed Interleave is therefore a logical target-layout policy. Actual extent relocation remains deliberately locked until it is benchmarked on the target HDD/bridge.
+
+See [architecture](docs/ARCHITECTURE.md) and [deployment](docs/DEPLOYMENT.md).

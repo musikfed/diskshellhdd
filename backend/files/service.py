@@ -21,25 +21,15 @@ def list_directory(path: str | Path) -> dict:
     root = _resolved(path)
     if not root.is_dir():
         raise NotADirectoryError(root)
-
     items: list[dict] = []
     for item in root.iterdir():
         try:
             stat = item.stat()
-            items.append(
-                {
-                    "name": item.name,
-                    "path": str(item),
-                    "is_dir": item.is_dir(),
-                    "size": 0 if item.is_dir() else int(stat.st_size),
-                    "modified_ns": int(stat.st_mtime_ns),
-                }
-            )
+            items.append({"name": item.name, "path": str(item), "is_dir": item.is_dir(), "size": 0 if item.is_dir() else int(stat.st_size), "modified_ns": int(stat.st_mtime_ns)})
         except (PermissionError, FileNotFoundError, OSError):
             continue
-
     items.sort(key=lambda row: (not row["is_dir"], row["name"].casefold()))
-    return {"path": str(root), "items": items}
+    return {"path": str(root), "parent": str(root.parent) if root.parent != root else None, "items": items}
 
 
 def hash_file(path: str | Path, algorithm: str = "sha256") -> dict:
@@ -64,6 +54,8 @@ def copy_item(source: str | Path, destination: str | Path) -> dict:
     _require_writes()
     src = _resolved(source)
     dst = Path(destination).expanduser().resolve()
+    if dst.exists():
+        raise FileExistsError(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
         shutil.copytree(src, dst, dirs_exist_ok=False)
@@ -76,9 +68,18 @@ def move_item(source: str | Path, destination: str | Path) -> dict:
     _require_writes()
     src = _resolved(source)
     dst = Path(destination).expanduser().resolve()
+    if dst.exists():
+        raise FileExistsError(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
     return {"status": "completed", "source": str(src), "destination": str(dst)}
+
+
+def make_directory(path: str | Path) -> dict:
+    _require_writes()
+    target = Path(path).expanduser().resolve()
+    target.mkdir(parents=False, exist_ok=False)
+    return {"status": "created", "path": str(target)}
 
 
 def trash_item(path: str | Path) -> dict:

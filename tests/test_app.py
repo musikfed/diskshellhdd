@@ -7,5 +7,7 @@ def test_health_endpoint():
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "ok"
+    assert payload["version"] == "0.4.0"
     assert payload["python_only"] is True
     assert payload["safety"]["disk_writes"] is False
+    assert payload["safety"]["file_writes"] is False

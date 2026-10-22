@@ -1,3 +1,6 @@
+import pytest
+
+from backend.storage_brain.executor import PlanExecutionBlocked, apply_plan
 from backend.storage_brain.service import choose_storage_class
 
 
@@ -19,3 +22,8 @@ def test_placement_rule_selects_photo():
     )
     assert target == "photos"
     assert reason == "Photos"
+
+
+def test_plan_executor_is_locked_by_default():
+    with pytest.raises(PlanExecutionBlocked):
+        apply_plan(999999, "APPLY PLAN 999999")

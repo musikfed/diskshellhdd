@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ DEFAULT_CLASSES = [
 ]
 
 DEFAULT_RULES = [
+    ("Backups", "backup", None, None, None, None, "backups", 5),
     ("Photos", "photo", None, None, None, None, "photos", 10),
     ("Video", "video", None, None, None, None, "media", 20),
     ("Audio", "audio", None, None, None, None, "media", 30),
@@ -36,6 +38,8 @@ DEFAULT_RULES = [
     ("Development", "development", None, None, None, None, "development", 70),
     ("Code", "code", None, None, None, None, "development", 80),
     ("Cache", "cache", None, None, None, None, "temporary", 90),
+    ("Design", "design", None, None, None, None, "active", 100),
+    ("Executables", "executable", None, None, None, None, "archive", 110),
     ("Other", "other", None, None, None, None, "other", 1000),
 ]
 
@@ -91,8 +95,17 @@ def list_storage_classes() -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def _existing_anchor(path: Path) -> Path:
+    candidate = path.expanduser().resolve()
+    while not candidate.exists() and candidate.parent != candidate:
+        candidate = candidate.parent
+    if not candidate.exists():
+        raise FileNotFoundError(path)
+    return candidate
+
+
 def capacity_policy(storage_root: Path) -> CapacityPolicy:
-    usage = shutil.disk_usage(storage_root)
+    usage = shutil.disk_usage(_existing_anchor(storage_root))
     reserve = int(usage.total * settings.reserve_fraction)
     return CapacityPolicy(
         total=usage.total,
@@ -131,9 +144,62 @@ def choose_storage_class(file_row: dict, rules: list[dict]) -> tuple[str, str]:
     return "other", "Fallback"
 
 
+def _same_volume(source: Path, target_root: Path) -> bool:
+    if os.name == "nt":
+        return source.drive.casefold() == target_root.drive.casefold()
+    try:
+        return source.stat().st_dev == _existing_anchor(target_root).stat().st_dev
+    except OSError:
+        return False
+
+
+def _year(file_row: dict) -> str:
+    value = file_row.get("modified_ns")
+    if not value:
+        return "Unknown year"
+    try:
+        return datetime.fromtimestamp(value / 1_000_000_000, tz=UTC).strftime("%Y")
+    except (OSError, OverflowError, ValueError):
+        return "Unknown year"
+
+
+def _target_folder(storage_root: Path, class_row: dict, file_row: dict) -> Path:
+    base = storage_root / class_row["relative_root"]
+    category = file_row["category"]
+    if category == "photo":
+        return base / _year(file_row)
+    if category == "video":
+        return base / "Video"
+    if category == "audio":
+        return base / "Audio"
+    if category in {"archive", "backup"}:
+        return base / _year(file_row)
+    if category in {"development", "code"}:
+        parent = Path(file_row["parent_path"]).name or "Projects"
+        return base / parent
+    return base
+
+
+def _unique_target(folder: Path, source: Path, reserved: set[str]) -> Path:
+    target = folder / source.name
+    key = str(target).casefold()
+    if key not in reserved and not target.exists():
+        reserved.add(key)
+        return target
+
+    parent_hint = source.parent.name.strip() or "item"
+    candidate = folder / f"{source.stem} [{parent_hint}]{source.suffix}"
+    counter = 2
+    while str(candidate).casefold() in reserved or candidate.exists():
+        candidate = folder / f"{source.stem} [{parent_hint} {counter}]{source.suffix}"
+        counter += 1
+    reserved.add(str(candidate).casefold())
+    return candidate
+
+
 def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
     ensure_defaults()
-    storage_root = storage_root.resolve()
+    storage_root = storage_root.expanduser().resolve()
     policy = capacity_policy(storage_root)
 
     with connect() as connection:
@@ -160,21 +226,35 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
         ]
 
         warnings: list[str] = []
-        projected_used = policy.used
         items: list[tuple] = []
+        reserved_targets: set[str] = set()
+        additional_target_bytes = 0
 
         for file_row in files:
             target_class, reason = choose_storage_class(file_row, rules)
             class_row = classes.get(target_class, classes["other"])
             source = Path(file_row["path"])
-            target = storage_root / class_row["relative_root"] / source.name
+            target_class_root = storage_root / class_row["relative_root"]
 
-            # Files already below the target class root are considered correctly placed.
             try:
-                source.resolve().relative_to((storage_root / class_row["relative_root"]).resolve())
+                source.resolve().relative_to(target_class_root.resolve())
+                connection.execute(
+                    "UPDATE files SET storage_class = ? WHERE id = ?",
+                    (target_class, file_row["id"]),
+                )
                 continue
             except ValueError:
                 pass
+
+            target = _unique_target(
+                _target_folder(storage_root, class_row, file_row),
+                source,
+                reserved_targets,
+            )
+            same_volume = _same_volume(source, storage_root)
+            action = "move_same_volume" if same_volume else "copy_cross_volume"
+            if not same_volume:
+                additional_target_bytes += int(file_row["size"])
 
             items.append(
                 (
@@ -183,18 +263,22 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
                     target_class,
                     int(file_row["size"]),
                     reason,
-                    "move",
+                    action,
                 )
             )
+            connection.execute(
+                "UPDATE files SET storage_class = ? WHERE id = ?",
+                (target_class, file_row["id"]),
+            )
 
-        total_bytes = sum(item[3] for item in items)
+        projected_used = policy.used + additional_target_bytes
         projected_free = max(0, policy.total - projected_used)
         if projected_free < policy.reserve:
-            warnings.append("Free space is below the configured working reserve")
+            warnings.append("Projected free space is below the configured working reserve")
         if projected_used >= policy.soft_limit:
-            warnings.append("Storage is above the soft fill limit")
+            warnings.append("Projected storage use is above the soft fill limit")
         if projected_used >= policy.hard_limit:
-            warnings.append("Storage is above the hard fill limit; write-heavy reorganization should stop")
+            warnings.append("Projected storage use is above the hard fill limit; do not apply this plan")
 
         cursor = connection.execute(
             """
@@ -207,7 +291,7 @@ def create_placement_plan(scan_id: int, storage_root: Path) -> dict:
                 scan_id,
                 str(storage_root),
                 len(items),
-                total_bytes,
+                sum(item[3] for item in items),
                 projected_used,
                 projected_free,
                 policy.reserve,
@@ -246,4 +330,5 @@ def get_plan(plan_id: int) -> dict:
     result = dict(plan)
     result["warnings"] = json.loads(result["warnings"] or "[]")
     result["items"] = [dict(row) for row in items]
+    result["confirmation"] = f"APPLY PLAN {plan_id}"
     return result

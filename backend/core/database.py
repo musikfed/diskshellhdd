@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS placement_plan_items (
     action TEXT NOT NULL DEFAULT 'move',
     layout_lane TEXT,
     target_band_bytes INTEGER,
-    selected INTEGER NOT NULL DEFAULT 1,
+    selected INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'pending',
     verification TEXT,
     layout_verification TEXT,
@@ -307,7 +307,7 @@ def init_database() -> None:
                 ("error", "TEXT"),
                 ("layout_lane", "TEXT"),
                 ("target_band_bytes", "INTEGER"),
-                ("selected", "INTEGER NOT NULL DEFAULT 1"),
+                ("selected", "INTEGER NOT NULL DEFAULT 0"),
                 ("layout_verification", "TEXT"),
             ],
         )

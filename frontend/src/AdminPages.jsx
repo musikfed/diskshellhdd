@@ -807,17 +807,27 @@ export function DiagnosticsAdmin({ setError }) {
   const terminal = useMemo(() => new Set(['completed', 'failed', 'cancelled']), [])
 
   async function refreshBase() {
-    const [inventory, caps, previous] = await Promise.all([
-      api('/api/disks'),
-      api('/api/disks/capabilities'),
-      api('/api/diagnostics/history?limit=8'),
-    ])
-    setDisks(inventory.disks || [])
-    setElevated(caps.process_elevated)
-    setHistory(previous.runs || [])
-    if (!diskNumber && inventory.disks?.length) {
-      const preferred = inventory.disks.find(item => !item.protected) || inventory.disks[0]
+    const inventory = await api('/api/disks')
+    const availableDisks = inventory.disks || []
+    setDisks(availableDisks)
+
+    if (!diskNumber && availableDisks.length) {
+      const preferred = availableDisks.find(item => !item.protected) || availableDisks[0]
       setDiskNumber(String(preferred.number))
+    }
+
+    try {
+      const caps = await api('/api/disks/capabilities')
+      setElevated(caps.process_elevated)
+    } catch {
+      setElevated(null)
+    }
+
+    try {
+      const previous = await api('/api/diagnostics/history?limit=8')
+      setHistory(previous.runs || [])
+    } catch {
+      setHistory([])
     }
   }
 
@@ -886,9 +896,11 @@ export function DiagnosticsAdmin({ setError }) {
       <div className="diagnostic-controls">
         <div>
           <label>Physical disk</label>
-          <select value={diskNumber} onChange={e => setDiskNumber(e.target.value)} disabled={running}>
-            {disks.map(d => <option key={d.number} value={d.number}>Disk {d.number} · {d.friendly_name} · {fmtBytes(d.size)}</option>)}
+          <select value={diskNumber} onChange={e => setDiskNumber(e.target.value)} disabled={running || disks.length === 0}>
+            {disks.length === 0 && <option value="">Нет доступных дисков</option>}
+            {disks.map(d => <option key={d.number} value={d.number}>Disk {d.number} · {d.friendly_name} · {fmtBytes(d.size)} · {d.bus_type}</option>)}
           </select>
+          {disks.length === 0 && <small className="warning-inline">/api/disks не вернул физические диски. Проверь страницу «Диски» и backend console.</small>}
         </div>
         <div>
           <label>Глубина</label>

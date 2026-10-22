@@ -1,6 +1,6 @@
 # Развёртывание DiskShell 0.6.3
 
-DiskShell 0.6.3 развивает первую рабочую admin baseline; GitHub `main` считается источником истины. GitHub `main` считается источником истины.
+DiskShell 0.6.3 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
 
 ## Важно про права администратора
 
@@ -45,6 +45,12 @@ Set-Location "F:\diskshellhdd"
 .\scripts\start-admin.ps1
 ```
 
+То же через workspace shortcut:
+
+```powershell
+npm run backend:admin:win
+```
+
 Скрипт сам проверяет token процесса. Если прав Administrator нет, Windows покажет стандартный UAC prompt и запустит **только backend** в elevated PowerShell. Это безопаснее, чем держать весь редактор с повышенными правами.
 
 Можно также запустить двойным кликом / из cmd.exe:
@@ -65,7 +71,7 @@ Ctrl+Shift+P
 
 Task вызывает `scripts/start-admin.ps1`; после UAC backend работает elevated. Исходный VS Code может оставаться обычным пользователем.
 
-Если нужен именно **elevated integrated terminal**, есть второй task:
+Если нужен именно **elevated integrated terminal**, есть второй task. То же можно вызвать командой `npm run vscode:admin:win`:
 
 ```text
 Ctrl+Shift+P
@@ -138,10 +144,24 @@ npm run build
 
 ### Admin/root CLI запуск backend
 
-Не запускай `sudo uv sync` или `sudo npm`. Повышай права только у backend-процесса:
+Не запускай `sudo uv sync` или `sudo npm`. Повышай права только у backend-процесса.
+
+Готовый launcher:
 
 ```bash
 cd /path/to/diskshellhdd
+bash scripts/start-admin.sh
+```
+
+или workspace shortcut:
+
+```bash
+npm run backend:admin:linux
+```
+
+Эквивалент вручную:
+
+```bash
 sudo -E "$(pwd)/.venv/bin/python" -m backend.app
 ```
 

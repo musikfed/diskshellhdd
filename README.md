@@ -48,12 +48,16 @@ npm run ui:install
 npm run build
 ```
 
-**Launch the backend from PowerShell / Windows Terminal “Run as Administrator” for storage-admin features:**
+**Run the storage-admin backend elevated. The easiest path from normal PowerShell or the VS Code terminal is:**
 
 ```powershell
 Set-Location "F:\diskshellhdd"
-uv run python -m backend.app
+.\scripts\start-admin.ps1
 ```
+
+The script requests UAC only for the backend. VS Code also exposes `DiskShell: Backend as Administrator`; `DiskShell: Reopen VS Code as Administrator` elevates the whole editor and its extensions, so use that only for a trusted workspace.
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the `runas` fallback and Linux/root launch.
 
 With `DS_DEBUG=0`, Waitress is used. Open `http://127.0.0.1:8765/`.
 

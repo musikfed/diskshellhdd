@@ -6,12 +6,16 @@ import re
 import subprocess
 from typing import Any
 
+from backend.services.storage.filesystem_profiles import (
+    filesystem_names,
+    validate_allocation_unit,
+    validate_volume_size,
+)
 from backend.services.storage.windows_disks import DiskDetectionError, list_windows_disks
 from backend.services.storage.write_authorization import DiskWriteBlocked, require_disk_write_authorized
 
 
-VALID_CLUSTER_SIZES = {4096, 8192, 16384, 32768, 65536}
-VALID_FILESYSTEMS = {"NTFS", "EXFAT"}
+VALID_FILESYSTEMS = filesystem_names()
 
 
 def _get_disk(disk_number: int) -> dict[str, Any]:
@@ -25,7 +29,8 @@ def _get_disk(disk_number: int) -> dict[str, Any]:
 def _validate_filesystem(filesystem: str) -> str:
     value = filesystem.upper()
     if value not in VALID_FILESYSTEMS:
-        raise ValueError("Only NTFS and exFAT are supported")
+        supported = ", ".join(sorted(VALID_FILESYSTEMS))
+        raise ValueError(f"Unsupported filesystem. Supported: {supported}")
     return value
 
 
@@ -36,11 +41,8 @@ def _validate_label(label: str) -> str:
     return value
 
 
-def _validate_cluster(allocation_unit: int) -> int:
-    value = int(allocation_unit)
-    if value not in VALID_CLUSTER_SIZES:
-        raise ValueError("Unsupported allocation unit size")
-    return value
+def _validate_cluster(filesystem: str, allocation_unit: int) -> int:
+    return validate_allocation_unit(filesystem, allocation_unit)
 
 
 def _validate_drive_letter(letter: str | None) -> str | None:
@@ -116,7 +118,7 @@ def create_partition_plan(
 
     fs = _validate_filesystem(filesystem)
     volume_label = _validate_label(label)
-    cluster = _validate_cluster(allocation_unit)
+    cluster = _validate_cluster(fs, allocation_unit)
     letter = _validate_drive_letter(drive_letter)
     largest = int(disk.get("largest_free_extent") or 0)
     if largest <= 0:
@@ -125,6 +127,7 @@ def create_partition_plan(
     requested = largest if size_bytes in {None, 0} else int(size_bytes)
     if requested <= 0 or requested > largest:
         raise ValueError("Requested partition size exceeds the largest free extent")
+    validate_volume_size(fs, cluster, requested)
 
     return {
         "disk": disk,
@@ -294,7 +297,6 @@ def _run_storage_script(script: str, extra_env: dict[str, str]) -> dict[str, Any
 __all__ = [
     "DiskDetectionError",
     "DiskWriteBlocked",
-    "VALID_CLUSTER_SIZES",
     "assign_drive_letter",
     "create_partition",
     "create_partition_plan",

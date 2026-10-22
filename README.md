@@ -1,4 +1,4 @@
-# DiskShell HDD 0.5.1
+# DiskShell HDD 0.5.2
 
 [Русская версия](README.ru.md) · English
 
@@ -49,3 +49,15 @@ uv run python -m backend.app
 Open `http://127.0.0.1:8765/`.
 
 See [architecture](docs/ARCHITECTURE.md), [deployment](docs/DEPLOYMENT.md), and [operator safety](docs/SAFETY.md).
+
+## Storage wizard 0.5.2
+
+DiskShell now separates disk initialization, partition/volume creation, and the destructive whole-disk workflow.
+
+- **Initialize GPT** writes the partition table only.
+- **Create partition / volume** uses existing unallocated space and accepts an explicit GiB size or the maximum free extent.
+- **Clear + first volume** can create a first volume smaller than the physical disk and leave the remainder unallocated for additional volumes.
+
+The Windows Storage `Format-Volume` adapter exposes **NTFS, exFAT, ReFS, FAT32, and FAT** with filesystem-specific allocation-unit choices and size/cluster-count validation.
+
+Progress is truthful: Files and Placement have real percentages; filesystem discovery, Defender/ClamAV, and destructive Windows Storage operations use indeterminate activity when no reliable total is available.

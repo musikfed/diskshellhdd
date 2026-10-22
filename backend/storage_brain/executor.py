@@ -46,6 +46,7 @@ def _copy_with_cancel(
     source: Path,
     target: Path,
     cancel_callback: CancelCallback | None,
+    byte_callback: Callable[[int], None] | None = None,
 ) -> None:
     with source.open("rb") as src, target.open("xb") as dst:
         while True:
@@ -54,6 +55,8 @@ def _copy_with_cancel(
             if not chunk:
                 break
             dst.write(chunk)
+            if byte_callback is not None:
+                byte_callback(len(chunk))
         dst.flush()
         os.fsync(dst.fileno())
     shutil.copystat(source, target, follow_symlinks=False)
@@ -144,6 +147,9 @@ def apply_plan(
     copied = 0
     moved = 0
     total = len(plan["items"])
+    total_bytes = sum(int(item.get("size") or 0) for item in plan["items"])
+    processed_bytes = 0
+    active_item_bytes = 0
 
     def report(current: dict[str, Any] | None = None) -> None:
         if progress_callback is None:
@@ -156,6 +162,13 @@ def apply_plan(
                 "copied": copied,
                 "moved": moved,
                 "total": total,
+                "total_bytes": total_bytes,
+                "processed_bytes": processed_bytes + active_item_bytes,
+                "progress_percent": (
+                    min(100.0, (processed_bytes + active_item_bytes) * 100.0 / total_bytes)
+                    if total_bytes > 0
+                    else None
+                ),
                 "current": current,
             }
         )
@@ -165,8 +178,10 @@ def apply_plan(
     try:
         for item in plan["items"]:
             _check_cancel(cancel_callback)
+            active_item_bytes = 0
             if item["status"] == "completed":
                 completed += 1
+                processed_bytes += int(item.get("size") or 0)
                 report(item)
                 continue
 
@@ -197,6 +212,7 @@ def apply_plan(
                             )
                             connection.commit()
                         completed += 1
+                        processed_bytes += int(item.get("size") or 0)
                         report(item)
                         continue
                     raise FileNotFoundError(source)
@@ -228,12 +244,24 @@ def apply_plan(
                             os.replace(target, source)
                         raise
                     moved += 1
+                    active_item_bytes = source_size
+                    report(item)
                 else:
                     partial = target.with_name(
                         f".{target.name}.diskshell-partial-{uuid.uuid4().hex}"
                     )
                     try:
-                        _copy_with_cancel(source, partial, cancel_callback)
+                        def add_bytes(count: int) -> None:
+                            nonlocal active_item_bytes
+                            active_item_bytes += count
+                            report(item)
+
+                        _copy_with_cancel(
+                            source,
+                            partial,
+                            cancel_callback,
+                            byte_callback=add_bytes,
+                        )
                         verification = _verify(
                             source_size,
                             partial,
@@ -268,12 +296,15 @@ def apply_plan(
                     )
                     connection.commit()
                 completed += 1
+                processed_bytes += source_size
+                active_item_bytes = 0
                 report(item)
 
             except PlanExecutionCancelled:
                 raise
             except (OSError, ValueError) as exc:
                 failed += 1
+                active_item_bytes = 0
                 with connect() as connection:
                     connection.execute(
                         "UPDATE placement_plan_items SET status='failed', error=? WHERE id=?",

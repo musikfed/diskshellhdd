@@ -13,18 +13,108 @@ function StatusPill({ children, tone = 'neutral' }) {
   return <span className={`status-pill ${tone}`}>{children}</span>
 }
 
+function JobProgress({ percent = null, running = false, label = '' }) {
+  const known = percent !== null && percent !== undefined && Number.isFinite(Number(percent))
+  const value = known ? Math.max(0, Math.min(100, Number(percent))) : null
+  return <div className="job-progress">
+    <div className={`progress-track ${known ? 'determinate' : 'indeterminate'}`}>
+      <i
+        className={running ? 'running' : ''}
+        style={known ? { width: `${value}%` } : undefined}
+      />
+    </div>
+    <div className="progress-caption">
+      <span>{label}</span>
+      <b>{known ? `${value.toFixed(value < 10 ? 1 : 0)}%` : (running ? 'процент неизвестен' : '')}</b>
+    </div>
+  </div>
+}
+
+function diskSegments(disk) {
+  const size = Number(disk?.size || 0)
+  if (!size) return []
+  if (String(disk.partition_style).toUpperCase() === 'RAW') {
+    return [{ key: 'raw', kind: 'free', size, label: 'RAW / Unallocated' }]
+  }
+
+  const partitions = [...(disk.partitions || [])]
+    .filter(item => Number(item.size || 0) > 0)
+    .sort((a, b) => Number(a.offset || 0) - Number(b.offset || 0))
+
+  const result = []
+  let cursor = 0
+  for (const partition of partitions) {
+    const offset = Math.max(0, Number(partition.offset || 0))
+    if (offset > cursor) {
+      result.push({
+        key: `free-${cursor}`,
+        kind: 'free',
+        size: offset - cursor,
+        label: 'Unallocated',
+      })
+    }
+    result.push({
+      key: `partition-${partition.partition_number}`,
+      kind: 'partition',
+      size: Number(partition.size || 0),
+      label: `${partition.drive_letter || `#${partition.partition_number}`} · ${partition.filesystem || 'RAW volume'}`,
+    })
+    cursor = Math.max(cursor, offset + Number(partition.size || 0))
+  }
+  if (cursor < size) {
+    result.push({ key: `free-${cursor}`, kind: 'free', size: size - cursor, label: 'Unallocated' })
+  }
+  return result
+}
+
+function DiskLayoutBar({ disk }) {
+  const segments = diskSegments(disk)
+  const total = Number(disk?.size || 1)
+  return <div className="disk-layout">
+    <div className="disk-layout-bar">
+      {segments.map(segment => {
+        const percent = Math.max(0.15, segment.size * 100 / total)
+        return <div
+          key={segment.key}
+          className={`disk-segment ${segment.kind}`}
+          style={{ flexBasis: `${percent}%` }}
+          title={`${segment.label} · ${fmtBytes(segment.size)} · ${(segment.size * 100 / total).toFixed(2)}%`}
+        >
+          {percent >= 8 && <span>{segment.label}</span>}
+        </div>
+      })}
+    </div>
+    <div className="disk-layout-legend">
+      {segments.filter(segment => segment.size / total >= 0.001).map(segment => <span key={`legend-${segment.key}`}>
+        <i className={segment.kind} /> {segment.label}: <b>{fmtBytes(segment.size)}</b>
+      </span>)}
+    </div>
+  </div>
+}
+
+function gibToBytes(value) {
+  if (value === '' || value === null || value === undefined) return null
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) throw new Error('Размер тома должен быть положительным числом GiB')
+  return Math.floor(number * 1024 ** 3)
+}
+
 const TERMINAL_SCAN = new Set(['completed', 'failed', 'cancelled'])
 const TERMINAL_PLAN = new Set(['completed', 'partial', 'failed', 'blocked', 'cancelled'])
 
 export function DisksAdmin({ setError }) {
   const [data, setData] = useState(null)
+  const [capabilities, setCapabilities] = useState({ filesystems: [] })
   const [unlockPlan, setUnlockPlan] = useState(null)
   const [unlockConfirm, setUnlockConfirm] = useState('')
   const [formatPlan, setFormatPlan] = useState(null)
+  const [formatDirty, setFormatDirty] = useState(false)
   const [formatConfirm, setFormatConfirm] = useState('')
   const [fs, setFs] = useState('NTFS')
   const [cluster, setCluster] = useState(16384)
   const [label, setLabel] = useState('Storage')
+  const [formatSizeGiB, setFormatSizeGiB] = useState('')
+  const [formatDriveLetter, setFormatDriveLetter] = useState('')
   const [partitionDraft, setPartitionDraft] = useState(null)
   const [partitionPlan, setPartitionPlan] = useState(null)
   const [partitionConfirm, setPartitionConfirm] = useState('')
@@ -32,10 +122,16 @@ export function DisksAdmin({ setError }) {
   const [initializeConfirm, setInitializeConfirm] = useState('')
   const [letterDraft, setLetterDraft] = useState(null)
   const [letterConfirm, setLetterConfirm] = useState('')
+  const [diskBusy, setDiskBusy] = useState('')
 
   const reload = () => api('/api/disks').then(setData).catch(e => setError(e.message))
-  useEffect(reload, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    Promise.all([api('/api/disks'), api('/api/disks/capabilities')])
+      .then(([disks, caps]) => { setData(disks); setCapabilities(caps) })
+      .catch(e => setError(e.message))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const filesystemProfile = key => capabilities.filesystems?.find(item => item.key === key)
   const diskByNumber = number => (data?.disks || []).find(d => d.number === number)
 
   async function prepareUnlock(disk) {
@@ -67,16 +163,25 @@ export function DisksAdmin({ setError }) {
 
   async function prepareFormat(number) {
     try {
+      const sizeBytes = gibToBytes(formatSizeGiB)
       const value = await api(`/api/disks/${number}/format-plan`, {
         method: 'POST',
-        body: JSON.stringify({ filesystem: fs, label, allocation_unit: cluster }),
+        body: JSON.stringify({
+          filesystem: fs,
+          label,
+          allocation_unit: cluster,
+          size_bytes: sizeBytes,
+          drive_letter: formatDriveLetter || null,
+        }),
       })
       setFormatPlan(value)
+      setFormatDirty(false)
       setFormatConfirm('')
     } catch (e) { setError(e.message) }
   }
 
   async function executeFormat() {
+    setDiskBusy('Очистка / GPT / создание раздела / форматирование. Не отключай диск.')
     try {
       await api(`/api/disks/${formatPlan.disk.number}/format`, {
         method: 'POST',
@@ -84,12 +189,16 @@ export function DisksAdmin({ setError }) {
           filesystem: fs,
           label,
           allocation_unit: cluster,
+          size_bytes: formatPlan.use_maximum ? null : formatPlan.size_bytes,
+          drive_letter: formatDriveLetter || null,
           confirmation: formatConfirm,
         }),
       })
       setFormatPlan(null)
+      setFormatDirty(false)
       await reload()
     } catch (e) { setError(e.message) }
+    finally { setDiskBusy('') }
   }
 
   async function prepareInitialize(number) {
@@ -104,6 +213,7 @@ export function DisksAdmin({ setError }) {
   }
 
   async function executeInitialize() {
+    setDiskBusy('Windows создаёт таблицу разделов GPT. Не отключай диск.')
     try {
       await api(`/api/disks/${initializePlan.disk.number}/initialize`, {
         method: 'POST',
@@ -112,6 +222,7 @@ export function DisksAdmin({ setError }) {
       setInitializePlan(null)
       await reload()
     } catch (e) { setError(e.message) }
+    finally { setDiskBusy('') }
   }
 
   function newPartition(disk) {
@@ -128,10 +239,8 @@ export function DisksAdmin({ setError }) {
   }
 
   async function preparePartition() {
-    const sizeBytes = partitionDraft.sizeGiB
-      ? Math.floor(Number(partitionDraft.sizeGiB) * 1024 ** 3)
-      : null
     try {
+      const sizeBytes = gibToBytes(partitionDraft.sizeGiB)
       const value = await api(`/api/disks/${partitionDraft.diskNumber}/partitions/create-plan`, {
         method: 'POST',
         body: JSON.stringify({
@@ -148,6 +257,7 @@ export function DisksAdmin({ setError }) {
   }
 
   async function executePartition() {
+    setDiskBusy('Windows создаёт и форматирует новый том. Не отключай диск.')
     try {
       await api(`/api/disks/${partitionDraft.diskNumber}/partitions`, {
         method: 'POST',
@@ -164,6 +274,7 @@ export function DisksAdmin({ setError }) {
       setPartitionPlan(null)
       await reload()
     } catch (e) { setError(e.message) }
+    finally { setDiskBusy('') }
   }
 
   function prepareLetter(disk, partition) {
@@ -178,6 +289,7 @@ export function DisksAdmin({ setError }) {
   async function executeLetter() {
     const letter = letterDraft.driveLetter.trim().toUpperCase().replace(':', '')
     const expected = `ASSIGN ${letter}: DISK ${letterDraft.diskNumber} PARTITION ${letterDraft.partitionNumber}`
+    setDiskBusy('Windows назначает букву тома.')
     try {
       await api(
         `/api/disks/${letterDraft.diskNumber}/partitions/${letterDraft.partitionNumber}/drive-letter`,
@@ -189,10 +301,15 @@ export function DisksAdmin({ setError }) {
       setLetterDraft(null)
       await reload()
     } catch (e) { setError(e.message) }
+    finally { setDiskBusy('') }
     return expected
   }
 
   return <div className="stack admin-workbench">
+    {diskBusy && <Panel title="Disk operation">
+      <JobProgress running label={diskBusy} />
+      <p className="muted">Для Initialize / partition / format Windows Storage API не отдаёт DiskShell надёжный общий процент. Принудительный Stop здесь намеренно не предлагается.</p>
+    </Panel>}
     <div className="admin-banner">
       <div className="admin-icon">⚠</div>
       <div>
@@ -219,17 +336,20 @@ export function DisksAdmin({ setError }) {
         <div className="disk-identity">
           <span>Serial: <b>{d.serial_number || '—'}</b></span>
           <span>UniqueId: <b>{d.unique_id || '—'}</b></span>
-          <span>Free extent: <b>{fmtBytes(d.largest_free_extent)}</b></span>
+          <span>Largest free extent: <b>{String(d.partition_style).toUpperCase() === 'RAW' ? 'после Initialize' : fmtBytes(d.largest_free_extent)}</b></span>
         </div>
+        <DiskLayoutBar disk={d} />
 
         {d.protected
           ? <p className="protected">🔒 {d.protection_reasons.join(', ')}</p>
           : <div className="actions">
-              {!write.allowed && <button className="unlock-button" onClick={() => prepareUnlock(d)}>Разблокировать только этот диск</button>}
-              {write.allowed && <button onClick={() => lock(d.number)}>🔒 Заблокировать запись</button>}
-              {String(d.partition_style).toUpperCase() === 'RAW' && <button onClick={() => prepareInitialize(d.number)}>Инициализировать GPT</button>}
-              {Number(d.largest_free_extent || 0) > 0 && String(d.partition_style).toUpperCase() !== 'RAW' && <button onClick={() => newPartition(d)}>+ Раздел / том</button>}
-              <button className="danger-outline" onClick={() => prepareFormat(d.number)}>Очистить + один том</button>
+              {!write.allowed && <button className="unlock-button" disabled={Boolean(diskBusy)} onClick={() => prepareUnlock(d)}>Разблокировать только этот диск</button>}
+              {write.allowed && <button disabled={Boolean(diskBusy)} onClick={() => lock(d.number)}>🔒 Заблокировать запись</button>}
+              {String(d.partition_style).toUpperCase() === 'RAW' && <button disabled={Boolean(diskBusy)} onClick={() => prepareInitialize(d.number)}>Инициализировать GPT</button>}
+              {Number(d.largest_free_extent || 0) > 0 && String(d.partition_style).toUpperCase() !== 'RAW' && <button disabled={Boolean(diskBusy)} onClick={() => newPartition(d)}>+ Раздел / том</button>}
+              <button className="danger-outline" disabled={Boolean(diskBusy)} onClick={() => prepareFormat(d.number)}>
+                {String(d.partition_style).toUpperCase() === 'RAW' ? 'GPT + первый том' : 'Очистить + первый том'}
+              </button>
             </div>}
 
         <div className="partition-table">
@@ -263,45 +383,100 @@ export function DisksAdmin({ setError }) {
       </div>
     </Panel>}
 
-    {initializePlan && <Panel title="Initialize disk" className="danger-card">
+    {initializePlan && <Panel title="Инициализировать таблицу разделов" className="danger-card">
       <p className="warning">{initializePlan.warning}</p>
+      <p className="muted">Эта операция создаёт GPT, но не создаёт том. После неё DiskShell покажет реальное нераспределённое пространство и кнопку «+ Раздел / том», где выбирается размер.</p>
       <label>Введи: <b>{initializePlan.confirmation}</b></label>
       <input value={initializeConfirm} onChange={e => setInitializeConfirm(e.target.value)} />
-      <button className="danger-button" disabled={initializeConfirm !== initializePlan.confirmation || !diskByNumber(initializePlan.disk.number)?.write_access?.allowed} onClick={executeInitialize}>Initialize GPT</button>
+      <button className="danger-button" disabled={Boolean(diskBusy) || initializeConfirm !== initializePlan.confirmation || !diskByNumber(initializePlan.disk.number)?.write_access?.allowed} onClick={executeInitialize}>Initialize GPT</button>
     </Panel>}
 
-    {formatPlan && <Panel title="Очистить диск и создать один том" className="danger-card">
+    {formatPlan && <Panel
+      title={String(formatPlan.disk.partition_style).toUpperCase() === 'RAW'
+        ? 'Подготовить RAW disk → GPT → первый том'
+        : 'Очистить диск → GPT → создать первый том'}
+      className="danger-card"
+    >
       <p className="warning">⚠ {formatPlan.warning}</p>
-      <div className="form-row">
-        <select value={fs} onChange={e => setFs(e.target.value)}><option>NTFS</option><option>EXFAT</option></select>
-        <select value={cluster} onChange={e => setCluster(Number(e.target.value))}>
-          {[4096, 8192, 16384, 32768, 65536].map(x => <option key={x} value={x}>{x / 1024} KiB</option>)}
-        </select>
-        <input value={label} onChange={e => setLabel(e.target.value)} />
+      <div className="wizard-grid">
+        <div>
+          <label>Файловая система</label>
+          <select value={fs} onChange={e => {
+            const next = e.target.value
+            setFs(next)
+            const profile = filesystemProfile(next)
+            if (profile?.recommended_cluster) setCluster(profile.recommended_cluster)
+            setFormatDirty(true)
+          }}>
+            {(capabilities.filesystems || []).map(item => <option key={item.key} value={item.key}>{item.title}</option>)}
+          </select>
+        </div>
+        <div>
+          <label>Cluster / allocation unit</label>
+          <select value={cluster} onChange={e => { setCluster(Number(e.target.value)); setFormatDirty(true) }}>
+            {(filesystemProfile(fs)?.clusters || [4096, 16384, 65536]).map(x => <option key={x} value={x}>{x < 1024 ** 2 ? `${x / 1024} KiB` : `${x / 1024 ** 2} MiB`}</option>)}
+          </select>
+        </div>
+        <div>
+          <label>Метка тома</label>
+          <input value={label} onChange={e => { setLabel(e.target.value); setFormatDirty(true) }} />
+        </div>
+        <div>
+          <label>Размер первого тома, GiB</label>
+          <input placeholder="пусто = максимум" value={formatSizeGiB} onChange={e => { setFormatSizeGiB(e.target.value); setFormatDirty(true) }} />
+        </div>
+        <div>
+          <label>Буква</label>
+          <input maxLength={2} placeholder="auto" value={formatDriveLetter} onChange={e => { setFormatDriveLetter(e.target.value.toUpperCase().replace(':', '')); setFormatDirty(true) }} />
+        </div>
       </div>
-      <div className="preset-hint"><b>4K</b> universal · <b>16K</b> mixed large storage · <b>64K</b> mostly huge sequential files</div>
+      <div className="preset-hint">
+        <b>{filesystemProfile(fs)?.title || fs}</b> · {filesystemProfile(fs)?.warning || 'Windows проверит поддержку перед форматированием.'}
+      </div>
+      {formatDirty && <div className="plan-stale">
+        <span>Параметры изменены. Перед destructive execution пересчитай план.</span>
+        <button disabled={Boolean(diskBusy)} onClick={() => prepareFormat(formatPlan.disk.number)}>Пересчитать план</button>
+      </div>}
+      <div className="metrics">
+        <Metric label="Первый том" value={formatPlan.use_maximum ? 'максимальный доступный' : fmtBytes(formatPlan.size_bytes)} />
+        <Metric label="Остаток" value={formatPlan.use_maximum ? '0 / служебный GPT резерв' : 'останется Unallocated'} />
+        <Metric label="FS" value={formatPlan.filesystem} />
+        <Metric label="Cluster" value={formatPlan.allocation_unit < 1024 ** 2 ? `${formatPlan.allocation_unit / 1024} KiB` : `${formatPlan.allocation_unit / 1024 ** 2} MiB`} />
+      </div>
+      {(formatPlan.warnings || []).slice(1).map(item => <p className="muted" key={item}>• {item}</p>)}
       <label>Для выполнения введи: <b>{formatPlan.confirmation}</b></label>
       <input value={formatConfirm} onChange={e => setFormatConfirm(e.target.value)} />
-      <button className="danger-button" disabled={formatConfirm !== formatPlan.confirmation || !diskByNumber(formatPlan.disk.number)?.write_access?.allowed} onClick={executeFormat}>Очистить и форматировать</button>
+      <button className="danger-button" disabled={Boolean(diskBusy) || formatDirty || formatConfirm !== formatPlan.confirmation || !diskByNumber(formatPlan.disk.number)?.write_access?.allowed} onClick={executeFormat}>Очистить и создать том</button>
     </Panel>}
 
     {partitionDraft && <Panel title={`Создать раздел / том на Disk ${partitionDraft.diskNumber}`}>
       <div className="grid two">
         <div>
           <label>Размер, GiB (пусто = всё максимальное свободное место)</label>
-          <input value={partitionDraft.sizeGiB} onChange={e => setPartitionDraft(x => ({ ...x, sizeGiB: e.target.value }))} />
+          <input value={partitionDraft.sizeGiB} onChange={e => { setPartitionDraft(x => ({ ...x, sizeGiB: e.target.value })); setPartitionPlan(null) }} />
         </div>
         <div>
           <label>Буква (пусто = Windows назначит автоматически)</label>
-          <input maxLength={2} value={partitionDraft.driveLetter} onChange={e => setPartitionDraft(x => ({ ...x, driveLetter: e.target.value }))} />
+          <input maxLength={2} value={partitionDraft.driveLetter} onChange={e => { setPartitionDraft(x => ({ ...x, driveLetter: e.target.value })); setPartitionPlan(null) }} />
         </div>
       </div>
       <div className="form-row">
-        <select value={partitionDraft.filesystem} onChange={e => setPartitionDraft(x => ({ ...x, filesystem: e.target.value }))}><option>NTFS</option><option>EXFAT</option></select>
-        <select value={partitionDraft.allocationUnit} onChange={e => setPartitionDraft(x => ({ ...x, allocationUnit: Number(e.target.value) }))}>
-          {[4096, 8192, 16384, 32768, 65536].map(x => <option key={x} value={x}>{x / 1024} KiB</option>)}
+        <select value={partitionDraft.filesystem} onChange={e => {
+          const next = e.target.value
+          const profile = filesystemProfile(next)
+          setPartitionDraft(x => ({
+            ...x,
+            filesystem: next,
+            allocationUnit: profile?.recommended_cluster || x.allocationUnit,
+          }))
+          setPartitionPlan(null)
+        }}>
+          {(capabilities.filesystems || []).map(item => <option key={item.key} value={item.key}>{item.title}</option>)}
         </select>
-        <input value={partitionDraft.label} onChange={e => setPartitionDraft(x => ({ ...x, label: e.target.value }))} />
+        <select value={partitionDraft.allocationUnit} onChange={e => { setPartitionDraft(x => ({ ...x, allocationUnit: Number(e.target.value) })); setPartitionPlan(null) }}>
+          {(filesystemProfile(partitionDraft.filesystem)?.clusters || [4096, 16384, 65536]).map(x => <option key={x} value={x}>{x < 1024 ** 2 ? `${x / 1024} KiB` : `${x / 1024 ** 2} MiB`}</option>)}
+        </select>
+        <input value={partitionDraft.label} onChange={e => { setPartitionDraft(x => ({ ...x, label: e.target.value })); setPartitionPlan(null) }} />
       </div>
       <div className="actions"><button className="primary" onClick={preparePartition}>Проверить план</button><button onClick={() => setPartitionDraft(null)}>Закрыть</button></div>
       {partitionPlan && <>
@@ -314,7 +489,7 @@ export function DisksAdmin({ setError }) {
         <p className="warning">{partitionPlan.warning}</p>
         <label>Введи: <b>{partitionPlan.confirmation}</b></label>
         <input value={partitionConfirm} onChange={e => setPartitionConfirm(e.target.value)} />
-        <button className="danger-button" disabled={partitionConfirm !== partitionPlan.confirmation || !diskByNumber(partitionDraft.diskNumber)?.write_access?.allowed} onClick={executePartition}>Создать и форматировать том</button>
+        <button className="danger-button" disabled={Boolean(diskBusy) || partitionConfirm !== partitionPlan.confirmation || !diskByNumber(partitionDraft.diskNumber)?.write_access?.allowed} onClick={executePartition}>Создать и форматировать том</button>
       </>}
     </Panel>}
 
@@ -323,7 +498,7 @@ export function DisksAdmin({ setError }) {
       {letterDraft.driveLetter && <>
         <label>Введи: <b>{`ASSIGN ${letterDraft.driveLetter}: DISK ${letterDraft.diskNumber} PARTITION ${letterDraft.partitionNumber}`}</b></label>
         <input value={letterConfirm} onChange={e => setLetterConfirm(e.target.value)} />
-        <button className="danger-button" disabled={letterConfirm !== `ASSIGN ${letterDraft.driveLetter}: DISK ${letterDraft.diskNumber} PARTITION ${letterDraft.partitionNumber}`} onClick={executeLetter}>Назначить букву</button>
+        <button className="danger-button" disabled={Boolean(diskBusy) || letterConfirm !== `ASSIGN ${letterDraft.driveLetter}: DISK ${letterDraft.diskNumber} PARTITION ${letterDraft.partitionNumber}`} onClick={executeLetter}>Назначить букву</button>
       </>}
     </Panel>}
   </div>
@@ -398,7 +573,7 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
           <Metric label="Папки" value={job.directories} />
           <Metric label="Объём" value={fmtBytes(job.bytes)} />
         </div>
-        <div className="progress-line"><i className={running ? 'running' : ''} /></div>
+        <JobProgress running={running} label="Идёт обход файловой системы; заранее неизвестно, сколько объектов встретится." />
         {job.current_path && <p className="path">{job.current_path}</p>}
       </>}
       {scanId && <p>Активный индекс: <b>scan {scanId}</b>. Он сохраняется после refresh.</p>}
@@ -533,13 +708,20 @@ export function StorageBrainAdmin({ scanId, setError, health }) {
           {!health?.safety?.file_writes && <small>DS_ALLOW_FILE_WRITES=0 — file execution заблокирован; построение плана работает.</small>}
         </div>
       </>}
-      {job && <div className="job-strip">
+      {job && <>
+        <JobProgress
+          percent={job.progress_percent}
+          running={running}
+          label={job.total_bytes ? `${fmtBytes(job.processed_bytes || 0)} / ${fmtBytes(job.total_bytes)}` : 'Подготовка плана выполнения'}
+        />
+        <div className="job-strip">
         <StatusPill tone={job.status === 'completed' ? 'good' : job.status === 'failed' ? 'danger' : 'neutral'}>{job.status}</StatusPill>
         <span>{job.completed || 0}/{job.total || 0} completed</span>
         <span>{job.failed || 0} failed</span>
         <span>{job.copied || 0} copied</span>
         <span>{job.moved || 0} moved</span>
-      </div>}
+      </div>
+      </>}
     </Panel>
   </div>
 }
@@ -662,6 +844,7 @@ export function SecurityAdmin({ setError }) {
       <div className="actions"><button className="primary" disabled={running} onClick={start}>Scan</button><button className="stop-button" disabled={!running || !jobId} onClick={stop}>■ Stop</button></div>
       {job && <>
         <div className="metrics"><Metric label="Engine" value={job.engine_title} /><Metric label="Status" value={job.status} /><Metric label="Threats" value={job.threats ?? '—'} /><Metric label="Exit" value={job.exit_code ?? '—'} /></div>
+        <JobProgress running={running} label="Движок Defender/ClamAV не сообщает DiskShell надёжный общий объём работы." />
         {job.output && <pre className="security-output">{job.output}</pre>}
       </>}
     </Panel>
@@ -816,7 +999,13 @@ export function FilesAdmin({ health, setError }) {
           <Metric label="Files" value={job.files} />
           <Metric label="Copied" value={fmtBytes(job.bytes)} />
         </div>
-        <div className="progress-line"><i className={busy ? 'running' : ''} /></div>
+        <JobProgress
+          percent={job.progress_percent}
+          running={busy}
+          label={job.total_bytes == null
+            ? 'Сначала считаю размер выбранного файла/каталога'
+            : `${fmtBytes(job.bytes || 0)} / ${fmtBytes(job.total_bytes)} · ${job.files || 0}/${job.total_files || 0} файлов`}
+        />
         <p className="path">{job.current_path}</p>
         {job.error && <p className="warning">{job.error}</p>}
         {job.status === 'cancelled' && <p className="muted">Операция остановлена; временный/новый target очищен. Исходник сохранён.</p>}

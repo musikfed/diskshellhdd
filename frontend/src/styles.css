@@ -91,3 +91,128 @@ button:not(:disabled):active{transform:translateY(1px)}
   .planner-toolbar,.workbench-hero{display:block}
   .hero-symbol{margin-bottom:12px}
 }
+
+
+/* 0.5.2 storage wizard + truthful job progress */
+.wizard-grid{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(130px,1fr));
+  gap:10px;
+  align-items:end;
+}
+.wizard-grid label{display:block;color:#9bb0cf;font-size:12px;font-weight:700}
+.plan-stale{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:10px 12px;
+  margin:10px 0 14px;
+  border:1px solid rgba(255,190,103,.32);
+  background:rgba(128,84,25,.18);
+  color:#ffd89b;
+  border-radius:11px;
+}
+.plan-stale button{padding:7px 11px;white-space:nowrap}
+.job-progress{margin:12px 0}
+.progress-track{
+  position:relative;
+  height:10px;
+  overflow:hidden;
+  border-radius:999px;
+  background:#07111f;
+  border:1px solid rgba(111,150,209,.18);
+}
+.progress-track i{
+  display:block;
+  height:100%;
+  border-radius:inherit;
+  background:linear-gradient(90deg,#628cff,#58d7d0);
+  transition:width .18s ease;
+}
+.progress-track.determinate i{width:0}
+.progress-track.indeterminate i{
+  width:32%;
+  position:absolute;
+  left:-32%;
+}
+.progress-track.indeterminate i.running{
+  animation:indeterminate-slide 1.2s ease-in-out infinite;
+}
+.progress-caption{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  margin-top:6px;
+  color:#8fa6c8;
+  font-size:12px;
+}
+.progress-caption b{color:#cfe0fb;white-space:nowrap}
+@keyframes indeterminate-slide{
+  0%{left:-32%}
+  55%{left:45%}
+  100%{left:100%}
+}
+@media(max-width:1280px){
+  .wizard-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}
+}
+@media(max-width:860px){
+  .wizard-grid{grid-template-columns:1fr}
+  .plan-stale{align-items:flex-start;flex-direction:column}
+}
+
+
+.disk-layout{margin:14px 0 4px}
+.disk-layout-bar{
+  display:flex;
+  width:100%;
+  height:58px;
+  overflow:hidden;
+  border:1px solid rgba(112,151,209,.28);
+  border-radius:13px;
+  background:#06101c;
+}
+.disk-segment{
+  min-width:2px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:0 8px;
+  overflow:hidden;
+  border-right:1px solid rgba(3,9,16,.7);
+  transition:filter .15s ease;
+}
+.disk-segment:hover{filter:brightness(1.15)}
+.disk-segment.partition{
+  background:linear-gradient(180deg,rgba(86,130,226,.92),rgba(53,92,174,.92));
+}
+.disk-segment.free{
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(120,141,176,.15) 0,
+      rgba(120,141,176,.15) 8px,
+      rgba(40,57,84,.18) 8px,
+      rgba(40,57,84,.18) 16px
+    );
+}
+.disk-segment span{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:12px;
+  font-weight:800;
+  color:#f4f8ff;
+}
+.disk-layout-legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px 16px;
+  margin-top:7px;
+  color:#8fa6c8;
+  font-size:12px;
+}
+.disk-layout-legend span{display:flex;align-items:center;gap:5px}
+.disk-layout-legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.disk-layout-legend i.partition{background:#5682e2}
+.disk-layout-legend i.free{background:#4d5b72}

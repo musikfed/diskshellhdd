@@ -1,4 +1,4 @@
-# DiskShell 0.5 architecture
+# DiskShell 0.5.2 architecture
 
 DiskShell is layered as React/Vite Admin Workbench → Flask API → Storage Brain/content services → cancellable safe executors → filesystem/Windows storage adapters.
 
@@ -25,3 +25,11 @@ SQLite stores scan facts, placement plans, operation journal, Recovery snapshots
 Recovery is read-only topology/signature inspection. Security adapters integrate Microsoft Defender and ClamAV without remediation.
 
 Storage Lab still models logical Managed Interleave and NTFS-visible extents only; HDD firmware geometry and actual extent relocation remain separate.
+
+## Storage wizard 0.5.2
+
+Partition-table initialization, partition/volume creation, and whole-disk destructive formatting are separate workflows. The Windows Storage adapter uses `Format-Volume` profiles for NTFS, exFAT, ReFS, FAT32, and FAT.
+
+Volume size and allocation-unit compatibility are validated before destructive execution. The whole-disk wizard can create a smaller first volume and leave the remaining address space unallocated.
+
+Job progress is explicitly determinate or indeterminate instead of displaying invented percentages.

@@ -570,7 +570,7 @@ textarea{
 .commander-columns,
 .commander-list button{
   display:grid!important;
-  grid-template-columns:minmax(220px,1fr) 100px 160px;
+  grid-template-columns:34px minmax(220px,1fr) 100px 160px;
   gap:10px;
   align-items:center;
 }
@@ -587,16 +587,29 @@ textarea{
   max-height:535px;
   min-height:430px;
 }
-.commander-list button span:first-child{
+.commander-list button span:nth-child(2){
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
 }
-.commander-list button span:nth-child(2),
-.commander-list button span:nth-child(3){
+.commander-list button span:nth-child(3),
+.commander-list button span:nth-child(4){
   color:#9cb0cd;
   text-align:right;
   font-size:12px;
+}
+.commander-select-mark{
+  display:grid;
+  place-items:center;
+  width:26px;
+  height:26px;
+  border-radius:7px;
+  color:#8297b7;
+  font-size:16px;
+}
+.commander-list>button.selected .commander-select-mark{
+  color:#a9c1ff;
+  background:rgba(105,145,235,.18);
 }
 .pane-status{
   display:flex;
@@ -640,8 +653,8 @@ textarea{
 }
 @media(max-width:850px){
   .remote-connect-box{grid-template-columns:1fr 90px}
-  .commander-columns,.commander-list button{grid-template-columns:minmax(150px,1fr) 90px}
-  .commander-columns span:nth-child(3),.commander-list button span:nth-child(3){display:none}
+  .commander-columns,.commander-list button{grid-template-columns:30px minmax(150px,1fr) 90px}
+  .commander-columns span:nth-child(4),.commander-list button span:nth-child(4){display:none}
 }
 
 

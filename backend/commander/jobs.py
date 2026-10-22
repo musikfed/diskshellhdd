@@ -220,6 +220,23 @@ def _make_directory(endpoint: dict[str, Any]) -> None:
         session.makedirs(_remote_path(endpoint))
 
 
+def _source_exists(endpoint: dict[str, Any]) -> bool:
+    if endpoint["kind"] == "local":
+        return _local_path(endpoint).exists()
+    try:
+        with open_session(endpoint["connection_id"]) as session:
+            session.stat(_remote_path(endpoint))
+        return True
+    except RemoteNotFound:
+        return False
+
+
+def _is_missing_error(exc: Exception) -> bool:
+    return isinstance(exc, (FileNotFoundError, RemoteNotFound)) or getattr(
+        exc, "errno", None
+    ) == 2
+
+
 def _delete_endpoint(endpoint: dict[str, Any]) -> None:
     if endpoint["kind"] == "local":
         path = _local_path(endpoint)
@@ -738,7 +755,42 @@ def _run_batch_job(
                 job["current_item"] = index
                 job["current_path"] = source["path"]
 
+            if transfer["missing_source"]:
+                with _lock:
+                    job = _jobs[job_id]
+                    job["missing"] += 1
+                    job["skipped"] += 1
+                    job["items"] += 1
+                    job["warnings"].append(
+                        f"Source missing before transfer: {source['path']}"
+                    )
+                continue
+
+            if transfer["skip_before_run"]:
+                with _lock:
+                    job = _jobs[job_id]
+                    job["skipped"] += 1
+                    job["items"] += 1
+                    job["warnings"].append(
+                        f"Destination conflict skipped: {destination['path']}"
+                    )
+                continue
+
             try:
+                if not _source_exists(source):
+                    with _lock:
+                        job = _jobs[job_id]
+                        job["missing"] += 1
+                        job["skipped"] += 1
+                        job["items"] += 1
+                        job["warnings"].append(
+                            f"Source disappeared before transfer: {source['path']}"
+                        )
+                    continue
+
+                if transfer["replace_existing"]:
+                    _delete_endpoint(destination)
+
                 if operation == "move" and _same_native_location(
                     source,
                     destination,
@@ -771,15 +823,36 @@ def _run_batch_job(
                         )
                         with _lock:
                             _jobs[job_id]["current_path"] = source_file["path"]
-                        _copy_file(
-                            source_file,
-                            destination_file,
-                            expected_size,
-                            event,
-                            progress,
-                            retry_status,
-                        )
-                        _verify_size(destination_file, expected_size)
+                        destination_before = _destination_info(destination_file)
+                        try:
+                            _copy_file(
+                                source_file,
+                                destination_file,
+                                expected_size,
+                                event,
+                                progress,
+                                retry_status,
+                            )
+                            _verify_size(destination_file, expected_size)
+                        except Exception as exc:
+                            if _is_missing_error(exc):
+                                if not destination_before["exists"]:
+                                    try:
+                                        _delete_endpoint(destination_file)
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                                with _lock:
+                                    job = _jobs[job_id]
+                                    job["missing"] += 1
+                                    job["skipped"] += 1
+                                    job["retrying"] = False
+                                    job["retry_attempt"] = 0
+                                    job["resume_offset"] = 0
+                                    job["warnings"].append(
+                                        f"Source file disappeared; skipped: {source_file['path']}"
+                                    )
+                                continue
+                            raise
                         with _lock:
                             _jobs[job_id]["files"] += 1
                             _jobs[job_id]["retrying"] = False
@@ -799,10 +872,22 @@ def _run_batch_job(
                             100.0,
                             job["bytes"] * 100.0 / total,
                         )
-            except Exception:
-                # Roll back only the current incomplete destination. Previous
-                # batch items were already verified and remain completed.
-                if created_target:
+            except Exception as exc:
+                preserve_partial = isinstance(exc, CommanderCancelled) or (
+                    (source["kind"] == "remote" or destination["kind"] == "remote")
+                    and _retryable_transfer_error(exc)
+                )
+                if preserve_partial and created_target:
+                    with _lock:
+                        job = _jobs[job_id]
+                        job["partial_retained"] = True
+                        job["partial_path"] = destination["path"]
+                        job["warnings"].append(
+                            f"Partial target retained for Continue: {destination['path']}"
+                        )
+                elif created_target and not transfer["resume_existing"]:
+                    # Roll back only a newly-created incomplete destination.
+                    # Never delete a user-confirmed existing resume target.
                     try:
                         _delete_endpoint(destination)
                     except Exception:  # noqa: BLE001

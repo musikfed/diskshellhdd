@@ -23,10 +23,13 @@ function Card({ title, children, className = '' }) {
 
 function Safety({ health }) {
   const s = health?.safety || {}
-  const rows = [
-    ['Файлы', s.file_writes], ['Vault', s.vault_writes], ['Разметка', s.disk_writes], ['Extents', s.extent_moves],
-  ]
-  return <div className="safety"><strong>Safety gates</strong>{rows.map(([label, on]) => <span key={label} className={on ? 'danger' : 'off'}>{label}: {on ? 'ON' : 'LOCKED'}</span>)}</div>
+  return <div className="safety">
+    <strong>Safety / admin mode</strong>
+    <span className={s.file_writes ? 'danger' : 'off'}>Файлы: {s.file_writes ? 'WRITE ON' : 'LOCKED'}</span>
+    <span className={s.vault_writes ? 'danger' : 'off'}>Vault: {s.vault_writes ? 'WRITE ON' : 'LOCKED'}</span>
+    <span className="off">Диски: {s.selected_disk_unlocks ? 'PER-DISK UNLOCK' : 'LOCKED'}</span>
+    <span className={s.extent_moves ? 'danger' : 'off'}>Extents: {s.extent_moves ? 'WRITE ON' : 'LOCKED'}</span>
+  </div>
 }
 
 export default function App() {
@@ -58,7 +61,7 @@ export default function App() {
       <Safety health={health} />
     </aside>
     <main>
-      <header><div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Локальное управление хранением · Python only</p></div><div className="scan-chip">Scan: {scanId || '—'}</div></header>
+      <header><div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Admin storage workbench · React + Python</p></div><div className="scan-chip">Scan: {scanId || '—'}</div></header>
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
       {pages[page]}
     </main>

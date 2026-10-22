@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.7
+# DiskShell HDD 0.6.8
 
 [Русская версия](README.ru.md) · English
 
@@ -194,8 +194,13 @@ When **Create Vault** is disabled, the UI now lists the exact blockers: Vault WR
 `DS_ALLOW_VAULT_WRITES=0` remains the safe default, but normal Vault use no longer requires editing `.env`. The Vault page exposes a RAM-only `VAULT WRITE LOCKED ⇄ ENABLED` toggle controlling Create, Import/Encrypt, and Export. It resets after backend restart. `DS_ALLOW_VAULT_WRITES=1` remains a persistent environment override.
 
 
-## SFTP / SSH large-file reliability 0.6.7
+## SFTP / SSH large-file reliability 0.6.8
 
 Commander now protects long SFTP transfers with a 30-second SSH keepalive, OS TCP keepalive where available, and a 120-second SFTP I/O timeout. Transient SSH/network failures trigger up to four reconnect attempts with 1/2/4/8-second backoff. After reconnect, DiskShell re-reads the partial target size and resumes upload/download from that offset instead of restarting the whole file. Size verification still runs before a Move source is removed. The UI reports reconnect count, retry attempt, and resume offset.
 
 Resume applies while the backend job is alive; backend-restart recovery is not yet persistent.
+
+
+## Zero-byte file transfer fix 0.6.8
+
+Commander now creates zero-byte files correctly during Copy/Move, including cross-volume and remote workflows. Previously a missing empty target could be mistaken for a completed transfer because both its offset and expected size were zero, causing the following size verification to raise FileNotFoundError. The job current path is also updated before every file, including empty files.

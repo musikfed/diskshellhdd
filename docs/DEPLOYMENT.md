@@ -251,7 +251,7 @@ This retry/resume state lives in the running backend job; restarting the backend
 
 ## Commander: disconnects, partial targets, and name conflicts
 
-From 0.7.0, an existing destination never triggers an implicit overwrite. The UI requires an explicit **Continue partial / Replace / Keep both / Skip / Cancel** decision. Keep both allocates the next free indexed name such as `file (1).ext` or `Folder (1)`.
+From 0.6.9, an existing destination never triggers an implicit overwrite. The UI requires an explicit **Continue partial / Replace / Keep both / Skip / Cancel** decision. Keep both allocates the next free indexed name such as `file (1).ext` or `Folder (1)`.
 
 After reconnect attempts are exhausted, or after Stop, the incomplete target is retained. **Continue partial** starts a new job using the actual target size as the resume offset. Missing sources are recorded as missing/skipped and do not terminate the rest of the batch. Replace rechecks source existence before deleting the existing destination, and Move removes a source only after verified completion.
 

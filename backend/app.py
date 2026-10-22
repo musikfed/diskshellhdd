@@ -5,6 +5,7 @@ from flask_cors import CORS
 
 from backend.api.analytics import bp as analytics_bp
 from backend.api.content import bp as content_bp
+from backend.api.diagnostics import bp as diagnostics_bp
 from backend.api.disks import bp as disks_bp
 from backend.api.files import bp as files_bp
 from backend.api.people import bp as people_bp
@@ -19,7 +20,7 @@ from backend.core.database import init_database
 from backend.storage_brain.service import ensure_defaults
 
 
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 
 
 def create_app() -> Flask:
@@ -28,6 +29,7 @@ def create_app() -> Flask:
 
     for blueprint in (
         disks_bp,
+        diagnostics_bp,
         scans_bp,
         analytics_bp,
         storage_bp,

@@ -427,6 +427,14 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
   const createRoot = locationEditable
     ? (vaultVolume && folderName ? joinPath(vaultVolume, folderName) : '')
     : (status?.root || '')
+  const createBlockers = [
+    health && !health.safety?.vault_writes
+      ? 'Vault WRITE заблокирован: установи DS_ALLOW_VAULT_WRITES=1 и перезапусти backend.'
+      : '',
+    !createRoot ? 'Выбери том и папку Vault.' : '',
+    !identity.trim() ? 'Заполни идентификатор.' : '',
+    secret.length < 8 ? 'Секретная фраза должна содержать минимум 8 символов.' : '',
+  ].filter(Boolean)
 
   async function loadItems() {
     try {
@@ -560,10 +568,30 @@ function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
         Место хранения задано через <code>DS_VAULT_ROOT</code>; выбор в UI заблокирован до изменения .env и перезапуска backend.
       </p>}
 
-      <input placeholder="Идентификатор (например СНИЛС)" value={identity} onChange={e => setIdentity(e.target.value)} />
-      <input type="password" placeholder="Дополнительная секретная фраза" value={secret} onChange={e => setSecret(e.target.value)} />
+      <label>Идентификатор</label>
+      <input
+        placeholder="Например СНИЛС, логин или свой идентификатор"
+        value={identity}
+        onChange={e => setIdentity(e.target.value)}
+      />
+      <label>Секретная фраза</label>
+      <input
+        type="password"
+        placeholder="Минимум 8 символов"
+        value={secret}
+        onChange={e => setSecret(e.target.value)}
+      />
+
+      {createBlockers.length > 0 && <div className="warning">
+        <b>Почему кнопка пока недоступна:</b>
+        <ul>
+          {createBlockers.map(reason => <li key={reason}>{reason}</li>)}
+        </ul>
+      </div>}
+
       <button
-        disabled={!health?.safety?.vault_writes || !createRoot || !identity.trim() || secret.length < 8}
+        disabled={createBlockers.length > 0}
+        title={createBlockers.join(' ')}
         onClick={create}
       >
         Создать Vault

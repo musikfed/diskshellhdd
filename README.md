@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.4
+# DiskShell HDD 0.6.5
 
 [Русская версия](README.ru.md) · English
 
@@ -168,7 +168,7 @@ First-time Vault creation now selects the storage location explicitly in the UI:
 - Existing Vaults are not moved automatically; location selection applies to first creation.
 - The recovery key remains visible until the operator explicitly confirms it was saved.
 
-## Commander multi-selection 0.6.4
+## Commander multi-selection 0.6.5
 
 - normal click selects one item;
 - `Ctrl+Click` toggles individual files/folders;
@@ -182,3 +182,8 @@ First-time Vault creation now selects the storage location explicitly in the UI:
 - F8 Trash/Delete and F9 Archive accept the selected group;
 - F2 Rename, F3 View and Extract require exactly one selected item;
 - Stop removes only the current incomplete target while already verified batch items remain completed.
+
+
+## Vault create diagnostics 0.6.5
+
+When **Create Vault** is disabled, the UI now lists the exact blockers: Vault WRITE gate, selected storage path, non-empty identity, and a secret phrase of at least 8 characters.

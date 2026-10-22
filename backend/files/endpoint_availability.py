@@ -48,8 +48,10 @@ def _local_root(path: str | Path) -> Path:
     value = Path(path).expanduser()
     if os.name == "nt" and value.drive:
         return Path(value.drive + "\\")
-    anchor = value.anchor
-    return Path(anchor) if anchor else value.resolve().anchor and Path(value.resolve().anchor) or Path("/")
+    if value.anchor:
+        return Path(value.anchor)
+    resolved = value.resolve()
+    return Path(resolved.anchor or "/")
 
 
 def local_volume_probe(path: str | Path) -> dict[str, Any]:

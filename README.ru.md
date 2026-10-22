@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.7
+# DiskShell HDD 0.6.8
 
 Русский · [English](README.md)
 
@@ -244,7 +244,7 @@ VAULT WRITE LOCKED ⇄ VAULT WRITE ENABLED
 Включение хранится только в RAM backend и автоматически сбрасывается после restart backend. Этот gate управляет **Create Vault**, Import/Encrypt и Export. Если `DS_ALLOW_VAULT_WRITES=1`, это постоянный environment override и UI-toggle отключён как избыточный.
 
 
-## SFTP / SSH large-file reliability 0.6.7
+## SFTP / SSH large-file reliability 0.6.8
 
 Для длинных SFTP-передач Commander теперь не рассчитывает на одну идеально стабильную SSH-сессию:
 
@@ -257,3 +257,8 @@ VAULT WRITE LOCKED ⇄ VAULT WRITE ENABLED
 - UI показывает число reconnects, retry attempt и приблизительный resume offset.
 
 Resume работает пока жив backend job. Полный restart backend не восстанавливает незавершённый job: это отдельный будущий persistent-transfer слой.
+
+
+## Zero-byte file transfer fix 0.6.8
+
+Commander теперь корректно создаёт файлы размером 0 байт при Copy/Move между томами и в remote-transfer workflow. Раньше такой файл ошибочно считался уже полностью переданным при `offset == expected_size == 0`, хотя target ещё не существовал; последующий size verification завершался `FileNotFoundError`. Также `current_path` обновляется до начала каждого файла, включая пустые файлы.

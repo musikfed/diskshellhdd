@@ -160,3 +160,59 @@ button:not(:disabled):active{transform:translateY(1px)}
   .wizard-grid{grid-template-columns:1fr}
   .plan-stale{align-items:flex-start;flex-direction:column}
 }
+
+
+.disk-layout{margin:14px 0 4px}
+.disk-layout-bar{
+  display:flex;
+  width:100%;
+  height:58px;
+  overflow:hidden;
+  border:1px solid rgba(112,151,209,.28);
+  border-radius:13px;
+  background:#06101c;
+}
+.disk-segment{
+  min-width:2px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:0 8px;
+  overflow:hidden;
+  border-right:1px solid rgba(3,9,16,.7);
+  transition:filter .15s ease;
+}
+.disk-segment:hover{filter:brightness(1.15)}
+.disk-segment.partition{
+  background:linear-gradient(180deg,rgba(86,130,226,.92),rgba(53,92,174,.92));
+}
+.disk-segment.free{
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(120,141,176,.15) 0,
+      rgba(120,141,176,.15) 8px,
+      rgba(40,57,84,.18) 8px,
+      rgba(40,57,84,.18) 16px
+    );
+}
+.disk-segment span{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:12px;
+  font-weight:800;
+  color:#f4f8ff;
+}
+.disk-layout-legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px 16px;
+  margin-top:7px;
+  color:#8fa6c8;
+  font-size:12px;
+}
+.disk-layout-legend span{display:flex;align-items:center;gap:5px}
+.disk-layout-legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.disk-layout-legend i.partition{background:#5682e2}
+.disk-layout-legend i.free{background:#4d5b72}

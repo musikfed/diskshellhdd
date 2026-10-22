@@ -360,7 +360,7 @@ def create_placement_plan(
         )
         connection.commit()
 
-    result = get_plan(plan_id)
+    result = get_plan_page(plan_id)
     result["scope"] = {
         "source_roots": [str(path) for path in includes],
         "exclude_roots": [str(path) for path in excludes],
@@ -368,17 +368,6 @@ def create_placement_plan(
         "skipped_outside_scope": skipped_outside_scope,
         "skipped_excluded": skipped_excluded,
     }
-    result["same_volume_items"] = sum(
-        1 for item in result["items"] if item["action"] == "move_same_volume"
-    )
-    result["cross_volume_items"] = sum(
-        1 for item in result["items"] if item["action"] == "copy_cross_volume"
-    )
-    result["additional_target_bytes"] = sum(
-        int(item["size"])
-        for item in result["items"]
-        if item["action"] == "copy_cross_volume"
-    )
     return result
 
 
@@ -462,12 +451,127 @@ def get_plan(plan_id: int) -> dict:
     return _decorate_plan(result)
 
 
+def _decode_layout_verification(item: dict) -> dict:
+    raw_layout = item.get("layout_verification")
+    if isinstance(raw_layout, str) and raw_layout:
+        try:
+            item["layout_verification"] = json.loads(raw_layout)
+        except json.JSONDecodeError:
+            item["layout_verification"] = {
+                "status": "unknown",
+                "detail": raw_layout,
+            }
+    return item
+
+
+def get_plan_page(
+    plan_id: int,
+    *,
+    limit: int = 250,
+    offset: int = 0,
+    query: str = "",
+) -> dict:
+    limit = max(1, min(int(limit), 1000))
+    offset = max(0, int(offset))
+    query = str(query or "").strip()
+
+    with connect() as connection:
+        plan = connection.execute(
+            "SELECT * FROM placement_plans WHERE id = ?",
+            (int(plan_id),),
+        ).fetchone()
+        if plan is None:
+            raise KeyError(plan_id)
+
+        aggregate = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS item_count,
+                SUM(CASE WHEN action='move_same_volume' THEN 1 ELSE 0 END) AS same_volume,
+                SUM(CASE WHEN action='copy_cross_volume' THEN 1 ELSE 0 END) AS cross_volume,
+                SUM(CASE WHEN action='copy_cross_volume' THEN size ELSE 0 END) AS extra_bytes,
+                SUM(CASE WHEN selected=1 THEN 1 ELSE 0 END) AS selected_items,
+                SUM(CASE WHEN selected=1 THEN size ELSE 0 END) AS selected_bytes,
+                SUM(CASE WHEN selected=1 AND action='copy_cross_volume' THEN 1 ELSE 0 END)
+                    AS selected_cross_volume,
+                SUM(CASE WHEN selected=1 AND action='copy_cross_volume' THEN size ELSE 0 END)
+                    AS selected_extra_bytes,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%conforming%' THEN 1 ELSE 0 END)
+                    AS layout_conforming,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%"status": "drift"%' THEN 1 ELSE 0 END)
+                    AS layout_drift,
+                SUM(CASE WHEN selected=1 AND layout_verification LIKE '%unavailable%' THEN 1 ELSE 0 END)
+                    AS layout_unavailable
+            FROM placement_plan_items
+            WHERE plan_id=?
+            """,
+            (int(plan_id),),
+        ).fetchone()
+
+        where = "plan_id=?"
+        params: list[object] = [int(plan_id)]
+        if query:
+            where += (
+                " AND (source_path LIKE ? COLLATE NOCASE"
+                " OR target_path LIKE ? COLLATE NOCASE"
+                " OR target_class LIKE ? COLLATE NOCASE)"
+            )
+            like = f"%{query}%"
+            params.extend([like, like, like])
+
+        filtered = connection.execute(
+            f"SELECT COUNT(*) AS count FROM placement_plan_items WHERE {where}",
+            params,
+        ).fetchone()
+        rows = connection.execute(
+            f"""
+            SELECT *
+            FROM placement_plan_items
+            WHERE {where}
+            ORDER BY size DESC, source_path
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+
+    result = dict(plan)
+    result["warnings"] = json.loads(result["warnings"] or "[]")
+    result["items"] = [_decode_layout_verification(dict(row)) for row in rows]
+    result["same_volume_items"] = int(aggregate["same_volume"] or 0)
+    result["cross_volume_items"] = int(aggregate["cross_volume"] or 0)
+    result["additional_target_bytes"] = int(aggregate["extra_bytes"] or 0)
+    result["selected_items"] = int(aggregate["selected_items"] or 0)
+    result["selected_bytes"] = int(aggregate["selected_bytes"] or 0)
+    result["selected_cross_volume_items"] = int(
+        aggregate["selected_cross_volume"] or 0
+    )
+    result["selected_additional_target_bytes"] = int(
+        aggregate["selected_extra_bytes"] or 0
+    )
+    result["layout_checks"] = {
+        "conforming": int(aggregate["layout_conforming"] or 0),
+        "drift": int(aggregate["layout_drift"] or 0),
+        "unavailable": int(aggregate["layout_unavailable"] or 0),
+    }
+    result["page"] = {
+        "limit": limit,
+        "offset": offset,
+        "returned": len(rows),
+        "filtered": int(filtered["count"] or 0),
+        "total": int(aggregate["item_count"] or 0),
+        "query": query,
+    }
+    result["confirmation"] = f"APPLY PLAN {plan_id}"
+    return result
+
+
 def update_plan_selection(
     plan_id: int,
     *,
     selected: bool,
     item_ids: list[int] | None = None,
     all_items: bool = False,
+    query: str = "",
 ) -> dict:
     with connect() as connection:
         plan = connection.execute(
@@ -481,10 +585,27 @@ def update_plan_selection(
 
         value = 1 if selected else 0
         if all_items:
-            connection.execute(
-                "UPDATE placement_plan_items SET selected=? WHERE plan_id=?",
-                (value, int(plan_id)),
-            )
+            query = str(query or "").strip()
+            if query:
+                like = f"%{query}%"
+                connection.execute(
+                    """
+                    UPDATE placement_plan_items
+                    SET selected=?
+                    WHERE plan_id=?
+                      AND (
+                        source_path LIKE ? COLLATE NOCASE
+                        OR target_path LIKE ? COLLATE NOCASE
+                        OR target_class LIKE ? COLLATE NOCASE
+                      )
+                    """,
+                    (value, int(plan_id), like, like, like),
+                )
+            else:
+                connection.execute(
+                    "UPDATE placement_plan_items SET selected=? WHERE plan_id=?",
+                    (value, int(plan_id)),
+                )
         else:
             ids = [int(item_id) for item_id in (item_ids or [])]
             if not ids:
@@ -499,10 +620,16 @@ def update_plan_selection(
                 (value, int(plan_id), *ids),
             )
         connection.commit()
-    return get_plan(plan_id)
+    return get_plan_page(plan_id, query=query)
 
 
-def get_latest_plan(scan_id: int | None = None) -> dict:
+def get_latest_plan(
+    scan_id: int | None = None,
+    *,
+    limit: int = 250,
+    offset: int = 0,
+    query: str = "",
+) -> dict:
     with connect() as connection:
         if scan_id is None:
             row = connection.execute(
@@ -515,7 +642,12 @@ def get_latest_plan(scan_id: int | None = None) -> dict:
             ).fetchone()
     if row is None:
         raise KeyError("latest")
-    return get_plan(int(row["id"]))
+    return get_plan_page(
+        int(row["id"]),
+        limit=limit,
+        offset=offset,
+        query=query,
+    )
 
 
 def suggest_managed_destination(

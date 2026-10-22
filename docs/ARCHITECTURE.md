@@ -1,4 +1,4 @@
-# DiskShell 0.5.2 architecture
+# DiskShell 0.5.3 architecture
 
 DiskShell is layered as React/Vite Admin Workbench → Flask API → Storage Brain/content services → cancellable safe executors → filesystem/Windows storage adapters.
 
@@ -26,10 +26,18 @@ Recovery is read-only topology/signature inspection. Security adapters integrate
 
 Storage Lab still models logical Managed Interleave and NTFS-visible extents only; HDD firmware geometry and actual extent relocation remain separate.
 
-## Storage wizard 0.5.2
+## Storage wizard 0.5.3
 
 Partition-table initialization, partition/volume creation, and whole-disk destructive formatting are separate workflows. The Windows Storage adapter uses `Format-Volume` profiles for NTFS, exFAT, ReFS, FAT32, and FAT.
 
 Volume size and allocation-unit compatibility are validated before destructive execution. The whole-disk wizard can create a smaller first volume and leave the remaining address space unallocated.
 
 Job progress is explicitly determinate or indeterminate instead of displaying invented percentages.
+
+## Adaptive Macro Interleave 0.5.3
+
+The target layout is bounded macro-interleave rather than random fragmentation. Each workload lane has minimum, target, and maximum band sizes plus an extent budget.
+
+A seek-derived lower bound is calculated from measured sequential throughput and seek latency. Large files are segmented into approximately equal extents to avoid tiny tails, while small files remain whole and can be grouped into a lane band.
+
+Real extent relocation remains a separate experimental step and must be benchmarked against normal NTFS and contiguous layouts first.

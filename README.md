@@ -1,4 +1,4 @@
-# DiskShell HDD 0.5.2
+# DiskShell HDD 0.5.3
 
 [Русская версия](README.ru.md) · English
 
@@ -50,7 +50,7 @@ Open `http://127.0.0.1:8765/`.
 
 See [architecture](docs/ARCHITECTURE.md), [deployment](docs/DEPLOYMENT.md), and [operator safety](docs/SAFETY.md).
 
-## Storage wizard 0.5.2
+## Storage wizard 0.5.3
 
 DiskShell now separates disk initialization, partition/volume creation, and the destructive whole-disk workflow.
 
@@ -61,3 +61,13 @@ DiskShell now separates disk initialization, partition/volume creation, and the 
 The Windows Storage `Format-Volume` adapter exposes **NTFS, exFAT, ReFS, FAT32, and FAT** with filesystem-specific allocation-unit choices and size/cluster-count validation.
 
 Progress is truthful: Files and Placement have real percentages; filesystem discovery, Defender/ClamAV, and destructive Windows Storage operations use indeterminate activity when no reliable total is available.
+
+## Adaptive Macro Interleave 0.5.3
+
+Storage Lab no longer models one fixed stripe size. It now uses bounded adaptive macro-bands per workload class.
+
+Band size is derived from the lane policy plus measured sequential throughput and seek latency so seek cost can be amortized without turning files into either tiny fragments or giant monoliths.
+
+Large files are split into approximately equal extents with no tiny tail; small files stay whole; multiple small files of the same class can fill one macro-band.
+
+The simulator reports tiny/oversized split extents, max extents per file, and an overall layout quality score. Real NTFS extent relocation remains disabled and experimental.

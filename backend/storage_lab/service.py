@@ -7,11 +7,15 @@ import re
 import statistics
 import subprocess
 import time
+from collections import Counter, deque
 from pathlib import Path
 
 from backend.config import settings
 from backend.core.database import connect
 
+
+MIB = 1024 * 1024
+GIB = 1024 * MIB
 
 CLASS_LANES = {
     "video": "A-media-sequential",
@@ -29,57 +33,377 @@ CLASS_LANES = {
     "other": "C-interactive",
 }
 
+# The simulator intentionally uses macro-bands, not tiny fixed stripes.
+# Values are target logical extents/bands, not claims about hidden platter geometry.
+LANE_POLICIES = {
+    "A-media-sequential": {
+        "min_band": 128 * MIB,
+        "target_band": 512 * MIB,
+        "max_band": 1 * GIB,
+        "weight": 3,
+        "max_extents_per_file": 24,
+        "description": "Video/audio: long sequential runs, but still interleaved at macro scale.",
+    },
+    "B-photo-mixed": {
+        "min_band": 64 * MIB,
+        "target_band": 192 * MIB,
+        "max_band": 512 * MIB,
+        "weight": 2,
+        "max_extents_per_file": 16,
+        "description": "Photos/RAW: medium bands for browse + batch access.",
+    },
+    "C-interactive": {
+        "min_band": 32 * MIB,
+        "target_band": 96 * MIB,
+        "max_band": 256 * MIB,
+        "weight": 2,
+        "max_extents_per_file": 12,
+        "description": "Documents/code/design: tighter locality for interactive mixed access.",
+    },
+    "D-cold": {
+        "min_band": 256 * MIB,
+        "target_band": 1 * GIB,
+        "max_band": 2 * GIB,
+        "weight": 1,
+        "max_extents_per_file": 24,
+        "description": "Archives/backups/images: long cold sequential bands.",
+    },
+    "E-temporary": {
+        "min_band": 64 * MIB,
+        "target_band": 128 * MIB,
+        "max_band": 256 * MIB,
+        "weight": 1,
+        "max_extents_per_file": 8,
+        "description": "Temporary/cache: bounded bands so churn does not dominate the layout.",
+    },
+}
 
-def simulate_interleave(scan_id: int, chunk_size: int = 8 * 1024 * 1024) -> dict:
-    if chunk_size < 256 * 1024 or chunk_size > 64 * 1024 * 1024:
-        raise ValueError("chunk_size must be between 256 KiB and 64 MiB")
 
-    with connect() as connection:
-        files = [dict(row) for row in connection.execute("SELECT path, category, size FROM files WHERE scan_id = ? ORDER BY size DESC", (scan_id,)).fetchall()]
+def _clamp(value: int, lower: int, upper: int) -> int:
+    return max(lower, min(upper, value))
 
-    lanes: dict[str, list[dict]] = {}
+
+def _seek_floor_bytes(
+    sequential_mib_s: float,
+    seek_ms: float,
+    target_seek_overhead: float,
+) -> int:
+    # Approximate minimum transfer window so one seek is no more than the
+    # requested fraction of seek+transfer time.
+    throughput = max(1.0, float(sequential_mib_s)) * MIB
+    seek_seconds = max(0.1, float(seek_ms)) / 1000.0
+    fraction = max(0.005, min(0.20, float(target_seek_overhead)))
+    transfer_seconds = seek_seconds * (1.0 - fraction) / fraction
+    return int(throughput * transfer_seconds)
+
+
+def _effective_policy(
+    lane: str,
+    sequential_mib_s: float,
+    seek_ms: float,
+    target_seek_overhead: float,
+) -> dict:
+    base = dict(LANE_POLICIES[lane])
+    seek_floor = _seek_floor_bytes(
+        sequential_mib_s,
+        seek_ms,
+        target_seek_overhead,
+    )
+
+    # Do not let one benchmark force absurd bands; the lane policy remains the
+    # primary bound. The floor only lifts undersized policies.
+    lifted_min = _clamp(
+        max(int(base["min_band"]), seek_floor),
+        16 * MIB,
+        int(base["max_band"]),
+    )
+    target = _clamp(
+        max(int(base["target_band"]), lifted_min * 2),
+        lifted_min,
+        int(base["max_band"]),
+    )
+    base["effective_min_band"] = lifted_min
+    base["effective_target_band"] = target
+    base["seek_floor_bytes"] = seek_floor
+
+    transfer_seconds = target / (max(1.0, sequential_mib_s) * MIB)
+    seek_seconds = max(0.1, seek_ms) / 1000.0
+    base["estimated_seek_overhead"] = (
+        seek_seconds / (seek_seconds + transfer_seconds)
+        if transfer_seconds > 0
+        else 1.0
+    )
+    return base
+
+
+def _segment_lengths(file_size: int, policy: dict) -> list[int]:
+    size = max(0, int(file_size))
+    if size == 0:
+        return [0]
+
+    minimum = int(policy["effective_min_band"])
+    target = int(policy["effective_target_band"])
+    maximum = int(policy["max_band"])
+    budget = max(1, int(policy["max_extents_per_file"]))
+
+    min_segments = max(1, math.ceil(size / maximum))
+    ideal_segments = max(1, round(size / target))
+    max_segments_by_min = max(1, size // minimum)
+
+    # Respect the extent budget when possible, but never violate max-band.
+    upper = max(min_segments, min(budget, max_segments_by_min))
+    count = _clamp(ideal_segments, min_segments, upper)
+
+    base, remainder = divmod(size, count)
+    lengths = [base + (1 if index < remainder else 0) for index in range(count)]
+
+    # Equalized segmentation avoids the classic tiny-tail fragment.
+    return lengths
+
+
+def _build_lane_queues(files: list[dict], policies: dict[str, dict]) -> dict[str, deque]:
+    queues: dict[str, deque] = {}
     for row in files:
         lane = CLASS_LANES.get(row["category"], "C-interactive")
-        lanes.setdefault(lane, []).append(row)
+        policy = policies[lane]
+        queue = queues.setdefault(lane, deque())
+        lengths = _segment_lengths(int(row["size"]), policy)
+        for segment_index, length in enumerate(lengths):
+            queue.append(
+                {
+                    "path": row["path"],
+                    "category": row["category"],
+                    "file_size": int(row["size"]),
+                    "length": length,
+                    "segment": segment_index,
+                    "segments_total": len(lengths),
+                }
+            )
+    return queues
 
-    lane_names = sorted(lanes)
-    positions = {lane: 0 for lane in lane_names}
-    segment_positions: dict[str, int] = {}
+
+def _choose_lane(
+    queues: dict[str, deque],
+    deficits: dict[str, int],
+    policies: dict[str, dict],
+    last_lane: str | None,
+) -> str | None:
+    active = [lane for lane, queue in queues.items() if queue]
+    if not active:
+        return None
+
+    for lane in active:
+        deficits[lane] = deficits.get(lane, 0) + int(policies[lane]["weight"])
+
+    candidates = [lane for lane in active if lane != last_lane] or active
+    lane = max(candidates, key=lambda name: (deficits.get(name, 0), name))
+    deficits[lane] -= sum(int(policies[name]["weight"]) for name in active)
+    return lane
+
+
+def simulate_interleave(
+    scan_id: int,
+    sequential_mib_s: float = 150.0,
+    seek_ms: float = 10.0,
+    target_seek_overhead: float = 0.02,
+    max_layout_extents: int = 50_000,
+) -> dict:
+    if not 10 <= sequential_mib_s <= 1000:
+        raise ValueError("sequential_mib_s must be between 10 and 1000")
+    if not 0.1 <= seek_ms <= 100:
+        raise ValueError("seek_ms must be between 0.1 and 100")
+    if not 0.005 <= target_seek_overhead <= 0.20:
+        raise ValueError("target_seek_overhead must be between 0.5% and 20%")
+    if not 100 <= max_layout_extents <= 200_000:
+        raise ValueError("max_layout_extents must be between 100 and 200000")
+
+    with connect() as connection:
+        files = [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT path, category, size
+                FROM files
+                WHERE scan_id = ?
+                ORDER BY size DESC, path
+                """,
+                (scan_id,),
+            ).fetchall()
+        ]
+
+    lane_names = sorted(
+        {
+            CLASS_LANES.get(row["category"], "C-interactive")
+            for row in files
+        }
+    )
+    policies = {
+        lane: _effective_policy(
+            lane,
+            sequential_mib_s,
+            seek_ms,
+            target_seek_overhead,
+        )
+        for lane in lane_names
+    }
+    queues = _build_lane_queues(files, policies)
+
     extents: list[dict] = []
+    bands: list[dict] = []
+    deficits = {lane: 0 for lane in lane_names}
     logical_offset = 0
-    active = True
-    while active and len(extents) < 50_000:
-        active = False
-        for lane in lane_names:
-            queue = lanes[lane]
-            index = positions[lane]
-            if index >= len(queue):
-                continue
-            active = True
-            row = queue[index]
-            segment_index = segment_positions.get(row["path"], 0)
-            segments = max(1, math.ceil(row["size"] / chunk_size))
-            remaining = row["size"] - segment_index * chunk_size
-            length = min(chunk_size, max(0, remaining))
-            if length <= 0 or segment_index >= segments:
-                positions[lane] += 1
-                continue
-            extents.append({"logical_offset": logical_offset, "length": length, "lane": lane, "path": row["path"], "segment": segment_index})
+    last_lane: str | None = None
+    lane_band_index = Counter()
+    truncated = False
+
+    while len(extents) < max_layout_extents:
+        lane = _choose_lane(queues, deficits, policies, last_lane)
+        if lane is None:
+            break
+
+        policy = policies[lane]
+        target_band = int(policy["effective_target_band"])
+        band_start = logical_offset
+        band_bytes = 0
+        band_extent_start = len(extents)
+        band_files: set[str] = set()
+
+        while queues[lane] and band_bytes < target_band:
+            segment = queues[lane][0]
+
+            # Small files stay whole. Large-file segments were pre-sized with
+            # equalized lengths, so we never create a tiny remainder here.
+            if (
+                band_bytes > 0
+                and band_bytes + int(segment["length"]) > int(policy["max_band"])
+            ):
+                break
+
+            queues[lane].popleft()
+            length = int(segment["length"])
+            extents.append(
+                {
+                    "logical_offset": logical_offset,
+                    "length": length,
+                    "lane": lane,
+                    "path": segment["path"],
+                    "category": segment["category"],
+                    "segment": segment["segment"],
+                    "segments_total": segment["segments_total"],
+                    "file_size": segment["file_size"],
+                    "band_index": len(bands),
+                    "lane_band_index": lane_band_index[lane],
+                }
+            )
             logical_offset += length
-            segment_positions[row["path"]] = segment_index + 1
-            if segment_index + 1 >= segments:
-                positions[lane] += 1
+            band_bytes += length
+            band_files.add(segment["path"])
+
+            if len(extents) >= max_layout_extents:
+                truncated = any(queue for queue in queues.values())
+                break
+
+        if len(extents) == band_extent_start:
+            # Safety valve for an unexpected policy/queue corner case.
+            break
+
+        bands.append(
+            {
+                "index": len(bands),
+                "lane": lane,
+                "logical_offset": band_start,
+                "length": band_bytes,
+                "extent_count": len(extents) - band_extent_start,
+                "file_count": len(band_files),
+            }
+        )
+        lane_band_index[lane] += 1
+        last_lane = lane
+
+        if truncated:
+            break
+
+    per_file = Counter()
+    for extent in extents:
+        per_file[extent["path"]] += 1
+
+    extent_lengths = [int(extent["length"]) for extent in extents if extent["length"] > 0]
+    split_extents = [
+        extent
+        for extent in extents
+        if int(extent.get("segments_total") or 1) > 1 and int(extent["length"]) > 0
+    ]
+    split_lengths = [int(extent["length"]) for extent in split_extents]
+    tiny_split_extents = 0
+    oversized_split_extents = 0
+    for extent in split_extents:
+        policy = policies[extent["lane"]]
+        length = int(extent["length"])
+        if length < int(policy["effective_min_band"]) * 0.75:
+            tiny_split_extents += 1
+        if length > int(policy["max_band"]):
+            oversized_split_extents += 1
+
+    lane_stats = {}
+    for lane in lane_names:
+        lane_extents = [item for item in extents if item["lane"] == lane]
+        lane_bands = [item for item in bands if item["lane"] == lane]
+        lane_stats[lane] = {
+            "bytes": sum(int(item["length"]) for item in lane_extents),
+            "extents": len(lane_extents),
+            "bands": len(lane_bands),
+            "target_band": int(policies[lane]["effective_target_band"]),
+            "min_band": int(policies[lane]["effective_min_band"]),
+            "max_band": int(policies[lane]["max_band"]),
+            "weight": int(policies[lane]["weight"]),
+            "estimated_seek_overhead": float(policies[lane]["estimated_seek_overhead"]),
+            "description": policies[lane]["description"],
+        }
 
     return {
-        "mode": "simulation",
+        "mode": "adaptive_macro_interleave",
         "scan_id": scan_id,
-        "chunk_size": chunk_size,
+        "inputs": {
+            "sequential_mib_s": sequential_mib_s,
+            "seek_ms": seek_ms,
+            "target_seek_overhead": target_seek_overhead,
+            "max_layout_extents": max_layout_extents,
+        },
         "lanes": lane_names,
+        "lane_stats": lane_stats,
+        "bands": bands,
         "extents": extents,
+        "metrics": {
+            "files": len(files),
+            "bands": len(bands),
+            "extents": len(extents),
+            "fragmented_files": sum(1 for count in per_file.values() if count > 1),
+            "max_extents_per_file": max(per_file.values(), default=0),
+            "median_extent_bytes": (
+                int(statistics.median(extent_lengths)) if extent_lengths else 0
+            ),
+            "smallest_extent_bytes": min(extent_lengths, default=0),
+            "largest_extent_bytes": max(extent_lengths, default=0),
+            "split_extents": len(split_extents),
+            "smallest_split_extent_bytes": min(split_lengths, default=0),
+            "largest_split_extent_bytes": max(split_lengths, default=0),
+            "tiny_split_extents": tiny_split_extents,
+            "oversized_split_extents": oversized_split_extents,
+            "whole_file_extents": len(extents) - len(split_extents),
+            "quality": (
+                "bounded"
+                if tiny_split_extents == 0 and oversized_split_extents == 0
+                else "review"
+            ),
+            "truncated": truncated,
+        },
         "extent_moves_allowed": settings.allow_extent_moves,
-        "note": "Logical target layout only. HDD firmware still hides platter/head/angular geometry and remapping.",
+        "note": (
+            "Simulation only. This is bounded macro-interleave over logical "
+            "LCN/LBA-visible placement. HDD firmware still hides platter/head/"
+            "angular geometry, remapping, caches, read-ahead and command scheduling."
+        ),
     }
-
 
 def query_file_extents(path: str | Path) -> dict:
     file_path = Path(path).expanduser().resolve(strict=True)

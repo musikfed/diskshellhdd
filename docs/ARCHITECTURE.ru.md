@@ -1,4 +1,4 @@
-# Архитектура DiskShell 0.5.2
+# Архитектура DiskShell 0.5.3
 
 ```text
 React/Vite Admin Workbench
@@ -20,7 +20,7 @@ PowerShell — только Windows storage adapter, а не модель про
 
 ## Per-disk write authorization
 
-0.5.2 разделяет global override и runtime authorization. При `DS_ALLOW_DISK_WRITES=0` выбранный непротектед disk можно разблокировать на 15 минут. Authorization связан с physical identity; если Number/UniqueId/Serial/Size меняются, запись снова блокируется.
+0.5.3 разделяет global override и runtime authorization. При `DS_ALLOW_DISK_WRITES=0` выбранный непротектед disk можно разблокировать на 15 минут. Authorization связан с physical identity; если Number/UniqueId/Serial/Size меняются, запись снова блокируется.
 
 System / Boot / Application disk блокируются до любого destructive executor.
 
@@ -48,10 +48,22 @@ Adapters: Microsoft Defender (`MpCmdRun.exe`) и ClamAV (`clamscan`). DiskShell 
 
 Managed Interleave остаётся logical target-layout моделью поверх NTFS. Firmware geometry HDD не контролируется. Extent relocation остаётся отдельным заблокированным experimental domain.
 
-## Storage wizard 0.5.2
+## Storage wizard 0.5.3
 
 Разметка разделена на отдельные слои: Initialize partition table, create partition/volume и whole-disk destructive workflow. Форматирование использует Windows Storage `Format-Volume`; поддерживаемые профили DiskShell: NTFS, exFAT, ReFS, FAT32 и FAT.
 
 Размер тома валидируется вместе с allocation unit до destructive execution. Для NTFS/FAT/FAT32 учитываются cluster-count limits. Whole-disk wizard может создать первый том меньше физического диска и оставить остаток Unallocated.
 
 Job progress делится на determinate и indeterminate. Files Copy/Move и Placement знают total bytes; Quick Index, Defender/ClamAV и destructive Windows Storage operations не подделывают процент.
+
+## Adaptive Macro Interleave 0.5.3
+
+Целевая раскладка — это не random fragmentation. Алгоритм использует lane policies с `min / target / max band`, weighted fair scheduling и extent budget.
+
+Seek-derived floor вычисляется из измеренных sequential throughput и seek latency. Если полоса слишком короткая для данного HDD, effective minimum повышается, но не выше max policy.
+
+При сегментации файла выбирается число почти равных extents. Это устраняет короткий tail fragment. Маленькие файлы остаются целыми и могут группироваться внутри общей lane band.
+
+Пример базовых target bands: Media ~512 MiB, Photo ~192 MiB, Interactive ~96 MiB, Cold ~1 GiB, Temporary ~128 MiB. Эти значения не являются физической геометрией HDD и могут адаптироваться.
+
+До включения реальных FSCTL_MOVE_FILE операций требуется сравнить normal NTFS, contiguous и simulated adaptive interleave на реальном диске по sequential/random/mixed workload.

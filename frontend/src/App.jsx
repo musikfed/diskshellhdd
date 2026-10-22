@@ -237,11 +237,121 @@ function StorageLab({ scanId, setError }) {
   const [path, setPath] = useState('')
   const [extents, setExtents] = useState(null)
   const [bench, setBench] = useState(null)
-  async function run() { try { setData(await api(`/api/storage-lab/simulate/${scanId}`)) } catch (e) { setError(e.message) } }
-  async function queryExtents() { try { setExtents(await api(`/api/storage-lab/extents?path=${encodeURIComponent(path)}`)) } catch (e) { setError(e.message) } }
-  async function benchmark() { try { setBench(await api('/api/storage-lab/benchmark', { method:'POST', body:JSON.stringify({ path, block_size:4*1024*1024, samples:48 }) })) } catch (e) { setError(e.message) } }
-  return <div className="stack"><Card title="Managed Interleave Simulator"><div className="hero"><div className="mascot">🧪</div><div className="grow"><p>Моделирует логический target layout. Не делает ложных утверждений о скрытой геометрии пластин.</p><button className="primary" disabled={!scanId} onClick={run}>Simulate scan {scanId || '—'}</button></div></div>{data && <><p>Lanes: {data.lanes?.join(' · ')}</p><div className="extent-strip">{data.extents?.slice(0,260).map((x,idx)=><i key={idx} title={`${x.lane}\n${x.path}`} className={`lane-${x.lane[0]}`} />)}</div><p>{data.note}</p></>}</Card>
-    <Card title="NTFS Extents + read benchmark"><input placeholder="Полный путь к большому тестовому файлу" value={path} onChange={e=>setPath(e.target.value)} /><div className="actions"><button onClick={queryExtents}>Query extents</button><button onClick={benchmark}>Read benchmark</button></div>{extents && <p>Extents: <b>{extents.extent_count ?? '—'}</b> · {extents.supported ? 'NTFS mapping available' : extents.reason}</p>}{bench && <div className="metrics"><Metric label="Sequential" value={`${bench.sequential.mib_per_second.toFixed(1)} MiB/s`} /><Metric label="Seq p95" value={`${bench.sequential.latency_ms_p95.toFixed(1)} ms`} /><Metric label="Random" value={`${bench.random.mib_per_second.toFixed(1)} MiB/s`} /><Metric label="Random p95" value={`${bench.random.latency_ms_p95.toFixed(1)} ms`} /></div>}</Card></div>
+  const [seqMiB, setSeqMiB] = useState(150)
+  const [seekMs, setSeekMs] = useState(10)
+  const [seekBudgetPct, setSeekBudgetPct] = useState(2)
+
+  async function run() {
+    try {
+      const query = new URLSearchParams({
+        sequential_mib_s: String(seqMiB),
+        seek_ms: String(seekMs),
+        target_seek_overhead: String(Number(seekBudgetPct) / 100),
+      })
+      setData(await api(`/api/storage-lab/simulate/${scanId}?${query.toString()}`))
+    } catch (e) { setError(e.message) }
+  }
+
+  async function queryExtents() {
+    try { setExtents(await api(`/api/storage-lab/extents?path=${encodeURIComponent(path)}`)) }
+    catch (e) { setError(e.message) }
+  }
+
+  async function benchmark() {
+    try {
+      const value = await api('/api/storage-lab/benchmark', {
+        method:'POST',
+        body:JSON.stringify({ path, block_size:4*1024*1024, samples:48 }),
+      })
+      setBench(value)
+      setSeqMiB(Number(value.sequential.mib_per_second.toFixed(1)))
+      setSeekMs(Number(value.random.latency_ms_median.toFixed(1)))
+    } catch (e) { setError(e.message) }
+  }
+
+  return <div className="stack storage-lab">
+    <Card title="Adaptive Managed Interleave Simulator">
+      <div className="hero">
+        <div className="mascot">🧪</div>
+        <div className="grow">
+          <p>
+            Не случайная мелкая фрагментация, а bounded macro-interleave:
+            длинные полосы для sequential-классов, более короткие — для interactive,
+            с ограничением размера extent и числа extents на файл.
+          </p>
+          <div className="lab-controls">
+            <label>Sequential MiB/s<input type="number" min="10" max="1000" value={seqMiB} onChange={e=>setSeqMiB(Number(e.target.value))} /></label>
+            <label>Seek, ms<input type="number" min="0.1" max="100" step="0.1" value={seekMs} onChange={e=>setSeekMs(Number(e.target.value))} /></label>
+            <label>Seek budget, %<input type="number" min="0.5" max="20" step="0.5" value={seekBudgetPct} onChange={e=>setSeekBudgetPct(Number(e.target.value))} /></label>
+            <button className="primary" disabled={!scanId} onClick={run}>Simulate scan {scanId || '—'}</button>
+          </div>
+          <small>
+            Формула поднимает минимальную полосу, если на этом HDD seek слишком дорог
+            относительно времени последовательного чтения. Значения ограничены policy
+            каждого класса, чтобы полосы не стали бесконечно длинными.
+          </small>
+        </div>
+      </div>
+
+      {data && <>
+        <div className="metrics">
+          <Metric label="Bands" value={data.metrics?.bands ?? '—'} />
+          <Metric label="Extents" value={data.metrics?.extents ?? '—'} />
+          <Metric label="Split files" value={data.metrics?.fragmented_files ?? '—'} />
+          <Metric label="Max extents / file" value={data.metrics?.max_extents_per_file ?? '—'} />
+          <Metric label="Median extent" value={fmtBytes(data.metrics?.median_extent_bytes || 0)} />
+          <Metric label="Smallest split extent" value={fmtBytes(data.metrics?.smallest_split_extent_bytes || 0)} />
+          <Metric label="Tiny split extents" value={data.metrics?.tiny_split_extents ?? '—'} />
+          <Metric label="Layout quality" value={data.metrics?.quality ?? '—'} />
+        </div>
+
+        <div className="lane-policy-grid">
+          {Object.entries(data.lane_stats || {}).map(([lane, stat]) => <div key={lane}>
+            <b>{lane}</b>
+            <span>min {fmtBytes(stat.min_band)}</span>
+            <span>target {fmtBytes(stat.target_band)}</span>
+            <span>max {fmtBytes(stat.max_band)}</span>
+            <span>bands {stat.bands} · extents {stat.extents}</span>
+            <span>seek ≈ {(Number(stat.estimated_seek_overhead || 0) * 100).toFixed(2)}%</span>
+            <small>{stat.description}</small>
+          </div>)}
+        </div>
+
+        <div className="band-strip">
+          {data.bands?.slice(0, 500).map((band, idx) => {
+            const total = data.bands.reduce((sum, x) => sum + Number(x.length || 0), 0) || 1
+            const pct = Math.max(0.35, Number(band.length || 0) * 100 / total)
+            return <i
+              key={idx}
+              className={`lane-${band.lane[0]}`}
+              style={{ flexBasis: `${pct}%` }}
+              title={`${band.lane}\n${fmtBytes(band.length)}\n${band.extent_count} extents · ${band.file_count} files`}
+            />
+          })}
+        </div>
+        <p>
+          Это карта <b>полос</b>, а не каждого мелкого file extent. Полоса может содержать
+          несколько маленьких файлов одного класса или один сегмент большого файла.
+        </p>
+        <p>{data.note}</p>
+      </>}
+    </Card>
+
+    <Card title="NTFS Extents + read benchmark">
+      <input placeholder="Полный путь к большому тестовому файлу" value={path} onChange={e=>setPath(e.target.value)} />
+      <div className="actions">
+        <button onClick={queryExtents}>Query extents</button>
+        <button onClick={benchmark}>Read benchmark → подставить в simulator</button>
+      </div>
+      {extents && <p>Extents: <b>{extents.extent_count ?? '—'}</b> · {extents.supported ? 'NTFS mapping available' : extents.reason}</p>}
+      {bench && <div className="metrics">
+        <Metric label="Sequential" value={`${bench.sequential.mib_per_second.toFixed(1)} MiB/s`} />
+        <Metric label="Seq p95" value={`${bench.sequential.latency_ms_p95.toFixed(1)} ms`} />
+        <Metric label="Random" value={`${bench.random.mib_per_second.toFixed(1)} MiB/s`} />
+        <Metric label="Random median" value={`${bench.random.latency_ms_median.toFixed(1)} ms`} />
+      </div>}
+    </Card>
+  </div>
 }
 
 function Metric({ label, value }) { return <div><small>{label}</small><b>{value}</b></div> }

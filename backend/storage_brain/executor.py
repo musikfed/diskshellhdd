@@ -4,7 +4,9 @@ import hashlib
 import os
 import shutil
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from backend.config import settings
 from backend.core.database import connect
@@ -15,27 +17,76 @@ class PlanExecutionBlocked(RuntimeError):
     pass
 
 
-def _digest(path: Path) -> str:
+class PlanExecutionCancelled(RuntimeError):
+    pass
+
+
+CancelCallback = Callable[[], bool]
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _check_cancel(cancel_callback: CancelCallback | None) -> None:
+    if cancel_callback is not None and cancel_callback():
+        raise PlanExecutionCancelled("Placement execution cancelled by operator")
+
+
+def _digest(path: Path, cancel_callback: CancelCallback | None = None) -> str:
     hasher = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+        while True:
+            _check_cancel(cancel_callback)
+            chunk = handle.read(8 * 1024 * 1024)
+            if not chunk:
+                break
             hasher.update(chunk)
     return hasher.hexdigest()
 
 
-def _verify(source_size: int, target: Path, expected_digest: str | None) -> str:
+def _copy_with_cancel(
+    source: Path,
+    target: Path,
+    cancel_callback: CancelCallback | None,
+) -> None:
+    with source.open("rb") as src, target.open("xb") as dst:
+        while True:
+            _check_cancel(cancel_callback)
+            chunk = src.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            dst.write(chunk)
+        dst.flush()
+        os.fsync(dst.fileno())
+    shutil.copystat(source, target, follow_symlinks=False)
+
+
+def _verify(
+    source_size: int,
+    target: Path,
+    expected_digest: str | None,
+    cancel_callback: CancelCallback | None = None,
+) -> str:
+    _check_cancel(cancel_callback)
     actual_size = target.stat().st_size
     if actual_size != source_size:
         raise OSError(f"Verification failed: target size {actual_size} != {source_size}")
     if expected_digest is not None:
-        actual_digest = _digest(target)
+        actual_digest = _digest(target, cancel_callback)
         if actual_digest != expected_digest:
             raise OSError("Verification failed: SHA-256 mismatch")
         return f"sha256:{actual_digest}"
     return f"size:{actual_size}"
 
 
-def _journal(connection, plan_id: int, item_id: int, operation: str, source: Path, target: Path, status: str, detail: str = "") -> None:
+def _journal(
+    connection,
+    plan_id: int,
+    item_id: int,
+    operation: str,
+    source: Path,
+    target: Path,
+    status: str,
+    detail: str = "",
+) -> None:
     connection.execute(
         """
         INSERT INTO operation_journal
@@ -46,7 +97,28 @@ def _journal(connection, plan_id: int, item_id: int, operation: str, source: Pat
     )
 
 
-def apply_plan(plan_id: int, confirmation: str, verify: str = "size") -> dict:
+def _set_plan_status(plan_id: int, status: str) -> None:
+    with connect() as connection:
+        connection.execute(
+            """
+            UPDATE placement_plans
+            SET status=?, completed_at=CASE
+                WHEN ? IN ('completed','partial','failed','cancelled','rolled_back')
+                THEN CURRENT_TIMESTAMP ELSE completed_at END
+            WHERE id=?
+            """,
+            (status, status, plan_id),
+        )
+        connection.commit()
+
+
+def apply_plan(
+    plan_id: int,
+    confirmation: str,
+    verify: str = "size",
+    cancel_callback: CancelCallback | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict:
     if not settings.allow_file_writes:
         raise PlanExecutionBlocked("DS_ALLOW_FILE_WRITES is disabled")
     if confirmation != f"APPLY PLAN {plan_id}":
@@ -57,12 +129,12 @@ def apply_plan(plan_id: int, confirmation: str, verify: str = "size") -> dict:
     plan = get_plan(plan_id)
     if plan["projected_free_bytes"] < plan["reserve_bytes"]:
         raise PlanExecutionBlocked("Plan violates the configured working-space reserve")
-    if plan["status"] not in {"draft", "failed", "partial"}:
+    if plan["status"] not in {"draft", "failed", "partial", "cancelled"}:
         raise PlanExecutionBlocked(f"Plan status is {plan['status']}")
 
     with connect() as connection:
         connection.execute(
-            "UPDATE placement_plans SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?",
+            "UPDATE placement_plans SET status='running', started_at=CURRENT_TIMESTAMP, completed_at=NULL WHERE id=?",
             (plan_id,),
         )
         connection.commit()
@@ -71,85 +143,161 @@ def apply_plan(plan_id: int, confirmation: str, verify: str = "size") -> dict:
     failed = 0
     copied = 0
     moved = 0
+    total = len(plan["items"])
 
-    for item in plan["items"]:
-        if item["status"] == "completed":
-            completed += 1
-            continue
+    def report(current: dict[str, Any] | None = None) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            {
+                "plan_id": plan_id,
+                "completed": completed,
+                "failed": failed,
+                "copied": copied,
+                "moved": moved,
+                "total": total,
+                "current": current,
+            }
+        )
 
-        source = Path(item["source_path"])
-        target = Path(item["target_path"])
-        try:
-            if not source.exists():
-                if target.exists() and target.is_file() and target.stat().st_size == item["size"]:
-                    verification = _verify(item["size"], target, None)
-                    with connect() as connection:
-                        connection.execute(
-                            "UPDATE placement_plan_items SET status='completed', verification=?, error=NULL WHERE id=?",
-                            (verification, item["id"]),
+    report()
+
+    try:
+        for item in plan["items"]:
+            _check_cancel(cancel_callback)
+            if item["status"] == "completed":
+                completed += 1
+                report(item)
+                continue
+
+            source = Path(item["source_path"])
+            target = Path(item["target_path"])
+            try:
+                if not source.exists():
+                    if target.exists() and target.is_file() and target.stat().st_size == item["size"]:
+                        verification = _verify(item["size"], target, None, cancel_callback)
+                        with connect() as connection:
+                            connection.execute(
+                                """
+                                UPDATE placement_plan_items
+                                SET status='completed', verification=?, error=NULL
+                                WHERE id=?
+                                """,
+                                (verification, item["id"]),
+                            )
+                            _journal(
+                                connection,
+                                plan_id,
+                                item["id"],
+                                item["action"],
+                                source,
+                                target,
+                                "completed",
+                                "Source already absent; target verified",
+                            )
+                            connection.commit()
+                        completed += 1
+                        report(item)
+                        continue
+                    raise FileNotFoundError(source)
+                if not source.is_file():
+                    raise ValueError("Placement executor currently handles files only")
+                if target.exists():
+                    raise FileExistsError(target)
+
+                source_size = source.stat().st_size
+                if source_size != item["size"]:
+                    raise OSError("Source changed since the scan; rebuild the plan")
+
+                expected_digest = (
+                    _digest(source, cancel_callback) if verify == "sha256" else None
+                )
+                target.parent.mkdir(parents=True, exist_ok=True)
+
+                if item["action"] == "move_same_volume":
+                    os.replace(source, target)
+                    try:
+                        verification = _verify(
+                            source_size,
+                            target,
+                            expected_digest,
+                            cancel_callback,
                         )
-                        _journal(connection, plan_id, item["id"], item["action"], source, target, "completed", "Source already absent; target verified")
-                        connection.commit()
-                    completed += 1
-                    continue
-                raise FileNotFoundError(source)
-            if not source.is_file():
-                raise ValueError("Placement executor currently handles files only")
-            if target.exists():
-                raise FileExistsError(target)
+                    except Exception:
+                        if target.exists() and not source.exists():
+                            os.replace(target, source)
+                        raise
+                    moved += 1
+                else:
+                    partial = target.with_name(
+                        f".{target.name}.diskshell-partial-{uuid.uuid4().hex}"
+                    )
+                    try:
+                        _copy_with_cancel(source, partial, cancel_callback)
+                        verification = _verify(
+                            source_size,
+                            partial,
+                            expected_digest,
+                            cancel_callback,
+                        )
+                        _check_cancel(cancel_callback)
+                        os.replace(partial, target)
+                    finally:
+                        if partial.exists():
+                            partial.unlink(missing_ok=True)
+                    copied += 1
 
-            source_size = source.stat().st_size
-            if source_size != item["size"]:
-                raise OSError("Source changed since the scan; rebuild the plan")
-            expected_digest = _digest(source) if verify == "sha256" else None
-            target.parent.mkdir(parents=True, exist_ok=True)
+                with connect() as connection:
+                    connection.execute(
+                        """
+                        UPDATE placement_plan_items
+                        SET status='completed', verification=?, error=NULL
+                        WHERE id=?
+                        """,
+                        (verification, item["id"]),
+                    )
+                    _journal(
+                        connection,
+                        plan_id,
+                        item["id"],
+                        item["action"],
+                        source,
+                        target,
+                        "completed",
+                        verification,
+                    )
+                    connection.commit()
+                completed += 1
+                report(item)
 
-            if item["action"] == "move_same_volume":
-                os.replace(source, target)
-                try:
-                    verification = _verify(source_size, target, expected_digest)
-                except Exception:
-                    if target.exists() and not source.exists():
-                        os.replace(target, source)
-                    raise
-                moved += 1
-            else:
-                partial = target.with_name(f".{target.name}.diskshell-partial-{uuid.uuid4().hex}")
-                try:
-                    shutil.copy2(source, partial)
-                    verification = _verify(source_size, partial, expected_digest)
-                    os.replace(partial, target)
-                finally:
-                    if partial.exists():
-                        partial.unlink(missing_ok=True)
-                copied += 1
+            except PlanExecutionCancelled:
+                raise
+            except (OSError, ValueError) as exc:
+                failed += 1
+                with connect() as connection:
+                    connection.execute(
+                        "UPDATE placement_plan_items SET status='failed', error=? WHERE id=?",
+                        (str(exc), item["id"]),
+                    )
+                    _journal(
+                        connection,
+                        plan_id,
+                        item["id"],
+                        item["action"],
+                        source,
+                        target,
+                        "failed",
+                        str(exc),
+                    )
+                    connection.commit()
+                report(item)
 
-            with connect() as connection:
-                connection.execute(
-                    "UPDATE placement_plan_items SET status='completed', verification=?, error=NULL WHERE id=?",
-                    (verification, item["id"]),
-                )
-                _journal(connection, plan_id, item["id"], item["action"], source, target, "completed", verification)
-                connection.commit()
-            completed += 1
-
-        except (OSError, ValueError) as exc:
-            failed += 1
-            with connect() as connection:
-                connection.execute(
-                    "UPDATE placement_plan_items SET status='failed', error=? WHERE id=?",
-                    (str(exc), item["id"]),
-                )
-                _journal(connection, plan_id, item["id"], item["action"], source, target, "failed", str(exc))
-                connection.commit()
+    except PlanExecutionCancelled:
+        _set_plan_status(plan_id, "cancelled")
+        raise
 
     status = "completed" if failed == 0 else ("partial" if completed else "failed")
-    with connect() as connection:
-        connection.execute(
-            "UPDATE placement_plans SET status=?, completed_at=CURRENT_TIMESTAMP WHERE id=?",
-            (status, plan_id),
-        )
-        connection.commit()
+    _set_plan_status(plan_id, status)
 
     return {
         "plan_id": plan_id,
@@ -188,14 +336,22 @@ def rollback_plan(plan_id: int, confirmation: str) -> dict:
                 "UPDATE placement_plan_items SET status='rolled_back', error=NULL WHERE id=?",
                 (item["id"],),
             )
-            _journal(connection, plan_id, item["id"], "rollback", target, source, "completed")
+            _journal(
+                connection,
+                plan_id,
+                item["id"],
+                "rollback",
+                target,
+                source,
+                "completed",
+            )
             connection.commit()
         restored += 1
 
-    with connect() as connection:
-        connection.execute(
-            "UPDATE placement_plans SET status='rolled_back' WHERE id=?",
-            (plan_id,),
-        )
-        connection.commit()
-    return {"plan_id": plan_id, "status": "rolled_back", "restored": restored, "skipped": skipped}
+    _set_plan_status(plan_id, "rolled_back")
+    return {
+        "plan_id": plan_id,
+        "status": "rolled_back",
+        "restored": restored,
+        "skipped": skipped,
+    }

@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.6.6
+# Deploying DiskShell 0.6.7
 
-DiskShell 0.6.6 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
+DiskShell 0.6.7 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -240,3 +240,10 @@ The frontend supports multi-selection with `Ctrl+Click`, `Shift+Click`, `Ctrl+A`
 ## Vault WRITE gate
 
 Keep `DS_ALLOW_VAULT_WRITES=0` as the normal default. Enable `VAULT WRITE` from the Vault page when creating a Vault, importing/encrypting data, or exporting data. The permission lives only in backend RAM and resets to locked after restart. Use `DS_ALLOW_VAULT_WRITES=1` only when a persistent environment override is intentionally desired.
+
+
+## SFTP / SSH large files
+
+Commander requires no extra switch for SFTP resilience. Version 0.6.7 uses a 30-second SSH keepalive, OS TCP keepalive when available, a 120-second SFTP I/O timeout, and up to four reconnect attempts with 1/2/4/8-second backoff. After reconnect, the current transfer resumes from the partial target size and is size-verified before completion.
+
+This retry/resume state lives in the running backend job; restarting the backend does not yet persist or restore unfinished transfers.

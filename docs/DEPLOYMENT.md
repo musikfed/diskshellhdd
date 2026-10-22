@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.6.4
+# Deploying DiskShell 0.6.6
 
-DiskShell 0.6.4 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
+DiskShell 0.6.6 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -235,3 +235,8 @@ See [SAFETY.md](SAFETY.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 ### Commander 0.6.4
 
 The frontend supports multi-selection with `Ctrl+Click`, `Shift+Click`, `Ctrl+A`, and explicit Select all / Clear controls. Copy/Move run as one batch job with aggregate progress. Rename/View/Extract intentionally remain single-item operations.
+
+
+## Vault WRITE gate
+
+Keep `DS_ALLOW_VAULT_WRITES=0` as the normal default. Enable `VAULT WRITE` from the Vault page when creating a Vault, importing/encrypting data, or exporting data. The permission lives only in backend RAM and resets to locked after restart. Use `DS_ALLOW_VAULT_WRITES=1` only when a persistent environment override is intentionally desired.

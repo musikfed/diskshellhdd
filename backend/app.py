@@ -23,7 +23,7 @@ from backend.storage_brain.service import ensure_defaults
 from backend.vault.service import vault_write_state
 
 
-VERSION = "0.6.5"
+VERSION = "0.6.6"
 
 
 def create_app() -> Flask:

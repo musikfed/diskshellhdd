@@ -1,4 +1,4 @@
-# DiskShell 0.5 — безопасность и ответственность оператора
+# DiskShell 0.5.1 — безопасность и ответственность оператора
 
 DiskShell предназначен для системных администраторов, инженеров хранения и других пользователей, которые понимают последствия операций с накопителями.
 
@@ -43,7 +43,7 @@ DiskShell предназначен для системных администр�
 
 ## Stop / Cancel
 
-Quick Index, Placement Executor и Security Scan имеют cancel/stop.
+Quick Index, Placement Executor, Files Copy/Move и Security Scan имеют cancel/stop.
 
 Stop является cooperative:
 

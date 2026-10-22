@@ -1,4 +1,4 @@
-# DiskShell 0.5 — operator safety and responsibility
+# DiskShell 0.5.1 — operator safety and responsibility
 
 DiskShell is intended for system administrators, storage engineers, and other operators who understand the consequences of storage operations.
 
@@ -33,6 +33,6 @@ With `DS_ALLOW_DISK_WRITES=0`:
 
 ## Stop / Cancel
 
-Quick Index, Placement Executor, and Security Scan are cancellable.
+Quick Index, Placement Executor, Files Copy/Move, and Security Scan are cancellable.
 
 Cancellation is cooperative: scanners stop between filesystem operations, cross-volume placement copies check cancellation between chunks, and Defender/ClamAV processes are terminated. Already completed atomic operations are not silently reversed.

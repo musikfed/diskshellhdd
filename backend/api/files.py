@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
-from backend.files.service import FileWriteBlocked, copy_item, hash_file, list_directory, make_directory, move_item, trash_item
+from backend.files.jobs import cancel_file_job, get_file_job, start_file_job
+from backend.files.service import (
+    FileWriteBlocked,
+    copy_item,
+    hash_file,
+    list_directory,
+    make_directory,
+    move_item,
+    trash_item,
+)
 
 
 bp = Blueprint("files", __name__, url_prefix="/api/files")
@@ -70,3 +79,39 @@ def trash():
         return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
     except (KeyError, FileNotFoundError, OSError) as exc:
         return jsonify({"error": "trash_failed", "message": str(exc)}), 400
+
+
+@bp.post("/jobs")
+def start_job():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return (
+            jsonify(
+                start_file_job(
+                    str(payload["operation"]),
+                    str(payload["source"]),
+                    str(payload["destination"]),
+                )
+            ),
+            202,
+        )
+    except FileWriteBlocked as exc:
+        return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
+    except (KeyError, ValueError, FileNotFoundError, FileExistsError, OSError) as exc:
+        return jsonify({"error": "file_job_failed", "message": str(exc)}), 400
+
+
+@bp.get("/jobs/<job_id>")
+def job_status(job_id: str):
+    try:
+        return jsonify(get_file_job(job_id))
+    except KeyError:
+        return jsonify({"error": "job_not_found"}), 404
+
+
+@bp.post("/jobs/<job_id>/cancel")
+def cancel_job(job_id: str):
+    try:
+        return jsonify(cancel_file_job(job_id))
+    except KeyError:
+        return jsonify({"error": "job_not_found"}), 404

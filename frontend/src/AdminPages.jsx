@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, fmtBytes } from './api.js'
+import { api, fmtBytes, joinPath } from './api.js'
 
 function Panel({ title, children, className = '' }) {
   return <section className={`card admin-panel ${className}`}><h3>{title}</h3>{children}</section>
@@ -667,6 +667,161 @@ export function SecurityAdmin({ setError }) {
     </Panel>
     <Panel title="Последние результаты">
       <div className="snapshot-list">{results.map(r => <div key={r.id}><b>{r.status}</b><span>{r.engine}</span><span title={r.path}>{r.path}</span><span>{r.threats ?? '—'} threats</span></div>)}</div>
+    </Panel>
+  </div>
+}
+
+
+function AdminFilePane({ title, side, state, setState, load, choose, busy }) {
+  return <Panel title={title} className="pane">
+    <div className="file-toolbar">
+      <button disabled={!state.data?.parent || busy} onClick={() => state.data?.parent && load(side, state.data.parent)}>↑</button>
+      <input value={state.path} onChange={e => setState(x => ({ ...x, path: e.target.value }))} />
+      <button disabled={busy} onClick={() => load(side, state.path)}>Open</button>
+    </div>
+    <div className="file-list">
+      {state.data?.items?.slice(0, 1500).map(item => <button
+        key={item.path}
+        className={state.selected?.path === item.path ? 'selected' : ''}
+        onClick={() => choose(side, item)}
+        onDoubleClick={() => item.is_dir && !busy && load(side, item.path)}
+      >
+        <span>{item.is_dir ? '📁' : '📄'} {item.name}</span>
+        <span>{item.is_dir ? '' : fmtBytes(item.size)}</span>
+      </button>)}
+    </div>
+  </Panel>
+}
+
+export function FilesAdmin({ health, setError }) {
+  const [left, setLeft] = useState({
+    path: localStorage.getItem('fileLeftPath') || 'F:\\',
+    data: null,
+    selected: null,
+  })
+  const [right, setRight] = useState({
+    path: localStorage.getItem('fileRightPath') || 'F:\\',
+    data: null,
+    selected: null,
+  })
+  const [jobId, setJobId] = useState(localStorage.getItem('fileJobId') || '')
+  const [job, setJob] = useState(null)
+
+  async function load(side, path) {
+    try {
+      const data = await api(`/api/files?path=${encodeURIComponent(path)}`)
+      const next = { path: data.path, data, selected: null }
+      if (side === 'left') {
+        setLeft(next)
+        localStorage.setItem('fileLeftPath', data.path)
+      } else {
+        setRight(next)
+        localStorage.setItem('fileRightPath', data.path)
+      }
+    } catch (e) { setError(e.message) }
+  }
+
+  function choose(side, item) {
+    if (side === 'left') setLeft(x => ({ ...x, selected: item }))
+    else setRight(x => ({ ...x, selected: item }))
+  }
+
+  useEffect(() => {
+    load('left', left.path)
+    load('right', right.path)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!jobId) return undefined
+    localStorage.setItem('fileJobId', jobId)
+    let stopped = false
+    const poll = async () => {
+      try {
+        const next = await api(`/api/files/jobs/${jobId}`)
+        if (stopped) return
+        setJob(next)
+        if (['completed', 'failed', 'cancelled'].includes(next.status)) {
+          localStorage.removeItem('fileJobId')
+          setJobId('')
+          await Promise.all([load('left', left.path), load('right', right.path)])
+        }
+      } catch (e) {
+        if (!stopped) {
+          localStorage.removeItem('fileJobId')
+          setJobId('')
+          setError(e.message)
+        }
+      }
+    }
+    poll()
+    const timer = setInterval(poll, 650)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [jobId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function transfer(operation, sourcePane, destinationPane) {
+    if (!sourcePane.selected) return
+    const destination = joinPath(destinationPane.path, sourcePane.selected.name)
+    try {
+      const value = await api('/api/files/jobs', {
+        method: 'POST',
+        body: JSON.stringify({
+          operation,
+          source: sourcePane.selected.path,
+          destination,
+        }),
+      })
+      setJob(value)
+      setJobId(value.id)
+    } catch (e) { setError(e.message) }
+  }
+
+  async function stop() {
+    try {
+      setJob(await api(`/api/files/jobs/${jobId}/cancel`, { method: 'POST', body: '{}' }))
+    } catch (e) { setError(e.message) }
+  }
+
+  async function trash(side, sideName) {
+    if (!side.selected) return
+    try {
+      await api('/api/files/trash', {
+        method: 'POST',
+        body: JSON.stringify({ path: side.selected.path }),
+      })
+      await load(sideName, side.path)
+    } catch (e) { setError(e.message) }
+  }
+
+  const busy = Boolean(jobId && job && !['completed', 'failed', 'cancelled'].includes(job.status))
+  return <div className="stack admin-workbench">
+    <div className="file-manager">
+      <AdminFilePane title="LEFT" side="left" state={left} setState={setLeft} load={load} choose={choose} busy={busy} />
+      <div className="file-actions">
+        <button disabled={!health?.safety?.file_writes || !left.selected || busy} onClick={() => transfer('copy', left, right)}>Copy →</button>
+        <button disabled={!health?.safety?.file_writes || !left.selected || busy} onClick={() => transfer('move', left, right)}>Move →</button>
+        <button disabled={!health?.safety?.file_writes || !right.selected || busy} onClick={() => transfer('copy', right, left)}>← Copy</button>
+        <button disabled={!health?.safety?.file_writes || !right.selected || busy} onClick={() => transfer('move', right, left)}>← Move</button>
+        <button className="stop-button" disabled={!busy || !jobId} onClick={stop}>■ Stop</button>
+        <button className="trash" disabled={!health?.safety?.file_writes || busy || (!left.selected && !right.selected)} onClick={() => left.selected ? trash(left, 'left') : trash(right, 'right')}>Trash</button>
+      </div>
+      <AdminFilePane title="RIGHT" side="right" state={right} setState={setRight} load={load} choose={choose} busy={busy} />
+    </div>
+
+    <Panel title="File operation job">
+      {!job && <p className="muted">Copy/Move запускаются в background job. Для больших операций доступен Stop.</p>}
+      {job && <>
+        <div className="metrics">
+          <Metric label="Operation" value={job.operation} />
+          <Metric label="Status" value={job.status} />
+          <Metric label="Files" value={job.files} />
+          <Metric label="Copied" value={fmtBytes(job.bytes)} />
+        </div>
+        <div className="progress-line"><i className={busy ? 'running' : ''} /></div>
+        <p className="path">{job.current_path}</p>
+        {job.error && <p className="warning">{job.error}</p>}
+        {job.status === 'cancelled' && <p className="muted">Операция остановлена; временный/новый target очищен. Исходник сохранён.</p>}
+      </>}
+      {!health?.safety?.file_writes && <small>DS_ALLOW_FILE_WRITES=0 — Copy/Move/Trash заблокированы.</small>}
     </Panel>
   </div>
 }

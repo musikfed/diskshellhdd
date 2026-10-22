@@ -1,4 +1,4 @@
-# DiskShell HDD 0.5
+# DiskShell HDD 0.5.1
 
 [Русская версия](README.ru.md) · English
 
@@ -13,6 +13,7 @@
 - Partition/Volume Manager: initialize GPT/MBR, create a partition in unallocated space, format NTFS/exFAT, select allocation unit, and assign a drive letter.
 - Whole-disk Clear → GPT → single partition → format remains available only after explicit disk unlock and destructive confirmation.
 - Quick Index supports real cooperative Stop/Cancel.
+- Two-pane Files Copy/Move run as background jobs with Stop; cancelled partial targets are cleaned while the source is retained.
 - Placement Plans persist in SQLite and restore after browser refresh.
 - Placement execution runs as a cancellable background job; cross-volume copies are chunked and partial files are removed on cancel.
 - Recovery / Forensics stores topology snapshots and performs read-only raw MBR/GPT/filesystem signature probes.

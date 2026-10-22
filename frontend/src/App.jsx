@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
-import { DisksAdmin, RecoveryAdmin, ScanAdmin, SecurityAdmin, StorageBrainAdmin } from './AdminPages.jsx'
+import { DisksAdmin, FilesAdmin, RecoveryAdmin, ScanAdmin, SecurityAdmin, StorageBrainAdmin } from './AdminPages.jsx'
 
 const NAV = [
   ['dashboard', '🐙', 'Главная'],
@@ -46,7 +46,7 @@ export default function App() {
     scan: <ScanAdmin {...context} />,
     analytics: <Analytics {...context} />,
     storage: <StorageBrainAdmin {...context} />,
-    files: <Files {...context} />,
+    files: <FilesAdmin {...context} />,
     content: <Content {...context} />,
     people: <People {...context} />,
     vault: <Vault {...context} />,

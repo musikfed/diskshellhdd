@@ -8,8 +8,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from backend.config import settings
 from backend.core.database import connect
+from backend.files.write_authorization import file_writes_allowed
 from backend.storage_brain.service import get_plan
 
 
@@ -122,8 +122,8 @@ def apply_plan(
     cancel_callback: CancelCallback | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> dict:
-    if not settings.allow_file_writes:
-        raise PlanExecutionBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise PlanExecutionBlocked("File writes are locked")
     if confirmation != f"APPLY PLAN {plan_id}":
         raise PlanExecutionBlocked("Typed confirmation does not match")
     if verify not in {"size", "sha256"}:
@@ -343,8 +343,8 @@ def apply_plan(
 
 
 def rollback_plan(plan_id: int, confirmation: str) -> dict:
-    if not settings.allow_file_writes:
-        raise PlanExecutionBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise PlanExecutionBlocked("File writes are locked")
     if confirmation != f"ROLLBACK PLAN {plan_id}":
         raise PlanExecutionBlocked("Typed confirmation does not match")
 

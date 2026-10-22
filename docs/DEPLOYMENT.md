@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.6.3
+# Deploying DiskShell 0.6.4
 
-DiskShell 0.6.3 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
+DiskShell 0.6.4 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -192,6 +192,22 @@ DS_ALLOW_EXTENT_MOVES=0
 - System / Boot / Application disks remain backend-protected.
 - Actual NTFS extent relocation remains disabled.
 
+## First Vault creation and storage location
+
+Normally leave `DS_VAULT_ROOT` empty. On **Vault → Create Vault**, choose a logical volume and a dedicated folder:
+
+```text
+Volume: W:\\
+Folder: DiskShellVault
+Result: W:\\DiskShellVault
+```
+
+DiskShell creates `vault.json`, `catalog.bin`, and `objects\\` inside that directory. The selected path is persisted in `data/vault-location.json`; this locator contains no passwords or keys.
+
+Using the volume root `W:\\` itself is rejected. If policy requires a configuration-fixed location, set `DS_VAULT_ROOT=W:\\DiskShellVault`; that becomes a hard override and disables the UI location selector.
+
+Save the displayed recovery key somewhere separate from the Vault disk. DiskShell cannot display it again after the warning is dismissed.
+
 ## First working workflow
 
 1. Verify disk identity/topology in **Disks**.
@@ -216,6 +232,6 @@ The forced Managed Interleave writer/rebalancer remains a later experimental mil
 See [SAFETY.md](SAFETY.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
 
-### Commander 0.6.3
+### Commander 0.6.4
 
 The frontend supports multi-selection with `Ctrl+Click`, `Shift+Click`, `Ctrl+A`, and explicit Select all / Clear controls. Copy/Move run as one batch job with aggregate progress. Rename/View/Extract intentionally remain single-item operations.

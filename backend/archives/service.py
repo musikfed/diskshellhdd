@@ -6,7 +6,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from backend.config import settings
+from backend.files.write_authorization import file_writes_allowed
 
 
 class UnsupportedArchive(ValueError):
@@ -84,8 +84,8 @@ def extract_archive(
     max_files: int = 50_000,
     max_total_bytes: int = 500 * 1024**3,
 ) -> dict:
-    if not settings.allow_file_writes:
-        raise ArchiveWriteBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise ArchiveWriteBlocked("File writes are locked")
     archive = Path(path).expanduser().resolve(strict=True)
     destination_path = Path(destination).expanduser().resolve()
     destination_path.mkdir(parents=True, exist_ok=True)
@@ -214,8 +214,8 @@ def create_archive(
     destination: str | Path,
     archive_format: str = "zip",
 ) -> dict:
-    if not settings.allow_file_writes:
-        raise ArchiveWriteBlocked("DS_ALLOW_FILE_WRITES is disabled")
+    if not file_writes_allowed():
+        raise ArchiveWriteBlocked("File writes are locked")
     if not sources:
         raise ValueError("At least one source is required")
 

@@ -1,12 +1,16 @@
-# DiskShell 0.5.6 architecture
+# DiskShell 0.6.0 architecture
 
 DiskShell is layered as React/Vite Admin Workbench → Flask API → Storage Brain/content services → cancellable safe executors → filesystem/Windows storage adapters.
 
 PowerShell is a Windows storage adapter only.
 
-## Per-disk authorization
+## Write authorization
 
-`DS_ALLOW_DISK_WRITES=0` disables the global override but does not prevent an administrator from temporarily unlocking one selected non-protected physical disk. Runtime authorization is bound to physical identity and expires after 15 minutes. System / Boot / Application disks remain protected.
+Physical-disk WRITE and file WRITE are independent runtime gates.
+
+- `DS_ALLOW_DISK_WRITES=0` disables the global disk override; a non-protected disk can be manually write-enabled until manual disable/backend restart, bound to Number + UniqueId + Serial + Size.
+- `DS_ALLOW_FILE_WRITES=0` disables the global file override; Commander/Storage Brain can enable a RAM-only FILE WRITE gate.
+- System / Boot / Application disks remain backend-protected.
 
 ## Partition / Volume layer
 
@@ -26,7 +30,7 @@ Recovery is read-only topology/signature inspection. Security adapters integrate
 
 Storage Lab still models logical Managed Interleave and NTFS-visible extents only; HDD firmware geometry and actual extent relocation remain separate.
 
-## Storage wizard 0.5.6
+## Storage wizard 0.6.0
 
 Partition-table initialization, partition/volume creation, and whole-disk destructive formatting are separate workflows. The Windows Storage adapter uses `Format-Volume` profiles for NTFS, exFAT, ReFS, FAT32, and FAT.
 
@@ -34,7 +38,7 @@ Volume size and allocation-unit compatibility are validated before destructive e
 
 Job progress is explicitly determinate or indeterminate instead of displaying invented percentages.
 
-## Adaptive Macro Interleave 0.5.6
+## Adaptive Macro Interleave 0.6.0
 
 The target layout is bounded macro-interleave rather than random fragmentation. Each workload lane has minimum, target, and maximum band sizes plus an extent budget.
 
@@ -42,8 +46,21 @@ A seek-derived lower bound is calculated from measured sequential throughput and
 
 Real extent relocation remains a separate experimental step and must be benchmarked against normal NTFS and contiguous layouts first.
 
-## Commander / remote transport 0.5.6
+## Commander / remote transport 0.6.0
 
 The File Manager now uses local/remote endpoint descriptors and one cancellable Commander transfer job. SFTP/FTP credentials are RAM-only. Cross-endpoint moves are copy → size verification → source removal after success.
 
 Remote preview uses a bounded backend cache. Direct transfer preserves the exact destination path; opt-in Smart placement selects a local Storage Class and records a lane/target-band hint. This is placement policy, not a claim of physical platter geometry.
+
+
+## Placement execution 0.6.0
+
+Large Placement Plans remain in SQLite and are paged to the UI. New plans start with `selected=0`, and the executor loads only explicitly checked rows.
+
+Cross-volume execution is chunked copy → fsync → Size/SHA-256 verification → atomic publish. The source is retained for operator review. After publish, DiskShell performs a read-only NTFS extent query.
+
+`layout_lane` and `target_band_bytes` are policy, not physical geometry. Layout verification compares actual NTFS-visible extent count with the approximate macro-band target and reports `conforming / drift / unavailable`. Forced extent relocation remains a later experimental writer/rebalancer milestone.
+
+## Runtime server
+
+With `DS_DEBUG=0`, `python -m backend.app` uses Waitress. An elevated Administrator/root backend should remain loopback-only until remote authentication is complete.

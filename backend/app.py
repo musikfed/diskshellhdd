@@ -8,7 +8,9 @@ from backend.api.content import bp as content_bp
 from backend.api.disks import bp as disks_bp
 from backend.api.files import bp as files_bp
 from backend.api.people import bp as people_bp
+from backend.api.recovery import bp as recovery_bp
 from backend.api.scans import bp as scans_bp
+from backend.api.security import bp as security_bp
 from backend.api.storage import bp as storage_bp
 from backend.api.storage_lab import bp as storage_lab_bp
 from backend.api.vault import bp as vault_bp
@@ -17,7 +19,7 @@ from backend.core.database import init_database
 from backend.storage_brain.service import ensure_defaults
 
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 
 
 def create_app() -> Flask:
@@ -31,6 +33,8 @@ def create_app() -> Flask:
         storage_bp,
         files_bp,
         people_bp,
+        recovery_bp,
+        security_bp,
         content_bp,
         vault_bp,
         storage_lab_bp,
@@ -49,6 +53,8 @@ def create_app() -> Flask:
                     "file_writes": settings.allow_file_writes,
                     "vault_writes": settings.allow_vault_writes,
                     "disk_writes": settings.allow_disk_writes,
+                    "disk_writes_global_override": settings.allow_disk_writes,
+                    "selected_disk_unlocks": True,
                     "extent_moves": settings.allow_extent_moves,
                 },
             }

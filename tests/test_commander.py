@@ -249,6 +249,7 @@ def test_commander_remote_download_reconnects_and_resumes(tmp_path, monkeypatch)
         threading.Event(),
         lambda count, _path: progress.append(count),
         lambda *args: retries.append(args),
+        lambda *_args: None,
     )
 
     assert destination.read_bytes() == payload
@@ -290,6 +291,7 @@ def test_commander_remote_upload_reconnects_and_resumes(tmp_path, monkeypatch):
         threading.Event(),
         lambda count, _path: progress.append(count),
         lambda *args: retries.append(args),
+        lambda *_args: None,
     )
 
     assert bytes(store["data"]) == payload

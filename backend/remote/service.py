@@ -9,8 +9,10 @@ import uuid
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
+
+from backend.config import settings
 
 
 class RemoteConnectionError(RuntimeError):
@@ -550,3 +552,39 @@ def delete_item(profile_id: str, path: str, recursive: bool = False) -> dict[str
         else:
             session.remove(normalized)
     return {"status": "deleted", "path": normalized}
+
+
+def cache_remote_file(
+    profile_id: str,
+    remote_path: str,
+    max_bytes: int = 256 * 1024**2,
+) -> dict[str, Any]:
+    profile = _profile(profile_id)
+    normalized = _normalize_remote_path(remote_path)
+    with open_session_from_profile(profile) as session:
+        entry = session.stat(normalized)
+        if entry.is_dir:
+            raise IsADirectoryError(normalized)
+        if int(entry.size) > int(max_bytes):
+            raise ValueError(
+                f"Remote preview cache limit exceeded: {entry.size} > {max_bytes}"
+            )
+
+        cache_root = settings.data_dir / "cache" / "remote_preview" / profile_id
+        cache_root.mkdir(parents=True, exist_ok=True)
+        safe_name = PurePosixPath(normalized).name or "remote.bin"
+        target = cache_root / f"{uuid.uuid4().hex}-{safe_name}"
+        with session.open_read(normalized) as src, target.open("xb") as dst:
+            while True:
+                chunk = src.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+
+    return {
+        "connection_id": profile_id,
+        "remote_path": normalized,
+        "local_path": str(target),
+        "size": int(entry.size),
+        "name": safe_name,
+    }

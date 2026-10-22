@@ -255,30 +255,104 @@ def _decrypt_object(master_key: bytes, object_id: str, source: Path, destination
     return total
 
 
-def import_file(token: str, source: str | Path) -> dict:
-    if not settings.allow_vault_writes:
-        raise VaultError("DS_ALLOW_VAULT_WRITES is disabled")
-    master_key = _session_key(token)
-    source_path = Path(source).expanduser().resolve(strict=True)
-    if not source_path.is_file():
-        raise FileNotFoundError(source_path)
-
+def _encrypt_catalog_item(
+    master_key: bytes,
+    source_path: Path,
+    *,
+    relative_path: str | None = None,
+    source_root: str | None = None,
+) -> tuple[dict, Path]:
     object_id = uuid.uuid4().hex
     object_path = _vault_root() / "objects" / object_id
     object_path.parent.mkdir(exist_ok=True)
     size = _encrypt_object(master_key, object_id, source_path, object_path)
-
-    catalog = _load_catalog(master_key)
     item = {
         "id": object_id,
         "name": source_path.name,
         "size": size,
         "source_path": str(source_path),
+        "relative_path": relative_path or source_path.name,
+        "source_root": source_root,
         "imported_at": time.time(),
     }
-    catalog.append(item)
-    _save_catalog(master_key, catalog)
-    return item
+    return item, object_path
+
+
+def import_path(token: str, source: str | Path) -> dict:
+    """Encrypt one file or a complete directory tree.
+
+    Directory import is catalog-atomic: encrypted objects created by a failed
+    batch are removed and the catalog is left unchanged.
+    """
+    if not settings.allow_vault_writes:
+        raise VaultError("DS_ALLOW_VAULT_WRITES is disabled")
+
+    master_key = _session_key(token)
+    source_path = Path(source).expanduser().resolve(strict=True)
+    catalog = _load_catalog(master_key)
+
+    if source_path.is_file():
+        item, _object_path = _encrypt_catalog_item(master_key, source_path)
+        catalog.append(item)
+        _save_catalog(master_key, catalog)
+        return {
+            "status": "imported",
+            "kind": "file",
+            "files": 1,
+            "bytes": int(item["size"]),
+            "items": [item],
+        }
+
+    if not source_path.is_dir():
+        raise FileNotFoundError(source_path)
+
+    files = sorted(
+        (
+            path
+            for path in source_path.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        ),
+        key=lambda path: str(path).casefold(),
+    )
+    created_objects: list[Path] = []
+    new_items: list[dict] = []
+    try:
+        for file_path in files:
+            relative = str(file_path.relative_to(source_path))
+            item, object_path = _encrypt_catalog_item(
+                master_key,
+                file_path,
+                relative_path=relative,
+                source_root=str(source_path),
+            )
+            created_objects.append(object_path)
+            new_items.append(item)
+        catalog.extend(new_items)
+        _save_catalog(master_key, catalog)
+    except Exception:
+        for object_path in created_objects:
+            try:
+                object_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+
+    return {
+        "status": "imported",
+        "kind": "directory",
+        "source": str(source_path),
+        "files": len(new_items),
+        "bytes": sum(int(item["size"]) for item in new_items),
+        "items": new_items,
+    }
+
+
+def import_file(token: str, source: str | Path) -> dict:
+    """Backward-compatible single-file import."""
+    result = import_path(token, source)
+    if result["kind"] != "file":
+        raise VaultError("Expected a file source")
+    return result["items"][0]
 
 
 def export_file(token: str, object_id: str, destination: str | Path) -> dict:
@@ -291,7 +365,8 @@ def export_file(token: str, object_id: str, destination: str | Path) -> dict:
         raise FileNotFoundError(object_id)
     dest = Path(destination).expanduser().resolve()
     if dest.exists() and dest.is_dir():
-        dest = dest / item["name"]
+        relative = Path(str(item.get("relative_path") or item["name"]))
+        dest = dest / relative
     if dest.exists():
         raise FileExistsError(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)

@@ -286,7 +286,7 @@ Resume:            from target size
 
 ## Commander: обрывы, partial и конфликты имён
 
-Начиная с 0.7.0, обычный workflow крупного Copy/Move:
+Начиная с 0.6.9, обычный workflow крупного Copy/Move:
 
 1. Commander проверяет source и destination.
 2. Если destination свободен — запускает job.

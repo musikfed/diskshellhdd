@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
-from backend.core.jobs import get_job, start_scan_job
+from backend.core.jobs import cancel_job, get_job, start_scan_job
 
 
 bp = Blueprint("scans", __name__, url_prefix="/api/scans")
@@ -27,5 +27,13 @@ def start_scan():
 def scan_status(job_id: str):
     try:
         return jsonify(get_job(job_id))
+    except KeyError:
+        return jsonify({"error": "job_not_found"}), 404
+
+
+@bp.post("/<job_id>/cancel")
+def cancel_scan(job_id: str):
+    try:
+        return jsonify(cancel_job(job_id))
     except KeyError:
         return jsonify({"error": "job_not_found"}), 404

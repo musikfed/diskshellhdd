@@ -104,6 +104,9 @@ CREATE TABLE IF NOT EXISTS placement_plans (
     projected_used_bytes INTEGER NOT NULL DEFAULT 0,
     projected_free_bytes INTEGER NOT NULL DEFAULT 0,
     reserve_bytes INTEGER NOT NULL DEFAULT 0,
+    source_roots TEXT NOT NULL DEFAULT '[]',
+    excluded_roots TEXT NOT NULL DEFAULT '[]',
+    cross_volume_policy TEXT NOT NULL DEFAULT 'copy_keep_source',
     warnings TEXT NOT NULL DEFAULT '[]',
     FOREIGN KEY (scan_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
 );
@@ -202,6 +205,26 @@ CREATE TABLE IF NOT EXISTS security_scan_results (
     completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS surface_scan_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    disk_number INTEGER NOT NULL,
+    disk_identity TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    block_size INTEGER NOT NULL,
+    requested_regions INTEGER,
+    total_bytes INTEGER NOT NULL DEFAULT 0,
+    bytes_read INTEGER NOT NULL DEFAULT 0,
+    read_errors INTEGER NOT NULL DEFAULT 0,
+    slow_regions INTEGER NOT NULL DEFAULT 0,
+    median_latency_ms REAL,
+    p95_latency_ms REAL,
+    max_latency_ms REAL,
+    status TEXT NOT NULL,
+    result_json TEXT NOT NULL DEFAULT '{}',
+    started_at TEXT,
+    completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 """
 
 INDEX_SCHEMA = """
@@ -217,6 +240,7 @@ CREATE INDEX IF NOT EXISTS idx_photos_scan ON photos(scan_id);
 CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);
+CREATE INDEX IF NOT EXISTS idx_surface_disk_completed ON surface_scan_results(disk_number, completed_at DESC);
 """
 
 
@@ -273,6 +297,12 @@ def init_database() -> None:
             [
                 ("started_at", "TEXT"),
                 ("completed_at", "TEXT"),
+                ("source_roots", "TEXT NOT NULL DEFAULT '[]'"),
+                ("excluded_roots", "TEXT NOT NULL DEFAULT '[]'"),
+                (
+                    "cross_volume_policy",
+                    "TEXT NOT NULL DEFAULT 'copy_keep_source'",
+                ),
             ],
         )
         _ensure_columns(

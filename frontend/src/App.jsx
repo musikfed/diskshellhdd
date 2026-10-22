@@ -37,7 +37,10 @@ class PageErrorBoundary extends React.Component {
   }
 
   componentDidUpdate(prevProps) {
-    if (prevProps.page !== this.props.page && this.state.error) {
+    if (
+      (prevProps.page !== this.props.page || prevProps.resetKey !== this.props.resetKey)
+      && this.state.error
+    ) {
       this.setState({ error: null })
     }
   }
@@ -47,7 +50,8 @@ class PageErrorBoundary extends React.Component {
     return <div className="error page-crash">
       <b>Страница DiskShell упала при рендере.</b>
       <span>{String(this.state.error?.message || this.state.error)}</span>
-      <small>Переключись на другую вкладку или обнови страницу. Ошибка больше не скрывается пустым фоном.</small>
+      <small>Если endpoint только что отключили, DiskShell попробует восстановить страницу после следующего обновления inventory.</small>
+      <button onClick={() => this.setState({ error: null })}>Retry render</button>
     </div>
   }
 }
@@ -87,16 +91,27 @@ export default function App() {
   }
   useEffect(() => { refreshHealth() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    api('/api/files/roots')
-      .then(value => {
-        const nextRoots = value.roots || []
+    let stopped = false
+    const refreshRoots = async () => {
+      try {
+        const value = await api('/api/files/roots')
+        if (stopped) return
+        const nextRoots = Array.isArray(value.roots) ? value.roots : []
         setRoots(nextRoots)
         setActiveVolume(current => {
-          if (current && nextRoots.some(item => item.path === current)) return current
-          return nextRoots[0]?.path || current
+          if (current) return current
+          return nextRoots.find(item => item.available !== false)?.path || nextRoots[0]?.path || ''
         })
-      })
-      .catch(() => {})
+      } catch {
+        // A transient storage inventory error must not take down the UI.
+      }
+    }
+    refreshRoots()
+    const timer = setInterval(refreshRoots, 3000)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
   }, [])
   useEffect(() => { localStorage.setItem('activePage', page) }, [page])
   useEffect(() => {
@@ -129,6 +144,8 @@ export default function App() {
     }),
     [scanId, health, roots, activeVolume],
   )
+  const activeRoot = roots.find(item => item.path === activeVolume)
+  const activeVolumeOffline = Boolean(activeVolume && (!activeRoot || activeRoot.available === false))
   const pages = {
     dashboard: <Dashboard {...context} setPage={setPage} />,
     disks: <DisksAdmin {...context} />,
@@ -157,16 +174,25 @@ export default function App() {
             <span>Active volume</span>
             <select value={activeVolume} onChange={e => setActiveVolume(e.target.value)}>
               <option value="">—</option>
-              {roots.map(item => <option key={item.path} value={item.path}>
-                {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+              {activeVolumeOffline && <option value={activeVolume}>
+                {activeVolume} · OFFLINE / waiting for reconnect
+              </option>}
+              {roots.map(item => <option key={item.path} value={item.path} disabled={item.available === false}>
+                {item.path} · {item.available === false ? 'OFFLINE' : (item.filesystem || 'FS')} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
               </option>)}
             </select>
           </label>
           <div className="scan-chip">Scan: {scanId || '—'}</div>
+          {activeVolumeOffline && <div className="scan-chip">Volume offline · auto-detecting return</div>}
         </div>
       </header>
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
-      <PageErrorBoundary page={page}>{pages[page]}</PageErrorBoundary>
+      <PageErrorBoundary
+        page={page}
+        resetKey={`${page}:${activeVolume}:${roots.map(item => `${item.path}:${item.available !== false ? '1' : '0'}`).join('|')}`}
+      >
+        {pages[page]}
+      </PageErrorBoundary>
     </main>
   </div>
 }

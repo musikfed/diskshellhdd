@@ -785,3 +785,68 @@ textarea{
   .selectable-plan>div span:nth-child(7),
   .selectable-plan>div span:nth-child(8){display:none}
 }
+
+
+/* 0.6.1 persistent workspace context */
+.header-context{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.active-volume-select{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin:0;
+  padding:6px 8px;
+  border:1px solid rgba(100,137,192,.22);
+  border-radius:11px;
+  background:rgba(8,18,32,.66);
+}
+.active-volume-select span{
+  color:#8fa6c8;
+  font-size:11px;
+  white-space:nowrap;
+}
+.active-volume-select select{
+  min-width:220px;
+  margin:0;
+  padding:7px 9px;
+}
+.page-crash{
+  display:grid;
+  gap:7px;
+  margin:18px 0;
+}
+.page-crash span{
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  overflow-wrap:anywhere;
+}
+.vault-path-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+  margin-bottom:12px;
+}
+.vault-path-grid select,
+.vault-path-grid input{
+  width:100%;
+}
+@media(max-width:900px){
+  .header-context{
+    justify-content:flex-start;
+    width:100%;
+  }
+  .active-volume-select{
+    width:100%;
+  }
+  .active-volume-select select{
+    min-width:0;
+    flex:1;
+  }
+  .vault-path-grid{
+    grid-template-columns:1fr;
+  }
+}

@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.0
+# DiskShell HDD 0.6.1
 
 Русский · [English](README.md)
 
@@ -173,3 +173,14 @@ System / Boot / Application disk остаются backend-protected и тумб�
 - принудительный Managed Interleave writer/rebalancer в 0.6.0 ещё не включён.
 
 **Admin CLI:** для Windows physical disk / Surface Diagnostics / Recovery raw / NTFS extent функций backend запускается из elevated PowerShell. На Linux — из root shell, но Windows Storage/NTFS-specific функции там недоступны. Полные команды: [DEPLOYMENT.ru.md](docs/DEPLOYMENT.ru.md).
+
+## UI/workspace fixes 0.6.1
+
+- исправлен blank-screen Commander: отсутствующий runtime handler теперь ловится frontend lint до merge;
+- активная вкладка сохраняется после F5/refresh;
+- для каждой вкладки сохраняется вертикальная scroll position;
+- в общей шапке появился persistent **Active volume** selector;
+- Vault получил отдельный выбор тома для Import source и Export destination;
+- Commander сохраняет LEFT/RIGHT path, активную панель, Smart folders и archive format;
+- page-level React error boundary показывает текст ошибки вместо пустого тёмного экрана;
+- CI теперь запускает ESLint `no-undef` перед Vite build.

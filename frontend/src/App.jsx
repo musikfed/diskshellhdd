@@ -21,6 +21,37 @@ function Card({ title, children, className = '' }) {
   return <section className={`card ${className}`}><h3>{title}</h3>{children}</section>
 }
 
+
+class PageErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  componentDidCatch(error, info) {
+    console.error('DiskShell page render failed', error, info)
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.page !== this.props.page && this.state.error) {
+      this.setState({ error: null })
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    return <div className="error page-crash">
+      <b>Страница DiskShell упала при рендере.</b>
+      <span>{String(this.state.error?.message || this.state.error)}</span>
+      <small>Переключись на другую вкладку или обнови страницу. Ошибка больше не скрывается пустым фоном.</small>
+    </div>
+  }
+}
+
 function Safety({ health }) {
   const s = health?.safety || {}
   return <div className="safety">
@@ -33,8 +64,15 @@ function Safety({ health }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState('dashboard')
+  const [page, setPage] = useState(() => {
+    const saved = localStorage.getItem('activePage')
+    return NAV.some(([id]) => id === saved) ? saved : 'dashboard'
+  })
   const [health, setHealth] = useState(null)
+  const [roots, setRoots] = useState([])
+  const [activeVolume, setActiveVolume] = useState(
+    () => localStorage.getItem('activeVolume') || '',
+  )
   const [scanId, setScanId] = useState(localStorage.getItem('scanId') || '')
   const [error, setError] = useState('')
   const refreshHealth = async () => {
@@ -48,10 +86,48 @@ export default function App() {
     }
   }
   useEffect(() => { refreshHealth() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    api('/api/files/roots')
+      .then(value => {
+        const nextRoots = value.roots || []
+        setRoots(nextRoots)
+        setActiveVolume(current => {
+          if (current && nextRoots.some(item => item.path === current)) return current
+          return nextRoots[0]?.path || current
+        })
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(() => { localStorage.setItem('activePage', page) }, [page])
+  useEffect(() => {
+    const key = `pageScroll:${page}`
+    const restore = requestAnimationFrame(() => {
+      window.scrollTo(0, Number(localStorage.getItem(key) || 0))
+    })
+    const save = () => localStorage.setItem(key, String(window.scrollY))
+    window.addEventListener('scroll', save, { passive: true })
+    return () => {
+      cancelAnimationFrame(restore)
+      save()
+      window.removeEventListener('scroll', save)
+    }
+  }, [page])
+  useEffect(() => {
+    if (activeVolume) localStorage.setItem('activeVolume', activeVolume)
+  }, [activeVolume])
   useEffect(() => { if (scanId) localStorage.setItem('scanId', scanId) }, [scanId])
   const context = useMemo(
-    () => ({ scanId, setScanId, setError, health, refreshHealth }),
-    [scanId, health],
+    () => ({
+      scanId,
+      setScanId,
+      setError,
+      health,
+      refreshHealth,
+      roots,
+      activeVolume,
+      setActiveVolume,
+    }),
+    [scanId, health, roots, activeVolume],
   )
   const pages = {
     dashboard: <Dashboard {...context} setPage={setPage} />,
@@ -74,9 +150,23 @@ export default function App() {
       <Safety health={health} />
     </aside>
     <main>
-      <header><div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Admin storage workbench · React + Python</p></div><div className="scan-chip">Scan: {scanId || '—'}</div></header>
+      <header>
+        <div><h1>{NAV.find(n => n[0] === page)?.[2]}</h1><p>Admin storage workbench · React + Python</p></div>
+        <div className="header-context">
+          <label className="active-volume-select">
+            <span>Active volume</span>
+            <select value={activeVolume} onChange={e => setActiveVolume(e.target.value)}>
+              <option value="">—</option>
+              {roots.map(item => <option key={item.path} value={item.path}>
+                {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+              </option>)}
+            </select>
+          </label>
+          <div className="scan-chip">Scan: {scanId || '—'}</div>
+        </div>
+      </header>
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
-      {pages[page]}
+      <PageErrorBoundary page={page}>{pages[page]}</PageErrorBoundary>
     </main>
   </div>
 }
@@ -219,7 +309,7 @@ function People({ scanId, setError }) {
     {selected && <Card title={selected.name}><div className="tabs">{['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}</div><div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div></Card>}</div>
 }
 
-function Vault({ health, setError }) {
+function Vault({ health, setError, roots, activeVolume, setActiveVolume }) {
   const [status, setStatus] = useState(null)
   const [identity, setIdentity] = useState('')
   const [secret, setSecret] = useState('')
@@ -227,10 +317,16 @@ function Vault({ health, setError }) {
   const [recoveryShown, setRecoveryShown] = useState('')
   const [unlocked, setUnlocked] = useState(false)
   const [items, setItems] = useState([])
-  const [source, setSource] = useState('')
-  const [destination, setDestination] = useState('')
+  const [source, setSource] = useState(() => localStorage.getItem('vaultSourcePath') || activeVolume || '')
+  const [destination, setDestination] = useState(() => localStorage.getItem('vaultDestinationPath') || activeVolume || '')
   const refreshStatus = () => api('/api/vault/status').then(setStatus).catch(e => setError(e.message))
   useEffect(refreshStatus, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (source) localStorage.setItem('vaultSourcePath', source)
+  }, [source])
+  useEffect(() => {
+    if (destination) localStorage.setItem('vaultDestinationPath', destination)
+  }, [destination])
   async function loadItems() { try { const x = await api('/api/vault/items'); setItems(x.items || []); setUnlocked(true) } catch { setUnlocked(false) } }
   async function create() { try { const x = await api('/api/vault/create', { method:'POST', body:JSON.stringify({ identity, secret }) }); setRecoveryShown(x.recovery_key); refreshStatus() } catch (e) { setError(e.message) } }
   async function unlock() { try { await api('/api/vault/unlock', { method:'POST', body:JSON.stringify({ identity, secret }) }); await loadItems() } catch (e) { setError(e.message) } }
@@ -241,11 +337,57 @@ function Vault({ health, setError }) {
   return <div className="stack"><Card title="Encrypted Vault"><div className="hero"><div className="mascot">🔐</div><div><h2>Argon2id + AES-256-GCM</h2><p>Chunked encryption для больших файлов. Unlock key остаётся в RAM backend; браузер получает HttpOnly SameSite cookie.</p><p className="path">{status?.root}</p></div></div></Card>
     {!status?.initialized && <Card title="Создать Vault"><input placeholder="Идентификатор (например СНИЛС)" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Дополнительная секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button disabled={!health?.safety?.vault_writes} onClick={create}>Создать</button>{recoveryShown && <div className="recovery"><b>Recovery key — сохрани отдельно:</b><code>{recoveryShown}</code></div>}</Card>}
     {status?.initialized && !unlocked && <div className="grid two"><Card title="Unlock"><input placeholder="Идентификатор" value={identity} onChange={e=>setIdentity(e.target.value)} /><input type="password" placeholder="Секретная фраза" value={secret} onChange={e=>setSecret(e.target.value)} /><button className="primary" onClick={unlock}>Unlock</button></Card><Card title="Recovery"><input placeholder="Recovery key" value={recovery} onChange={e=>setRecovery(e.target.value)} /><button onClick={unlockRecovery}>Unlock recovery</button></Card></div>}
-    {unlocked && <Card title="Vault objects"><div className="actions"><button onClick={lock}>Lock now</button><input placeholder="Путь файла для импорта" value={source} onChange={e=>setSource(e.target.value)} /><button disabled={!health?.safety?.vault_writes || !source} onClick={importItem}>Encrypt + import</button></div><label>Export destination</label><input value={destination} onChange={e=>setDestination(e.target.value)} /><div className="vault-list">{items.map(i => <div key={i.id}><span>🔒 {i.name}</span><span>{fmtBytes(i.size)}</span><button disabled={!health?.safety?.vault_writes || !destination} onClick={()=>exportItem(i)}>Export</button></div>)}</div></Card>}
+    {unlocked && <Card title="Vault objects">
+      <div className="vault-path-grid">
+        <div>
+          <label>Import source volume</label>
+          <select
+            value={roots.some(item => source.startsWith(item.path)) ? roots.find(item => source.startsWith(item.path))?.path || '' : ''}
+            onChange={e => {
+              const value = e.target.value
+              if (!value) return
+              setActiveVolume(value)
+              setSource(value)
+            }}
+          >
+            <option value="">Выбрать том…</option>
+            {roots.map(item => <option key={item.path} value={item.path}>
+              {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+            </option>)}
+          </select>
+          <label>Файл / путь для шифрования</label>
+          <input placeholder="Путь файла для импорта" value={source} onChange={e=>setSource(e.target.value)} />
+        </div>
+        <div>
+          <label>Export destination volume</label>
+          <select
+            value={roots.some(item => destination.startsWith(item.path)) ? roots.find(item => destination.startsWith(item.path))?.path || '' : ''}
+            onChange={e => {
+              const value = e.target.value
+              if (!value) return
+              setActiveVolume(value)
+              setDestination(value)
+            }}
+          >
+            <option value="">Выбрать том…</option>
+            {roots.map(item => <option key={item.path} value={item.path}>
+              {item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}
+            </option>)}
+          </select>
+          <label>Export destination</label>
+          <input value={destination} onChange={e=>setDestination(e.target.value)} />
+        </div>
+      </div>
+      <div className="actions">
+        <button onClick={lock}>Lock now</button>
+        <button disabled={!health?.safety?.vault_writes || !source} onClick={importItem}>Encrypt + import</button>
+      </div>
+      <div className="vault-list">{items.map(i => <div key={i.id}><span>🔒 {i.name}</span><span>{fmtBytes(i.size)}</span><button disabled={!health?.safety?.vault_writes || !destination} onClick={()=>exportItem(i)}>Export</button></div>)}</div>
+    </Card>}
   </div>
 }
 
-function StorageLab({ scanId, setError }) {
+function StorageLab({ scanId, setError, activeVolume, setActiveVolume }) {
   const [data, setData] = useState(null)
   const [path, setPath] = useState('')
   const [roots, setRoots] = useState([])
@@ -357,7 +499,15 @@ function StorageLab({ scanId, setError }) {
 
     <Card title="NTFS Extents + read benchmark">
       <label>Локальный том</label>
-      <select value="" onChange={e => e.target.value && setPath(e.target.value)}>
+      <select
+        value={roots.some(item => path.startsWith(item.path)) ? roots.find(item => path.startsWith(item.path))?.path || activeVolume : activeVolume}
+        onChange={e => {
+          const value = e.target.value
+          if (!value) return
+          setActiveVolume(value)
+          setPath(value)
+        }}
+      >
         <option value="">Выбрать том / корень…</option>
         {roots.map(item => <option key={item.path} value={item.path}>{item.path} · {item.filesystem || 'FS'} · {item.free != null ? fmtBytes(item.free) + ' free' : '—'}</option>)}
       </select>

@@ -1,4 +1,4 @@
-# DiskShell HDD 0.6.0
+# DiskShell HDD 0.6.1
 
 [Русская версия](README.ru.md) · English
 
@@ -129,3 +129,14 @@ System / Boot / Application disks remain backend-protected. Typed confirmation f
 - forced Managed Interleave writing/rebalancing remains disabled.
 
 **Administrator CLI:** launch the Windows backend from an elevated PowerShell for physical-disk/raw/NTFS features. On Linux use a root shell when elevated access is required, while Windows Storage/NTFS-specific operations remain unavailable. See [DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+## UI/workspace fixes 0.6.1
+
+- fixed the Commander blank-screen runtime reference;
+- active navigation page survives refresh;
+- per-page vertical scroll position is restored;
+- a persistent global **Active volume** selector is visible across the workspace;
+- Vault now has explicit Import-source and Export-destination volume selectors;
+- Commander remembers LEFT/RIGHT paths, active pane, Smart folders, and archive format;
+- a page-level React error boundary shows runtime errors instead of a blank dark page;
+- CI runs ESLint `no-undef` before the Vite build.

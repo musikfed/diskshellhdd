@@ -551,17 +551,6 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
     } catch (e) { setError(e.message) }
   }
 
-  async function toggleFileWrites() {
-    try {
-      const next = await api('/api/files/write-access', {
-        method: 'POST',
-        body: JSON.stringify({ enabled: !fileWrite?.allowed }),
-      })
-      setFileWrite(next)
-      if (refreshHealth) await refreshHealth()
-    } catch (e) { setError(e.message) }
-  }
-
   async function stop() {
     try {
       const value = await api(`/api/scans/${jobId}/cancel`, { method: 'POST', body: '{}' })
@@ -1454,17 +1443,23 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
 
   const [left, setLeft] = useState(() => makePane('Left'))
   const [right, setRight] = useState(() => makePane('Right'))
-  const [activeSide, setActiveSide] = useState('left')
+  const [activeSide, setActiveSide] = useState(
+    () => localStorage.getItem('commanderActiveSide') === 'right' ? 'right' : 'left',
+  )
   const [roots, setRoots] = useState([])
   const [connections, setConnections] = useState([])
   const [jobId, setJobId] = useState(localStorage.getItem('commanderJobId') || '')
   const [job, setJob] = useState(null)
-  const [smartTransfer, setSmartTransfer] = useState(false)
+  const [smartTransfer, setSmartTransfer] = useState(
+    () => localStorage.getItem('commanderSmartFolders') === '1',
+  )
   const [smartHint, setSmartHint] = useState(null)
   const [preview, setPreview] = useState(null)
   const [archive, setArchive] = useState(null)
   const [remoteOrigin, setRemoteOrigin] = useState('')
-  const [archiveFormat, setArchiveFormat] = useState('zip')
+  const [archiveFormat, setArchiveFormat] = useState(
+    () => localStorage.getItem('commanderArchiveFormat') || 'zip',
+  )
   const [fileWrite, setFileWrite] = useState(null)
 
   const terminal = useMemo(() => new Set(['completed', 'failed', 'cancelled']), [])
@@ -1482,6 +1477,20 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
       setConnections(connectionData.connections || [])
       setFileWrite(writeData)
     } catch (e) { setError(e.message) }
+  }
+
+
+  async function toggleFileWrites() {
+    try {
+      const next = await api('/api/files/write-access', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: !fileWrite?.allowed }),
+      })
+      setFileWrite(next)
+      if (refreshHealth) await refreshHealth()
+    } catch (e) {
+      setError(e.message)
+    }
   }
 
   async function load(side, path, forcedPane = null) {
@@ -1516,6 +1525,16 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
     load('left', left.path)
     load('right', right.path)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    localStorage.setItem('commanderActiveSide', activeSide)
+  }, [activeSide])
+  useEffect(() => {
+    localStorage.setItem('commanderSmartFolders', smartTransfer ? '1' : '0')
+  }, [smartTransfer])
+  useEffect(() => {
+    localStorage.setItem('commanderArchiveFormat', archiveFormat)
+  }, [archiveFormat])
 
   useEffect(() => {
     if (!jobId) return undefined

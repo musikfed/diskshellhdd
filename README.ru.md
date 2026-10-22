@@ -1,4 +1,4 @@
-# DiskShell HDD 0.5.2
+# DiskShell HDD 0.5.3
 
 Русский · [English](README.md)
 
@@ -64,7 +64,7 @@ uv run python -m backend.app
 
 Подробнее: [архитектура](docs/ARCHITECTURE.ru.md) · [развёртывание](docs/DEPLOYMENT.ru.md) · [безопасность](docs/SAFETY.ru.md).
 
-## Storage wizard 0.5.2
+## Storage wizard 0.5.3
 
 DiskShell различает три операции:
 
@@ -83,3 +83,19 @@ Cluster sizes показываются по выбранной FS. Backend до�
 - Quick Index: indeterminate, потому что заранее неизвестно число файлов.
 - Defender/ClamAV: indeterminate, потому что движок не отдаёт надёжный общий объём.
 - Initialize/partition/format: activity indicator без фиктивного процента; принудительный Stop во время изменения partition table намеренно не предлагается.
+
+## Adaptive Macro Interleave 0.5.3
+
+Storage Lab больше не моделирует одинаковые фиксированные куски. Вместо этого используется bounded macro-interleave:
+
+- Video/Audio получают длинные sequential bands;
+- Photo/RAW — средние bands;
+- Documents/Code/Design — более короткие interactive bands;
+- Archive/Backup/ISO — самые длинные cold bands;
+- Cache/Temporary ограничены, чтобы churn не захватывал layout.
+
+Размер bands адаптируется к измеренным sequential MiB/s и seek latency. Цель — чтобы стоимость seek составляла не более заданной доли времени обработки полосы.
+
+Большой файл делится на примерно равные extents без маленького хвоста. Маленький файл не режется. Несколько маленьких файлов одного класса могут заполнять одну macro-band.
+
+Симулятор показывает tiny/oversized split extents, max extents per file и итоговый quality. Реальное NTFS extent relocation всё ещё выключено и остаётся отдельным experimental этапом.

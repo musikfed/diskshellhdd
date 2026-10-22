@@ -548,6 +548,23 @@ function Vault({ setError, roots, activeVolume, setActiveVolume, refreshHealth }
           </small>
         </div>
       </div>
+      <label className={`disk-write-toggle ${status?.writes_allowed ? 'enabled' : 'locked'}`}>
+        <input
+          type="checkbox"
+          checked={Boolean(status?.writes_allowed)}
+          disabled={Boolean(status?.writes_global_override)}
+          onChange={toggleVaultWrites}
+        />
+        <span className="toggle-track"><i /></span>
+        <span className="toggle-copy">
+          <b>{status?.writes_allowed ? 'VAULT WRITE ENABLED' : 'VAULT WRITE LOCKED'}</b>
+          <small>
+            {status?.writes_global_override
+              ? 'DS_ALLOW_VAULT_WRITES=1 · environment override'
+              : 'RAM toggle · сбросится после restart backend'}
+          </small>
+        </span>
+      </label>
     </Card>
 
     {!status?.initialized && <Card title="Создать Vault">
@@ -587,23 +604,6 @@ function Vault({ setError, roots, activeVolume, setActiveVolume, refreshHealth }
         Место хранения задано через <code>DS_VAULT_ROOT</code>; выбор в UI заблокирован до изменения .env и перезапуска backend.
       </p>}
 
-      <label className={`disk-write-toggle ${status?.writes_allowed ? 'enabled' : 'locked'}`}>
-        <input
-          type="checkbox"
-          checked={Boolean(status?.writes_allowed)}
-          disabled={Boolean(status?.writes_global_override)}
-          onChange={toggleVaultWrites}
-        />
-        <span className="toggle-track"><i /></span>
-        <span className="toggle-copy">
-          <b>{status?.writes_allowed ? 'VAULT WRITE ENABLED' : 'VAULT WRITE LOCKED'}</b>
-          <small>
-            {status?.writes_global_override
-              ? 'DS_ALLOW_VAULT_WRITES=1 · environment override'
-              : 'RAM toggle · сбросится после restart backend'}
-          </small>
-        </span>
-      </label>
 
       <label>Идентификатор</label>
       <input

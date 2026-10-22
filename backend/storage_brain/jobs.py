@@ -38,6 +38,9 @@ def start_plan_job(plan_id: int, confirmation: str, verify: str = "size") -> dic
         "copied": 0,
         "moved": 0,
         "total": 0,
+        "total_bytes": 0,
+        "processed_bytes": 0,
+        "progress_percent": None,
         "current": None,
         "started_at": None,
         "finished_at": None,
@@ -72,7 +75,17 @@ def _run(
     def progress(data: dict[str, Any]) -> None:
         with _lock:
             job = _jobs[job_id]
-            for key in ("completed", "failed", "copied", "moved", "total", "current"):
+            for key in (
+                "completed",
+                "failed",
+                "copied",
+                "moved",
+                "total",
+                "total_bytes",
+                "processed_bytes",
+                "progress_percent",
+                "current",
+            ):
                 if key in data:
                     job[key] = data[key]
 

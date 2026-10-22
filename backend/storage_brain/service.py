@@ -9,6 +9,7 @@ from pathlib import Path
 
 from backend.config import settings
 from backend.core.database import connect, init_database
+from backend.scanner.classifier import classify_path
 from backend.storage_lab.service import CLASS_LANES, LANE_POLICIES
 
 
@@ -425,3 +426,58 @@ def get_latest_plan(scan_id: int | None = None) -> dict:
     if row is None:
         raise KeyError("latest")
     return get_plan(int(row["id"]))
+
+
+def suggest_managed_destination(
+    source_name: str,
+    source_path: str,
+    size: int,
+    modified_ns: int | None,
+    storage_root: Path,
+) -> dict:
+    ensure_defaults()
+    root = storage_root.expanduser().resolve()
+    source_name = str(source_name).strip()
+    if not source_name:
+        raise ValueError("source_name is required")
+
+    category = classify_path(Path(source_name))
+    fake_row = {
+        "category": category,
+        "extension": Path(source_name).suffix.casefold(),
+        "size": int(size or 0),
+        "modified_ns": int(modified_ns) if modified_ns else None,
+        "parent_path": str(Path(source_path).parent),
+    }
+
+    with connect() as connection:
+        rules = _rules(connection)
+        classes = {
+            row["key"]: dict(row)
+            for row in connection.execute(
+                "SELECT * FROM storage_classes WHERE enabled = 1"
+            ).fetchall()
+        }
+
+    target_class, reason = choose_storage_class(fake_row, rules)
+    class_row = classes.get(target_class, classes["other"])
+    folder = _target_folder(root, class_row, fake_row)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    source = Path(source_name)
+    target = folder / source.name
+    counter = 2
+    while target.exists():
+        target = folder / f"{source.stem} [{counter}]{source.suffix}"
+        counter += 1
+
+    lane, target_band_bytes = _layout_hint(category)
+    return {
+        "category": category,
+        "target_class": target_class,
+        "reason": reason,
+        "destination": str(target),
+        "layout_lane": lane,
+        "target_band_bytes": target_band_bytes,
+        "storage_root": str(root),
+    }

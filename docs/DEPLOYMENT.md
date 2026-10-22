@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.6.9
+# Deploying DiskShell 0.7.0
 
-DiskShell 0.6.9 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
+DiskShell 0.7.0 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -251,8 +251,19 @@ This retry/resume state lives in the running backend job; restarting the backend
 
 ## Commander: disconnects, partial targets, and name conflicts
 
-From 0.6.9, an existing destination never triggers an implicit overwrite. The UI requires an explicit **Continue partial / Replace / Keep both / Skip / Cancel** decision. Keep both allocates the next free indexed name such as `file (1).ext` or `Folder (1)`.
+From 0.7.0, an existing destination never triggers an implicit overwrite. The UI requires an explicit **Continue partial / Replace / Keep both / Skip / Cancel** decision. Keep both allocates the next free indexed name such as `file (1).ext` or `Folder (1)`.
 
 After reconnect attempts are exhausted, or after Stop, the incomplete target is retained. **Continue partial** starts a new job using the actual target size as the resume offset. Missing sources are recorded as missing/skipped and do not terminate the rest of the batch. Replace rechecks source existence before deleting the existing destination, and Move removes a source only after verified completion.
 
 Local partial files remain available across backend restarts. Remote continuation after restart requires reconnecting the remote profile because credentials remain RAM-only.
+
+
+## 0.7.0 — endpoint hot-unplug and waiting transfers
+
+Commander now treats Copy/Move as a backend-owned transfer manager workflow. A local volume disconnect or prolonged SSH/SFTP outage transitions the job from `running` to `waiting_endpoint` rather than immediately failing.
+
+Local Windows volumes are identity-bound using the Volume GUID with a serial fallback, so a different device that reuses the same drive letter is not silently accepted. Once the original endpoint returns, DiskShell re-reads the partial target size and resumes automatically. The same resilience wraps mkdir, size verification, rename, and Move source cleanup.
+
+Drive inventory is periodically refreshed; an offline root is shown as OFFLINE and temporary Windows storage-enumeration failures no longer need to crash the Disks page.
+
+This state remains in the running backend process. Backend-restart auto-recovery is intentionally deferred to a persistent transfer journal; SSH credentials remain RAM-only.

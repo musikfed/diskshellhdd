@@ -100,6 +100,19 @@ export default function App() {
   }, [])
   useEffect(() => { localStorage.setItem('activePage', page) }, [page])
   useEffect(() => {
+    const key = `pageScroll:${page}`
+    const restore = requestAnimationFrame(() => {
+      window.scrollTo(0, Number(localStorage.getItem(key) || 0))
+    })
+    const save = () => localStorage.setItem(key, String(window.scrollY))
+    window.addEventListener('scroll', save, { passive: true })
+    return () => {
+      cancelAnimationFrame(restore)
+      save()
+      window.removeEventListener('scroll', save)
+    }
+  }, [page])
+  useEffect(() => {
     if (activeVolume) localStorage.setItem('activeVolume', activeVolume)
   }, [activeVolume])
   useEffect(() => { if (scanId) localStorage.setItem('scanId', scanId) }, [scanId])

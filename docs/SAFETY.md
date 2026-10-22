@@ -40,3 +40,9 @@ Cancellation is cooperative: scanners stop between filesystem operations, cross-
 ## Why destructive storage operations do not expose Stop
 
 Interrupting a workflow between Clear-Disk, Initialize-Disk, New-Partition, and Format-Volume can leave storage in an intermediate state. DiskShell therefore shows activity, serializes write actions, and does not invent a percentage or offer an unsafe forced Stop.
+
+## Remote Commander
+
+SFTP/FTP credentials are not persisted. Remote mutations obey `DS_ALLOW_FILE_WRITES`. Local F8 uses the Recycle Bin; remote Delete has no platform trash and requires explicit confirmation. Cross-endpoint moves remove the source only after a completed size-verified copy.
+
+Remote preview is bounded by a temporary-cache size limit to prevent accidental multi-gigabyte downloads from an F3 preview action.

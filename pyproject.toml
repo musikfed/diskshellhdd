@@ -1,6 +1,6 @@
 [project]
 name = "diskshellhdd"
-version = "0.5.5"
+version = "0.5.6"
 description = "Local-first storage management, analysis and safe disk tooling for Windows"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -9,6 +9,10 @@ dependencies = [
   "flask>=3.1,<4",
   "flask-cors>=6,<7",
   "humanize>=4.14,<5",
+  "paramiko>=3.5,<5",
+  "pymupdf>=1.26,<2",
+  "py7zr>=1,<2",
+  "pycdlib>=1.14,<2",
   "pillow>=11,<13",
   "psutil>=7,<8",
   "python-dotenv>=1.1,<2",
@@ -18,11 +22,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-preview = [
-  "pymupdf>=1.26,<2",
-  "py7zr>=1,<2",
-  "pycdlib>=1.14,<2",
-]
 vision = [
   "numpy>=2,<3",
   "onnxruntime>=1.23,<2",

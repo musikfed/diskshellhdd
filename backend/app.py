@@ -4,6 +4,7 @@ from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
 from backend.api.analytics import bp as analytics_bp
+from backend.api.commander import bp as commander_bp
 from backend.api.content import bp as content_bp
 from backend.api.diagnostics import bp as diagnostics_bp
 from backend.api.disks import bp as disks_bp
@@ -20,7 +21,7 @@ from backend.core.database import init_database
 from backend.storage_brain.service import ensure_defaults
 
 
-VERSION = "0.5.5"
+VERSION = "0.5.6"
 
 
 def create_app() -> Flask:
@@ -32,6 +33,7 @@ def create_app() -> Flask:
         diagnostics_bp,
         scans_bp,
         analytics_bp,
+        commander_bp,
         storage_bp,
         files_bp,
         people_bp,

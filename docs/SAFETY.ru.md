@@ -56,3 +56,9 @@ Stop является cooperative:
 ## Почему у destructive storage operations нет кнопки Stop
 
 Прерывать процесс между Clear-Disk / Initialize-Disk / New-Partition / Format-Volume опасно: диск может остаться в промежуточном состоянии. Поэтому DiskShell показывает activity indicator, блокирует повторные write-команды и не выдаёт фиктивный процент или небезопасный Stop.
+
+## Remote Commander
+
+SFTP/FTP connection credentials не сохраняются на диск. Remote write-команды подчиняются `DS_ALLOW_FILE_WRITES`. Local F8 использует Recycle Bin; remote F8/Delete не имеет системной корзины и требует явного подтверждения. При cross-endpoint move источник удаляется только после завершённой копии и проверки размера.
+
+Remote preview ограничен размером temporary cache, чтобы случайный F3 не скачивал многогигабайтный образ целиком.

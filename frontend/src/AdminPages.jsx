@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, fmtBytes, joinPath } from './api.js'
+import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
 
 function Panel({ title, children, className = '' }) {
   return <section className={`card admin-panel ${className}`}><h3>{title}</h3>{children}</section>
@@ -1103,82 +1103,261 @@ export function SecurityAdmin({ setError }) {
 }
 
 
-function AdminFilePane({ title, side, state, setState, load, choose, busy }) {
-  return <Panel title={title} className="pane">
+function remoteJoin(root, name) {
+  return `${String(root || '/').replace(/\/$/, '')}/${name}`.replace(/\/+/g, '/')
+}
+
+function paneTarget(pane, item = null) {
+  const path = item?.path || pane.path
+  if (pane.sourceType === 'local') return { kind: 'local', path }
+  return { kind: 'remote', connection_id: pane.connectionId, path }
+}
+
+function isArchiveName(name = '') {
+  return /\.(zip|7z|rar|tar|tgz|gz|bz2|xz|cab|iso|wim)$/i.test(name)
+}
+
+function archiveExtension(format) {
+  return ({ zip: '.zip', tar: '.tar', 'tar.gz': '.tar.gz', '7z': '.7z' })[format] || '.zip'
+}
+
+function CommanderPane({
+  title,
+  side,
+  state,
+  setState,
+  roots,
+  connections,
+  active,
+  busy,
+  load,
+  choose,
+  connectRemote,
+  disconnectRemote,
+}) {
+  const remote = state.sourceType !== 'local'
+  const profile = connections.find(item => item.id === state.connectionId)
+  const form = state.remoteForm || {}
+
+  function patchForm(values) {
+    setState(current => ({
+      ...current,
+      remoteForm: { ...(current.remoteForm || {}), ...values },
+    }))
+  }
+
+  return <Panel title={title} className={`pane commander-pane ${active ? 'active-pane' : ''}`}>
+    <div className="pane-source-bar">
+      <select
+        value={state.sourceType}
+        disabled={busy}
+        onChange={e => {
+          const sourceType = e.target.value
+          setState(current => ({
+            ...current,
+            sourceType,
+            connectionId: sourceType === 'local' ? '' : current.connectionId,
+            data: null,
+            selected: null,
+            path: sourceType === 'local' ? (roots[0]?.path || current.path || 'C:\\') : '/',
+            remoteForm: {
+              ...(current.remoteForm || {}),
+              protocol: sourceType === 'local' ? 'sftp' : sourceType,
+              port: sourceType === 'sftp' ? '22' : '21',
+            },
+          }))
+        }}
+      >
+        <option value="local">Local</option>
+        <option value="sftp">SFTP / SSH</option>
+        <option value="ftp">FTP</option>
+        <option value="ftps">FTPS</option>
+      </select>
+
+      {!remote && <select
+        className="drive-select"
+        value={roots.some(item => item.path === state.path) ? state.path : ''}
+        disabled={busy}
+        onChange={e => e.target.value && load(side, e.target.value, { ...state, path: e.target.value })}
+      >
+        <option value="">Drives…</option>
+        {roots.map(root => <option key={root.path} value={root.path}>
+          {root.path} · {root.filesystem || 'FS'} · {root.free != null ? fmtBytes(root.free) + ' free' : '—'}
+        </option>)}
+      </select>}
+
+      {remote && profile && <div className="remote-session-chip">
+        <b>{profile.protocol.toUpperCase()}</b>
+        <span>{profile.username}@{profile.host}:{profile.port}</span>
+        <button disabled={busy} onClick={() => disconnectRemote(side, state)}>Disconnect</button>
+      </div>}
+    </div>
+
+    {remote && !profile && <div className="remote-connect-box">
+      <input placeholder="host / IP" value={form.host || ''} onChange={e => patchForm({ host: e.target.value })} />
+      <input className="port-input" placeholder="port" value={form.port || (state.sourceType === 'sftp' ? '22' : '21')} onChange={e => patchForm({ port: e.target.value })} />
+      <input placeholder="username" value={form.username || ''} onChange={e => patchForm({ username: e.target.value })} />
+      <input type="password" placeholder="password · RAM only" value={form.password || ''} onChange={e => patchForm({ password: e.target.value })} />
+      {state.sourceType === 'sftp' && <input placeholder="private key path (optional)" value={form.privateKeyPath || ''} onChange={e => patchForm({ privateKeyPath: e.target.value })} />}
+      <input placeholder="remote root" value={form.root || '/'} onChange={e => patchForm({ root: e.target.value })} />
+      {state.sourceType === 'sftp' && <label className="mini-check"><input type="checkbox" checked={Boolean(form.acceptUnknownHost)} onChange={e => patchForm({ acceptUnknownHost: e.target.checked })} /> accept unknown host key</label>}
+      {(state.sourceType === 'ftp' || state.sourceType === 'ftps') && <label className="mini-check"><input type="checkbox" checked={form.passive !== false} onChange={e => patchForm({ passive: e.target.checked })} /> passive mode</label>}
+      <button className="primary" disabled={busy || !form.host || !form.username} onClick={() => connectRemote(side, state)}>Connect</button>
+    </div>}
+
     <div className="file-toolbar">
       <button disabled={!state.data?.parent || busy} onClick={() => state.data?.parent && load(side, state.data.parent)}>↑</button>
-      <input value={state.path} onChange={e => setState(x => ({ ...x, path: e.target.value }))} />
-      <button disabled={busy} onClick={() => load(side, state.path)}>Open</button>
+      <input value={state.path} onChange={e => setState(current => ({ ...current, path: e.target.value }))} />
+      <button disabled={busy || (remote && !state.connectionId)} onClick={() => load(side, state.path)}>Open</button>
+      <button disabled={busy || (remote && !state.connectionId)} onClick={() => load(side, state.path)}>↻</button>
     </div>
-    <div className="file-list">
-      {state.data?.items?.slice(0, 1500).map(item => <button
+
+    <div className="commander-columns"><span>Name</span><span>Size</span><span>Modified</span></div>
+    <div className="file-list commander-list">
+      {(state.data?.items || []).slice(0, 4000).map(item => <button
         key={item.path}
         className={state.selected?.path === item.path ? 'selected' : ''}
         onClick={() => choose(side, item)}
         onDoubleClick={() => item.is_dir && !busy && load(side, item.path)}
       >
-        <span>{item.is_dir ? '📁' : '📄'} {item.name}</span>
-        <span>{item.is_dir ? '' : fmtBytes(item.size)}</span>
+        <span title={item.path}>{item.is_dir ? '📁' : '📄'} {item.name}</span>
+        <span>{item.is_dir ? '<DIR>' : fmtBytes(item.size)}</span>
+        <span>{item.modified_ns ? new Date(item.modified_ns / 1e6).toLocaleString() : ''}</span>
       </button>)}
+    </div>
+    <div className="pane-status">
+      <span>{state.data?.items?.length || 0} items</span>
+      <span>{state.selected ? `${state.selected.name} · ${state.selected.is_dir ? '<DIR>' : fmtBytes(state.selected.size)}` : 'nothing selected'}</span>
     </div>
   </Panel>
 }
 
-export function FilesAdmin({ health, setError }) {
-  const [left, setLeft] = useState({
-    path: localStorage.getItem('fileLeftPath') || 'F:\\',
-    data: null,
-    selected: null,
-  })
-  const [right, setRight] = useState({
-    path: localStorage.getItem('fileRightPath') || 'F:\\',
-    data: null,
-    selected: null,
-  })
-  const [jobId, setJobId] = useState(localStorage.getItem('fileJobId') || '')
-  const [job, setJob] = useState(null)
+function CommanderInspector({ preview, archive, remoteOrigin }) {
+  if (!preview && !archive) return <Panel title="F3 View / Archive browser"><p className="muted">Выбери файл и нажми F3 View. Архивы и ISO откроются здесь же — отдельная вкладка больше не нужна.</p></Panel>
+  const visual = preview && ['image', 'pdf'].includes(preview.provider)
+  const previewPath = preview?.preview_path || preview?.path
+  return <Panel title={archive ? `Archive · ${archive.path}` : `Preview · ${preview?.name || ''}`}>
+    {remoteOrigin && <p className="muted">Remote source: {remoteOrigin}. Для просмотра создан ограниченный temporary cache на backend.</p>}
+    {preview && <div className="preview-grid">
+      {visual && previewPath && <img className="preview-image" src={thumbnailUrl(previewPath, 800)} alt={preview.name} />}
+      <div>
+        <div className="metrics">
+          <Metric label="Provider" value={preview.provider} />
+          <Metric label="Size" value={fmtBytes(preview.size)} />
+          <Metric label="Type" value={preview.mime} />
+          <Metric label="Geometry" value={preview.width ? `${preview.width}×${preview.height}` : preview.pages ? `${preview.pages} pages` : '—'} />
+        </div>
+        {preview.text && <pre className="text-preview">{preview.text.slice(0, 50000)}</pre>}
+        {preview.ffprobe && <pre className="text-preview">{JSON.stringify(preview.ffprobe, null, 2).slice(0, 30000)}</pre>}
+      </div>
+    </div>}
+    {archive && <div className="archive-list">
+      {(archive.entries || []).slice(0, 4000).map((item, index) => <div key={`${item.name}-${index}`}>
+        <span>{item.is_dir ? '📁' : '📄'} {item.name}</span>
+        <span>{item.size == null ? '' : fmtBytes(item.size)}</span>
+      </div>)}
+    </div>}
+  </Panel>
+}
 
-  async function load(side, path) {
+export function FilesAdmin({ health, setError }) {
+  const makePane = (side) => ({
+    sourceType: 'local',
+    path: localStorage.getItem(`file${side}Path`) || 'F:\\',
+    data: null,
+    selected: null,
+    connectionId: '',
+    remoteForm: {
+      protocol: 'sftp',
+      host: '',
+      port: '22',
+      username: '',
+      password: '',
+      privateKeyPath: '',
+      root: '/',
+      acceptUnknownHost: false,
+      passive: true,
+    },
+  })
+
+  const [left, setLeft] = useState(() => makePane('Left'))
+  const [right, setRight] = useState(() => makePane('Right'))
+  const [activeSide, setActiveSide] = useState('left')
+  const [roots, setRoots] = useState([])
+  const [connections, setConnections] = useState([])
+  const [jobId, setJobId] = useState(localStorage.getItem('commanderJobId') || '')
+  const [job, setJob] = useState(null)
+  const [smartTransfer, setSmartTransfer] = useState(false)
+  const [smartHint, setSmartHint] = useState(null)
+  const [preview, setPreview] = useState(null)
+  const [archive, setArchive] = useState(null)
+  const [remoteOrigin, setRemoteOrigin] = useState('')
+  const [archiveFormat, setArchiveFormat] = useState('zip')
+
+  const terminal = useMemo(() => new Set(['completed', 'failed', 'cancelled']), [])
+  const activePane = activeSide === 'left' ? left : right
+  const passivePane = activeSide === 'left' ? right : left
+
+  async function refreshMeta() {
     try {
-      const data = await api(`/api/files?path=${encodeURIComponent(path)}`)
-      const next = { path: data.path, data, selected: null }
+      const [rootData, connectionData] = await Promise.all([
+        api('/api/files/roots'),
+        api('/api/commander/connections'),
+      ])
+      setRoots(rootData.roots || [])
+      setConnections(connectionData.connections || [])
+    } catch (e) { setError(e.message) }
+  }
+
+  async function load(side, path, forcedPane = null) {
+    const pane = forcedPane || (side === 'left' ? left : right)
+    try {
+      const data = pane.sourceType === 'local'
+        ? await api(`/api/files?path=${encodeURIComponent(path)}`)
+        : await api(`/api/commander/remote?connection_id=${encodeURIComponent(pane.connectionId)}&path=${encodeURIComponent(path)}`)
+      const next = { ...pane, path: data.path, data, selected: null }
       if (side === 'left') {
         setLeft(next)
-        localStorage.setItem('fileLeftPath', data.path)
+        if (next.sourceType === 'local') localStorage.setItem('fileLeftPath', data.path)
       } else {
         setRight(next)
-        localStorage.setItem('fileRightPath', data.path)
+        if (next.sourceType === 'local') localStorage.setItem('fileRightPath', data.path)
       }
     } catch (e) { setError(e.message) }
   }
 
   function choose(side, item) {
-    if (side === 'left') setLeft(x => ({ ...x, selected: item }))
-    else setRight(x => ({ ...x, selected: item }))
+    setActiveSide(side)
+    setPreview(null)
+    setArchive(null)
+    setRemoteOrigin('')
+    if (side === 'left') setLeft(current => ({ ...current, selected: item }))
+    else setRight(current => ({ ...current, selected: item }))
   }
 
   useEffect(() => {
+    refreshMeta()
     load('left', left.path)
     load('right', right.path)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!jobId) return undefined
-    localStorage.setItem('fileJobId', jobId)
+    localStorage.setItem('commanderJobId', jobId)
     let stopped = false
     const poll = async () => {
       try {
-        const next = await api(`/api/files/jobs/${jobId}`)
+        const next = await api(`/api/commander/jobs/${jobId}`)
         if (stopped) return
         setJob(next)
-        if (['completed', 'failed', 'cancelled'].includes(next.status)) {
-          localStorage.removeItem('fileJobId')
+        if (terminal.has(next.status)) {
+          localStorage.removeItem('commanderJobId')
           setJobId('')
           await Promise.all([load('left', left.path), load('right', right.path)])
         }
       } catch (e) {
         if (!stopped) {
-          localStorage.removeItem('fileJobId')
+          localStorage.removeItem('commanderJobId')
           setJobId('')
           setError(e.message)
         }
@@ -1189,15 +1368,86 @@ export function FilesAdmin({ health, setError }) {
     return () => { stopped = true; clearInterval(timer) }
   }, [jobId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function transfer(operation, sourcePane, destinationPane) {
-    if (!sourcePane.selected) return
-    const destination = joinPath(destinationPane.path, sourcePane.selected.name)
+  async function connectRemote(side, pane) {
+    const form = pane.remoteForm || {}
     try {
-      const value = await api('/api/files/jobs', {
+      const profile = await api('/api/commander/connections', {
+        method: 'POST',
+        body: JSON.stringify({
+          protocol: pane.sourceType,
+          host: form.host,
+          port: form.port || undefined,
+          username: form.username,
+          password: form.password || '',
+          private_key_path: form.privateKeyPath || '',
+          accept_unknown_host: Boolean(form.acceptUnknownHost),
+          passive: form.passive !== false,
+          root: form.root || '/',
+        }),
+      })
+      setConnections(current => [...current.filter(item => item.id !== profile.id), profile])
+      const next = {
+        ...pane,
+        connectionId: profile.id,
+        path: profile.root || '/',
+        data: null,
+        selected: null,
+        remoteForm: { ...form, password: '' },
+      }
+      if (side === 'left') setLeft(next)
+      else setRight(next)
+      await load(side, next.path, next)
+    } catch (e) { setError(e.message) }
+  }
+
+  async function disconnectRemote(side, pane) {
+    try {
+      if (pane.connectionId) await api(`/api/commander/connections/${pane.connectionId}`, { method: 'DELETE' })
+      setConnections(current => current.filter(item => item.id !== pane.connectionId))
+      const next = { ...pane, connectionId: '', data: null, selected: null, path: '/' }
+      if (side === 'left') setLeft(next)
+      else setRight(next)
+    } catch (e) { setError(e.message) }
+  }
+
+  async function transfer(operation) {
+    const sourcePane = activePane
+    const destinationPane = passivePane
+    const selected = sourcePane.selected
+    if (!selected || !health?.safety?.file_writes) return
+
+    try {
+      let destinationPath = destinationPane.sourceType === 'local'
+        ? joinPath(destinationPane.path, selected.name)
+        : remoteJoin(destinationPane.path, selected.name)
+      let hint = null
+
+      if (smartTransfer && !selected.is_dir && destinationPane.sourceType === 'local') {
+        hint = await api('/api/files/smart-destination', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: selected.name,
+            source_path: selected.path,
+            size: selected.size,
+            modified_ns: selected.modified_ns,
+            storage_root: destinationPane.path,
+          }),
+        })
+        destinationPath = hint.destination
+        setSmartHint(hint)
+      } else {
+        setSmartHint(null)
+      }
+
+      const destination = destinationPane.sourceType === 'local'
+        ? { kind: 'local', path: destinationPath }
+        : { kind: 'remote', connection_id: destinationPane.connectionId, path: destinationPath }
+
+      const value = await api('/api/commander/jobs', {
         method: 'POST',
         body: JSON.stringify({
           operation,
-          source: sourcePane.selected.path,
+          source: paneTarget(sourcePane, selected),
           destination,
         }),
       })
@@ -1207,58 +1457,306 @@ export function FilesAdmin({ health, setError }) {
   }
 
   async function stop() {
+    if (!jobId) return
     try {
-      setJob(await api(`/api/files/jobs/${jobId}/cancel`, { method: 'POST', body: '{}' }))
+      setJob(await api(`/api/commander/jobs/${jobId}/cancel`, { method: 'POST', body: '{}' }))
     } catch (e) { setError(e.message) }
   }
 
-  async function trash(side, sideName) {
-    if (!side.selected) return
+  async function makeDirectory() {
+    const name = window.prompt('New directory name')
+    if (!name) return
+    const pane = activePane
     try {
-      await api('/api/files/trash', {
+      if (pane.sourceType === 'local') {
+        await api('/api/files/mkdir', {
+          method: 'POST',
+          body: JSON.stringify({ path: joinPath(pane.path, name) }),
+        })
+      } else {
+        await api('/api/commander/remote/mkdir', {
+          method: 'POST',
+          body: JSON.stringify({
+            connection_id: pane.connectionId,
+            path: remoteJoin(pane.path, name),
+          }),
+        })
+      }
+      await load(activeSide, pane.path)
+    } catch (e) { setError(e.message) }
+  }
+
+  async function renameSelected() {
+    const pane = activePane
+    if (!pane.selected) return
+    const name = window.prompt('Rename to', pane.selected.name)
+    if (!name || name === pane.selected.name) return
+    try {
+      const destination = pane.sourceType === 'local'
+        ? joinPath(pane.path, name)
+        : remoteJoin(pane.path, name)
+      if (pane.sourceType === 'local') {
+        await api('/api/files/rename', {
+          method: 'POST',
+          body: JSON.stringify({ source: pane.selected.path, destination }),
+        })
+      } else {
+        await api('/api/commander/remote/rename', {
+          method: 'POST',
+          body: JSON.stringify({
+            connection_id: pane.connectionId,
+            source: pane.selected.path,
+            destination,
+          }),
+        })
+      }
+      await load(activeSide, pane.path)
+    } catch (e) { setError(e.message) }
+  }
+
+  async function deleteSelected() {
+    const pane = activePane
+    if (!pane.selected) return
+    const remote = pane.sourceType !== 'local'
+    const message = remote
+      ? `DELETE remote ${pane.selected.path}? Remote delete has no Recycle Bin.`
+      : `Move ${pane.selected.path} to Recycle Bin?`
+    if (!window.confirm(message)) return
+    try {
+      if (!remote) {
+        await api('/api/files/trash', {
+          method: 'POST',
+          body: JSON.stringify({ path: pane.selected.path }),
+        })
+      } else {
+        await api('/api/commander/remote/delete', {
+          method: 'POST',
+          body: JSON.stringify({
+            connection_id: pane.connectionId,
+            path: pane.selected.path,
+            recursive: Boolean(pane.selected.is_dir),
+          }),
+        })
+      }
+      await load(activeSide, pane.path)
+    } catch (e) { setError(e.message) }
+  }
+
+  async function inspectSelected() {
+    const pane = activePane
+    const selected = pane.selected
+    if (!selected || selected.is_dir) return
+    try {
+      let localPath = selected.path
+      let origin = ''
+      if (pane.sourceType !== 'local') {
+        const cached = await api('/api/commander/remote/cache', {
+          method: 'POST',
+          body: JSON.stringify({
+            connection_id: pane.connectionId,
+            path: selected.path,
+            max_bytes: 256 * 1024 ** 2,
+          }),
+        })
+        localPath = cached.local_path
+        origin = selected.path
+      }
+
+      const value = await api(`/api/content/preview?path=${encodeURIComponent(localPath)}`)
+      setPreview({ ...value, preview_path: localPath })
+      setRemoteOrigin(origin)
+      if (isArchiveName(selected.name)) {
+        try {
+          setArchive(await api(`/api/content/archive?path=${encodeURIComponent(localPath)}`))
+        } catch {
+          setArchive(null)
+        }
+      } else {
+        setArchive(null)
+      }
+    } catch (e) { setError(e.message) }
+  }
+
+  async function createArchive() {
+    const pane = activePane
+    const selected = pane.selected
+    if (!selected || pane.sourceType !== 'local') {
+      setError('Archive creation currently requires a local selected source')
+      return
+    }
+    const extension = archiveExtension(archiveFormat)
+    const base = selected.name.replace(/\.[^.]+$/, '')
+    const name = window.prompt('Archive file name', `${base}${extension}`)
+    if (!name) return
+    try {
+      await api('/api/content/archive/create', {
         method: 'POST',
-        body: JSON.stringify({ path: side.selected.path }),
+        body: JSON.stringify({
+          sources: [selected.path],
+          destination: joinPath(pane.path, name),
+          format: archiveFormat,
+        }),
       })
-      await load(sideName, side.path)
+      await load(activeSide, pane.path)
     } catch (e) { setError(e.message) }
   }
 
-  const busy = Boolean(jobId && job && !['completed', 'failed', 'cancelled'].includes(job.status))
-  return <div className="stack admin-workbench">
-    <div className="file-manager">
-      <AdminFilePane title="LEFT" side="left" state={left} setState={setLeft} load={load} choose={choose} busy={busy} />
-      <div className="file-actions">
-        <button disabled={!health?.safety?.file_writes || !left.selected || busy} onClick={() => transfer('copy', left, right)}>Copy →</button>
-        <button disabled={!health?.safety?.file_writes || !left.selected || busy} onClick={() => transfer('move', left, right)}>Move →</button>
-        <button disabled={!health?.safety?.file_writes || !right.selected || busy} onClick={() => transfer('copy', right, left)}>← Copy</button>
-        <button disabled={!health?.safety?.file_writes || !right.selected || busy} onClick={() => transfer('move', right, left)}>← Move</button>
-        <button className="stop-button" disabled={!busy || !jobId} onClick={stop}>■ Stop</button>
-        <button className="trash" disabled={!health?.safety?.file_writes || busy || (!left.selected && !right.selected)} onClick={() => left.selected ? trash(left, 'left') : trash(right, 'right')}>Trash</button>
+  async function extractArchive() {
+    const pane = activePane
+    const selected = pane.selected
+    const destinationPane = passivePane
+    if (!selected || pane.sourceType !== 'local' || destinationPane.sourceType !== 'local') {
+      setError('Extract currently requires a local archive and a local destination pane')
+      return
+    }
+    try {
+      await api('/api/content/archive/extract', {
+        method: 'POST',
+        body: JSON.stringify({
+          path: selected.path,
+          destination: destinationPane.path,
+        }),
+      })
+      await load(activeSide === 'left' ? 'right' : 'left', destinationPane.path)
+    } catch (e) { setError(e.message) }
+  }
+
+  const busy = Boolean(jobId && job && !terminal.has(job.status))
+
+  useEffect(() => {
+    const handler = event => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return
+      if (event.key === 'Tab') {
+        event.preventDefault()
+        setActiveSide(side => side === 'left' ? 'right' : 'left')
+      } else if (event.key === 'F2') {
+        event.preventDefault(); renameSelected()
+      } else if (event.key === 'F3') {
+        event.preventDefault(); inspectSelected()
+      } else if (event.key === 'F5') {
+        event.preventDefault(); transfer('copy')
+      } else if (event.key === 'F6') {
+        event.preventDefault(); transfer('move')
+      } else if (event.key === 'F7') {
+        event.preventDefault(); makeDirectory()
+      } else if (event.key === 'F8') {
+        event.preventDefault(); deleteSelected()
+      } else if (event.key === 'F9') {
+        event.preventDefault(); createArchive()
+      } else if (event.key === 'Escape' && busy) {
+        event.preventDefault(); stop()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }) // current active pane is intentionally captured each render
+
+  return <div className="stack admin-workbench commander-workbench">
+    <div className="commander-topline">
+      <div>
+        <b>DiskShell Commander</b>
+        <span>Local · SFTP/SSH · FTP/FTPS · Preview · Archives</span>
       </div>
-      <AdminFilePane title="RIGHT" side="right" state={right} setState={setRight} load={load} choose={choose} busy={busy} />
+      <label className="smart-transfer-toggle">
+        <input
+          type="checkbox"
+          checked={smartTransfer}
+          onChange={e => setSmartTransfer(e.target.checked)}
+        />
+        <span><b>Smart placement</b><small>OFF = direct path · ON = classify into HDD storage classes</small></span>
+      </label>
+      <select value={archiveFormat} onChange={e => setArchiveFormat(e.target.value)}>
+        <option value="zip">ZIP</option>
+        <option value="7z">7Z</option>
+        <option value="tar">TAR</option>
+        <option value="tar.gz">TAR.GZ</option>
+      </select>
     </div>
 
-    <Panel title="File operation job">
-      {!job && <p className="muted">Copy/Move запускаются в background job. Для больших операций доступен Stop.</p>}
+    <div className="file-manager commander-manager">
+      <div onMouseDown={() => setActiveSide('left')}>
+        <CommanderPane
+          title="LEFT"
+          side="left"
+          state={left}
+          setState={setLeft}
+          roots={roots}
+          connections={connections}
+          active={activeSide === 'left'}
+          busy={busy}
+          load={load}
+          choose={choose}
+          connectRemote={connectRemote}
+          disconnectRemote={disconnectRemote}
+        />
+      </div>
+
+      <div className="file-actions commander-actions">
+        <button disabled={!activePane.selected || busy} onClick={inspectSelected}>F3 View</button>
+        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={() => transfer('copy')}>
+          {activeSide === 'left' ? 'F5 Copy →' : '← F5 Copy'}
+        </button>
+        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={() => transfer('move')}>
+          {activeSide === 'left' ? 'F6 Move →' : '← F6 Move'}
+        </button>
+        <button disabled={!health?.safety?.file_writes || busy} onClick={makeDirectory}>F7 MkDir</button>
+        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={renameSelected}>F2 Rename</button>
+        <button className="trash" disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={deleteSelected}>F8 Trash/Delete</button>
+        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={createArchive}>F9 Archive</button>
+        <button disabled={!health?.safety?.file_writes || !activePane.selected || busy} onClick={extractArchive}>Extract → other</button>
+        <button className="stop-button" disabled={!busy || !jobId} onClick={stop}>■ Stop / Esc</button>
+      </div>
+
+      <div onMouseDown={() => setActiveSide('right')}>
+        <CommanderPane
+          title="RIGHT"
+          side="right"
+          state={right}
+          setState={setRight}
+          roots={roots}
+          connections={connections}
+          active={activeSide === 'right'}
+          busy={busy}
+          load={load}
+          choose={choose}
+          connectRemote={connectRemote}
+          disconnectRemote={disconnectRemote}
+        />
+      </div>
+    </div>
+
+    {smartTransfer && <Panel title="Smart transfer policy">
+      <p><b>Direct transfer remains available.</b> Smart mode changes only the destination path for a file going into a local managed-storage root. The byte transfer is still the same verified Commander job.</p>
+      {smartHint && <div className="metrics">
+        <Metric label="Class" value={smartHint.target_class} />
+        <Metric label="Category" value={smartHint.category} />
+        <Metric label="Lane" value={smartHint.layout_lane} />
+        <Metric label="Target band" value={fmtBytes(smartHint.target_band_bytes)} />
+      </div>}
+      {smartHint && <p className="path">{smartHint.destination}</p>}
+      <p className="muted">Smart fragmentation / extent-layout verification remains read-only/experimental until Storage Lab can compare actual NTFS extents against this lane/band policy.</p>
+    </Panel>}
+
+    <Panel title="Commander transfer job">
+      {!job && <p className="muted">F5/F6 use one background job for local, SFTP and FTP endpoints. Stop cleans the incomplete target and preserves the source.</p>}
       {job && <>
         <div className="metrics">
           <Metric label="Operation" value={job.operation} />
           <Metric label="Status" value={job.status} />
-          <Metric label="Files" value={job.files} />
-          <Metric label="Copied" value={fmtBytes(job.bytes)} />
+          <Metric label="Files" value={`${job.files || 0}/${job.total_files || 0}`} />
+          <Metric label="Transferred" value={fmtBytes(job.bytes || 0)} />
         </div>
         <JobProgress
           percent={job.progress_percent}
           running={busy}
-          label={job.total_bytes == null
-            ? 'Сначала считаю размер выбранного файла/каталога'
-            : `${fmtBytes(job.bytes || 0)} / ${fmtBytes(job.total_bytes)} · ${job.files || 0}/${job.total_files || 0} файлов`}
+          label={`${fmtBytes(job.bytes || 0)} / ${fmtBytes(job.total_bytes || 0)}`}
         />
         <p className="path">{job.current_path}</p>
         {job.error && <p className="warning">{job.error}</p>}
-        {job.status === 'cancelled' && <p className="muted">Операция остановлена; временный/новый target очищен. Исходник сохранён.</p>}
       </>}
-      {!health?.safety?.file_writes && <small>DS_ALLOW_FILE_WRITES=0 — Copy/Move/Trash заблокированы.</small>}
+      {!health?.safety?.file_writes && <small>DS_ALLOW_FILE_WRITES=0 — write operations are locked.</small>}
     </Panel>
+
+    <CommanderInspector preview={preview} archive={archive} remoteOrigin={remoteOrigin} />
   </div>
 }

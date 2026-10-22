@@ -479,3 +479,167 @@ textarea{
   .health-scale{grid-template-columns:1fr}
   .surface-grid{grid-template-columns:repeat(16,minmax(8px,1fr))}
 }
+
+
+/* 0.5.6 Commander consolidation */
+.commander-workbench{max-width:none}
+.commander-topline{
+  display:grid;
+  grid-template-columns:minmax(220px,1fr) minmax(320px,auto) 130px;
+  gap:14px;
+  align-items:center;
+  padding:12px 14px;
+  border:1px solid rgba(100,137,192,.22);
+  border-radius:15px;
+  background:rgba(8,18,32,.7);
+}
+.commander-topline>div{display:grid;gap:3px}
+.commander-topline>div span{color:#8fa6c8;font-size:12px}
+.smart-transfer-toggle{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:8px 10px;
+  border:1px solid rgba(119,167,255,.2);
+  border-radius:12px;
+  background:rgba(13,27,47,.7);
+}
+.smart-transfer-toggle>span{display:grid;gap:2px}
+.smart-transfer-toggle small{color:#8ea4c6}
+.commander-manager{
+  grid-template-columns:minmax(420px,1fr) 150px minmax(420px,1fr);
+  gap:12px;
+  align-items:stretch;
+}
+.commander-pane{
+  min-height:650px;
+  border-color:rgba(90,127,181,.24);
+}
+.commander-pane.active-pane{
+  border-color:rgba(119,167,255,.72);
+  box-shadow:0 0 0 1px rgba(119,167,255,.24),0 16px 50px rgba(0,0,0,.2);
+}
+.pane-source-bar{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  margin-bottom:8px;
+}
+.pane-source-bar select{margin:0;min-width:130px}
+.drive-select{flex:1}
+.remote-session-chip{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  min-width:0;
+  flex:1;
+  padding:7px 9px;
+  border-radius:10px;
+  background:rgba(35,92,74,.22);
+  border:1px solid rgba(82,216,156,.24);
+}
+.remote-session-chip span{
+  min-width:0;
+  flex:1;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:#add7ca;
+  font-size:12px;
+}
+.remote-session-chip button{padding:5px 8px}
+.remote-connect-box{
+  display:grid;
+  grid-template-columns:1.2fr 80px 1fr 1fr;
+  gap:7px;
+  margin:8px 0 10px;
+  padding:10px;
+  border:1px solid rgba(100,137,192,.2);
+  border-radius:12px;
+  background:rgba(6,15,27,.6);
+}
+.remote-connect-box input{margin:0}
+.remote-connect-box .mini-check{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  color:#9eb3d2;
+  font-size:12px;
+}
+.remote-connect-box .mini-check input{width:auto}
+.commander-columns,
+.commander-list button{
+  display:grid!important;
+  grid-template-columns:minmax(220px,1fr) 100px 160px;
+  gap:10px;
+  align-items:center;
+}
+.commander-columns{
+  padding:7px 8px;
+  margin-top:9px;
+  color:#738cac;
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  border-bottom:1px solid rgba(100,137,192,.18);
+}
+.commander-list{
+  max-height:535px;
+  min-height:430px;
+}
+.commander-list button span:first-child{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.commander-list button span:nth-child(2),
+.commander-list button span:nth-child(3){
+  color:#9cb0cd;
+  text-align:right;
+  font-size:12px;
+}
+.pane-status{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  margin-top:8px;
+  padding:7px 9px;
+  border-radius:9px;
+  background:rgba(7,16,29,.55);
+  color:#8fa6c8;
+  font-size:12px;
+}
+.pane-status span:last-child{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.commander-actions{
+  justify-content:flex-start;
+  padding-top:92px;
+}
+.commander-actions button{
+  width:100%;
+  padding:10px 8px;
+  font-size:12px;
+}
+.commander-actions .trash{margin-top:0}
+.archive-list>div{
+  grid-template-columns:minmax(0,1fr) 110px;
+}
+@media(max-width:1450px){
+  .commander-manager{grid-template-columns:1fr}
+  .commander-actions{
+    flex-direction:row;
+    flex-wrap:wrap;
+    padding-top:0;
+  }
+  .commander-actions button{width:auto}
+  .commander-topline{grid-template-columns:1fr}
+}
+@media(max-width:850px){
+  .remote-connect-box{grid-template-columns:1fr 90px}
+  .commander-columns,.commander-list button{grid-template-columns:minmax(150px,1fr) 90px}
+  .commander-columns span:nth-child(3),.commander-list button span:nth-child(3){display:none}
+}

@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 from backend.commander.jobs import (
     cancel_commander_job,
     get_commander_job,
+    start_commander_batch_job,
     start_commander_job,
 )
 from backend.files.service import FileWriteBlocked
@@ -147,16 +148,25 @@ def remote_delete():
 def start_job():
     payload = request.get_json(silent=True) or {}
     try:
-        return (
-            jsonify(
-                start_commander_job(
-                    operation=str(payload["operation"]),
-                    source=dict(payload["source"]),
-                    destination=dict(payload["destination"]),
-                )
-            ),
-            202,
-        )
+        if "transfers" in payload:
+            transfers = [
+                {
+                    "source": dict(item["source"]),
+                    "destination": dict(item["destination"]),
+                }
+                for item in payload["transfers"]
+            ]
+            job = start_commander_batch_job(
+                operation=str(payload["operation"]),
+                transfers=transfers,
+            )
+        else:
+            job = start_commander_job(
+                operation=str(payload["operation"]),
+                source=dict(payload["source"]),
+                destination=dict(payload["destination"]),
+            )
+        return jsonify(job), 202
     except FileWriteBlocked as exc:
         return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
     except (

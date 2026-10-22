@@ -327,7 +327,7 @@ export function DisksAdmin({ setError }) {
             <Metric label="Health" value={d.health_status} />
           </div>
           <StatusPill tone={d.protected ? 'warning' : write.allowed ? 'danger' : 'good'}>
-            {d.protected ? 'PROTECTED' : write.allowed ? 'WRITE UNLOCKED' : 'WRITE LOCKED'}
+            {d.protected ? 'PROTECTED' : write.allowed ? 'WRITE ENABLED' : 'WRITE LOCKED'}
           </StatusPill>
         </div>
 

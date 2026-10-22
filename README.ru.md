@@ -99,3 +99,17 @@ Storage Lab больше не моделирует одинаковые фикс
 Большой файл делится на примерно равные extents без маленького хвоста. Маленький файл не режется. Несколько маленьких файлов одного класса могут заполнять одну macro-band.
 
 Симулятор показывает tiny/oversized split extents, max extents per file и итоговый quality. Реальное NTFS extent relocation всё ещё выключено и остаётся отдельным experimental этапом.
+
+## RAW disk workflow 0.5.4
+
+Для RAW-диска DiskShell больше не предлагает основной shortcut «GPT + первый том». Безопасный путь разделён на стадии:
+
+1. временно разблокировать выбранный physical disk;
+2. Initialize GPT;
+3. перечитать topology;
+4. создать раздел/том из unallocated space;
+5. отформатировать выбранной FS/cluster policy.
+
+UI показывает stepper и фиксированный activity-status поверх окна. Внутри Initialize-Disk / New-Partition / Format-Volume честного процента Windows не предоставляет, поэтому DiskShell показывает этап, а не выдуманный процент.
+
+Destructive Windows Storage operations требуют запуска backend от имени Administrator. Страница Disks теперь показывает это явно и блокирует write-кнопки, если процесс не elevated.

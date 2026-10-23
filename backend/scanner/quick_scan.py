@@ -10,6 +10,12 @@ from typing import Any
 
 from backend.core.database import connect, init_database
 from backend.scanner.classifier import classify_path
+from backend.search.catalog import (
+    begin_refresh,
+    finish_refresh,
+    mark_refresh_status,
+    upsert_rows,
+)
 
 
 FILE_BATCH_SIZE = 2000
@@ -54,6 +60,7 @@ def scan(
             (str(root),),
         )
         scan_id = int(cursor.lastrowid)
+        begin_refresh(connection, root, scan_id)
         connection.commit()
 
         file_batch: list[tuple[Any, ...]] = []
@@ -202,6 +209,7 @@ def scan(
             """,
             (files_count, directories_count, bytes_total, errors_count, scan_id),
         )
+        finish_refresh(connection, root, scan_id, files_count)
         connection.commit()
         report(str(root))
 
@@ -224,10 +232,21 @@ def scan(
                 bytes_total,
                 errors_count,
             )
+            mark_refresh_status(connection, root, scan_id, "cancelled")
+            connection.commit()
         raise
     except (sqlite3.Error, OSError, ValueError):
         if scan_id is not None:
-            _mark_scan_failed(connection, scan_id, files_count, directories_count, bytes_total, errors_count)
+            _mark_scan_failed(
+                connection,
+                scan_id,
+                files_count,
+                directories_count,
+                bytes_total,
+                errors_count,
+            )
+            mark_refresh_status(connection, root, scan_id, "failed")
+            connection.commit()
         raise
     finally:
         connection.close()
@@ -243,6 +262,7 @@ def _write_file_batch(connection: sqlite3.Connection, rows: list[tuple[Any, ...]
         """,
         rows,
     )
+    upsert_rows(connection, rows)
 
 
 def _mark_scan_cancelled(

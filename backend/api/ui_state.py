@@ -23,6 +23,7 @@ def save_workspace_state():
                 active_page=payload.get("active_page"),
                 active_volume=payload.get("active_volume"),
                 scan_id=payload.get("scan_id"),
+                view_state=payload.get("view_state"),
             )
         )
     except ValueError as exc:

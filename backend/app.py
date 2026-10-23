@@ -15,6 +15,7 @@ from backend.api.scans import bp as scans_bp
 from backend.api.security import bp as security_bp
 from backend.api.storage import bp as storage_bp
 from backend.api.storage_lab import bp as storage_lab_bp
+from backend.api.streamcopy import bp as streamcopy_bp
 from backend.api.vault import bp as vault_bp
 from backend.config import settings
 from backend.core.database import init_database
@@ -23,7 +24,7 @@ from backend.storage_brain.service import ensure_defaults
 from backend.vault.service import vault_write_state
 
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 
 
 def create_app() -> Flask:
@@ -44,6 +45,7 @@ def create_app() -> Flask:
         content_bp,
         vault_bp,
         storage_lab_bp,
+        streamcopy_bp,
     ):
         app.register_blueprint(blueprint)
 

@@ -311,3 +311,8 @@ completed
 - local Commander pane автоматически перечитывается после возврата тома.
 
 Граница 0.7.0: сам backend-процесс должен оставаться живым. Persistent transfer journal для автоматического восстановления job после restart backend — отдельный следующий слой. Для remote после restart всё равно потребуется безопасно восстановить/rebind SSH profile, потому что пароль и private-key path не пишутся в SQLite/localStorage.
+
+
+## StreamCopy EXP 0.7.1
+
+Добавлена отдельная экспериментальная вкладка **StreamCopy · EXP** для local copy. Тип SOURCE/DESTINATION задаётся вручную и не меняется во время job; USB 3.x считается транспортом, а не media type. Для HDD→HDD используется один producer + один consumer с bounded RAM ring buffer. Drive cache можно указать отдельно как hint (например 32 MiB → 128 MiB). Обычный Commander не изменён. Подробности: [docs/STREAMCOPY.ru.md](docs/STREAMCOPY.ru.md).

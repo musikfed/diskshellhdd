@@ -224,3 +224,8 @@ A disconnected local volume or a prolonged SSH/SFTP outage moves the job into `w
 The same wait/retry policy surrounds directory creation, final size verification, native rename, and Move source cleanup. Drive inventory is refreshed continuously and offline roots are represented as OFFLINE instead of being treated as fatal UI errors.
 
 Scope: the backend process must remain alive. Persistent job recovery across a backend restart is a separate transfer-journal milestone; remote credentials/profiles remain RAM-only.
+
+
+## StreamCopy EXP 0.7.1
+
+A separate **StreamCopy · EXP** local-copy page now experiments with a manually locked media profile and a bounded producer/consumer pipeline. USB3 is treated as transport rather than media type; HDD→HDD stays an HDD sequential profile. Drive cache sizes can be supplied as hints. The regular Commander is unchanged. See [docs/STREAMCOPY.md](docs/STREAMCOPY.md).

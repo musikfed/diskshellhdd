@@ -34,7 +34,15 @@ function diskSegments(disk) {
   const size = Number(disk?.size || 0)
   if (!size) return []
   if (String(disk.partition_style).toUpperCase() === 'RAW') {
-    return [{ key: 'raw', kind: 'free', size, label: 'RAW / Unallocated' }]
+    return [{
+      key: 'raw',
+      kind: 'free',
+      size,
+      offset: 0,
+      end: size,
+      label: 'RAW / Unallocated',
+      partition: null,
+    }]
   }
 
   const partitions = [...(disk.partitions || [])]
@@ -50,19 +58,34 @@ function diskSegments(disk) {
         key: `free-${cursor}`,
         kind: 'free',
         size: offset - cursor,
+        offset: cursor,
+        end: offset,
         label: 'Unallocated',
+        partition: null,
       })
     }
+    const partitionSize = Number(partition.size || 0)
     result.push({
       key: `partition-${partition.partition_number}`,
       kind: 'partition',
-      size: Number(partition.size || 0),
+      size: partitionSize,
+      offset,
+      end: offset + partitionSize,
       label: `${partition.drive_letter || `#${partition.partition_number}`} · ${partition.filesystem || 'RAW volume'}`,
+      partition,
     })
-    cursor = Math.max(cursor, offset + Number(partition.size || 0))
+    cursor = Math.max(cursor, offset + partitionSize)
   }
   if (cursor < size) {
-    result.push({ key: `free-${cursor}`, kind: 'free', size: size - cursor, label: 'Unallocated' })
+    result.push({
+      key: `free-${cursor}`,
+      kind: 'free',
+      size: size - cursor,
+      offset: cursor,
+      end: size,
+      label: 'Unallocated',
+      partition: null,
+    })
   }
   return result
 }
@@ -78,7 +101,7 @@ function DiskLayoutBar({ disk }) {
           key={segment.key}
           className={`disk-segment ${segment.kind}`}
           style={{ flexBasis: `${percent}%` }}
-          title={`${segment.label} · ${fmtBytes(segment.size)} · ${(segment.size * 100 / total).toFixed(2)}%`}
+          title={`${segment.label}\nStart ${fmtBytes(segment.offset)}\nEnd ${fmtBytes(segment.end)}\nSize ${fmtBytes(segment.size)}\n${(segment.size * 100 / total).toFixed(2)}%`}
         >
           {percent >= 8 && <span>{segment.label}</span>}
         </div>
@@ -88,6 +111,22 @@ function DiskLayoutBar({ disk }) {
       {segments.filter(segment => segment.size / total >= 0.001).map(segment => <span key={`legend-${segment.key}`}>
         <i className={segment.kind} /> {segment.label}: <b>{fmtBytes(segment.size)}</b>
       </span>)}
+    </div>
+    <div className="disk-descriptor-map">
+      <div className="descriptor-head">
+        <span>Descriptor</span><span>Start</span><span>End</span><span>Size</span><span>Details</span>
+      </div>
+      {segments.map(segment => <div key={`descriptor-${segment.key}`} className={segment.kind}>
+        <b>{segment.partition ? `Partition #${segment.partition.partition_number}` : 'Free gap'}</b>
+        <span>{fmtBytes(segment.offset)}</span>
+        <span>{fmtBytes(segment.end)}</span>
+        <span>{fmtBytes(segment.size)}</span>
+        <span>
+          {segment.partition
+            ? `${segment.partition.drive_letter || '—'} · ${segment.partition.filesystem || 'unformatted'} · ${segment.partition.label || 'no label'}`
+            : 'Unallocated'}
+        </span>
+      </div>)}
     </div>
   </div>
 }
@@ -120,6 +159,9 @@ export function DisksAdmin({ setError }) {
   const [initializeConfirm, setInitializeConfirm] = useState('')
   const [letterDraft, setLetterDraft] = useState(null)
   const [letterConfirm, setLetterConfirm] = useState('')
+  const [boundaryDraft, setBoundaryDraft] = useState(null)
+  const [boundaryPlan, setBoundaryPlan] = useState(null)
+  const [boundaryConfirm, setBoundaryConfirm] = useState('')
   const [diskBusy, setDiskBusy] = useState(null)
   const [diskNotice, setDiskNotice] = useState('')
   const [inventoryError, setInventoryError] = useState('')
@@ -304,6 +346,65 @@ export function DisksAdmin({ setError }) {
     setLetterConfirm('')
   }
 
+  function prepareBoundary(disk, partition) {
+    setBoundaryDraft({
+      diskNumber: disk.number,
+      partitionNumber: partition.partition_number,
+      boundary: 'end',
+      targetGiB: (Number(partition.size || 0) / 1024 ** 3).toFixed(3),
+      startGiB: (Number(partition.offset || 0) / 1024 ** 3).toFixed(3),
+    })
+    setBoundaryPlan(null)
+    setBoundaryConfirm('')
+  }
+
+  async function checkBoundaryPlan() {
+    try {
+      const payload = boundaryDraft.boundary === 'end'
+        ? {
+            boundary: 'end',
+            target_size_bytes: gibToBytes(boundaryDraft.targetGiB),
+          }
+        : {
+            boundary: 'start',
+            target_start_offset: gibToBytes(boundaryDraft.startGiB),
+          }
+      const value = await api(
+        `/api/disks/${boundaryDraft.diskNumber}/partitions/${boundaryDraft.partitionNumber}/boundary-plan`,
+        { method: 'POST', body: JSON.stringify(payload) },
+      )
+      setBoundaryPlan(value)
+      setBoundaryConfirm('')
+    } catch (e) { setError(e.message) }
+  }
+
+  async function executeBoundaryResize() {
+    if (!boundaryPlan?.execution_supported || boundaryPlan.boundary !== 'end') return
+    setDiskBusy({
+      diskNumber: boundaryDraft.diskNumber,
+      phase: 'resize',
+      label: 'Windows изменяет конечную границу раздела. Не отключай питание или диск.',
+    })
+    try {
+      await api(
+        `/api/disks/${boundaryDraft.diskNumber}/partitions/${boundaryDraft.partitionNumber}/resize-end`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            target_size_bytes: boundaryPlan.target_size,
+            confirmation: boundaryConfirm,
+          }),
+        },
+      )
+      setBoundaryDraft(null)
+      setBoundaryPlan(null)
+      setBoundaryConfirm('')
+      setDiskNotice(`Disk ${boundaryDraft.diskNumber}: граница раздела обновлена.`)
+      await reload()
+    } catch (e) { setError(e.message) }
+    finally { setDiskBusy(null) }
+  }
+
   async function executeLetter() {
     const letter = letterDraft.driveLetter.trim().toUpperCase().replace(':', '')
     const expected = `ASSIGN ${letter}: DISK ${letterDraft.diskNumber} PARTITION ${letterDraft.partitionNumber}`
@@ -414,7 +515,10 @@ export function DisksAdmin({ setError }) {
             <span>{fmtBytes(p.size)}</span>
             <span>{p.size_remaining == null ? '—' : fmtBytes(p.size_remaining)}</span>
             <span>{p.label || '—'}</span>
-            <button disabled={d.protected || !write.allowed} onClick={() => prepareLetter(d, p)}>Буква</button>
+            <div className="partition-row-actions">
+              <button onClick={() => prepareBoundary(d, p)}>Граница</button>
+              <button disabled={d.protected || !write.allowed} onClick={() => prepareLetter(d, p)}>Буква</button>
+            </div>
           </div>)}
         </div>
       </Panel>
@@ -525,6 +629,81 @@ export function DisksAdmin({ setError }) {
         <label>Введи: <b>{partitionPlan.confirmation}</b></label>
         <input value={partitionConfirm} onChange={e => setPartitionConfirm(e.target.value)} />
         <button className="danger-button" disabled={Boolean(diskBusy) || !elevated || partitionConfirm !== partitionPlan.confirmation || !diskByNumber(partitionDraft.diskNumber)?.write_access?.allowed} onClick={executePartition}>Создать и форматировать том</button>
+      </>}
+    </Panel>}
+
+    {boundaryDraft && <Panel title={`Граница Disk ${boundaryDraft.diskNumber} · Partition ${boundaryDraft.partitionNumber}`}>
+      <p className="muted">
+        End boundary можно grow/shrink через Windows Resize-Partition. Start boundary DiskShell
+        только планирует: её перемещение означает реальную relocation/recreate/offline операцию.
+      </p>
+      <div className="grid two">
+        <div>
+          <label>Какая граница</label>
+          <select
+            value={boundaryDraft.boundary}
+            onChange={e => {
+              setBoundaryDraft(x => ({ ...x, boundary: e.target.value }))
+              setBoundaryPlan(null)
+              setBoundaryConfirm('')
+            }}
+          >
+            <option value="end">End · изменить размер раздела</option>
+            <option value="start">Start · relocation plan only</option>
+          </select>
+        </div>
+        <div>
+          {boundaryDraft.boundary === 'end'
+            ? <>
+                <label>Новый размер раздела, GiB</label>
+                <input value={boundaryDraft.targetGiB} onChange={e => {
+                  setBoundaryDraft(x => ({ ...x, targetGiB: e.target.value }))
+                  setBoundaryPlan(null)
+                }} />
+              </>
+            : <>
+                <label>Новый start offset от начала диска, GiB</label>
+                <input value={boundaryDraft.startGiB} onChange={e => {
+                  setBoundaryDraft(x => ({ ...x, startGiB: e.target.value }))
+                  setBoundaryPlan(null)
+                }} />
+              </>}
+        </div>
+      </div>
+      <div className="actions">
+        <button className="primary" onClick={checkBoundaryPlan}>Проверить границу</button>
+        <button onClick={() => { setBoundaryDraft(null); setBoundaryPlan(null) }}>Закрыть</button>
+      </div>
+      {boundaryPlan && <>
+        <div className="metrics">
+          <Metric label="Direction" value={boundaryPlan.direction || '—'} />
+          <Metric label="Current" value={fmtBytes(boundaryPlan.current_size)} />
+          <Metric label="Target" value={fmtBytes(boundaryPlan.target_size)} />
+          <Metric label="Free before / after" value={`${fmtBytes(boundaryPlan.free_before)} / ${fmtBytes(boundaryPlan.free_after)}`} />
+        </div>
+        <p className={boundaryPlan.execution_supported ? 'success' : 'warning'}>
+          {boundaryPlan.strategy} · {boundaryPlan.execution_supported ? 'execution available' : 'plan only'}
+        </p>
+        {(boundaryPlan.warnings || []).map(item => <p className="muted" key={item}>• {item}</p>)}
+        {boundaryPlan.supported_size_min != null && <p className="muted">
+          Windows supported size: {fmtBytes(boundaryPlan.supported_size_min)} – {fmtBytes(boundaryPlan.supported_size_max)}
+        </p>}
+        {boundaryPlan.execution_supported && <>
+          <label>Для resize введи: <b>{boundaryPlan.confirmation}</b></label>
+          <input value={boundaryConfirm} onChange={e => setBoundaryConfirm(e.target.value)} />
+          <button
+            className="danger-button"
+            disabled={
+              Boolean(diskBusy)
+              || !elevated
+              || boundaryConfirm !== boundaryPlan.confirmation
+              || !diskByNumber(boundaryDraft.diskNumber)?.write_access?.allowed
+            }
+            onClick={executeBoundaryResize}
+          >
+            Изменить end boundary
+          </button>
+        </>}
       </>}
     </Panel>}
 

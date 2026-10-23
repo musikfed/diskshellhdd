@@ -191,11 +191,23 @@ export function DisksAdmin({ setError }) {
       }
       if (capabilityResult.status === 'fulfilled') setCapabilities(capabilityResult.value)
     }
+    const onDiskEvent = event => {
+      if (stopped) return
+      const disks = event.detail?.disks
+      if (Array.isArray(disks)) {
+        setData(current => ({ ...(current || {}), disks }))
+        setInventoryError('')
+      } else {
+        refresh()
+      }
+    }
+    window.addEventListener('diskshell:disks-changed', onDiskEvent)
     refresh()
-    const timer = setInterval(refresh, 4000)
+    const timer = setInterval(refresh, 30000)
     return () => {
       stopped = true
       clearInterval(timer)
+      window.removeEventListener('diskshell:disks-changed', onDiskEvent)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -1,4 +1,4 @@
-# DiskShell HDD 0.7.5
+# DiskShell HDD 0.8.0
 
 [Русская версия](README.ru.md) · English
 
@@ -245,3 +245,20 @@ The current workbench page, active volume, and scan id are now persisted in back
 The browser/UI is treated as a control surface. Successful HTTP polling traffic (`/api/files/roots`, `/api/ui-state`, StreamCopy status, frontend `304`) is no longer printed to the backend console. The console is reserved for warnings and errors.
 
 Meaningful events are written to the rotating `data/logs/diskshell.log` journal: backend start, Commander/StreamCopy lifecycle, endpoint waiting/resume, completed-with-warnings, transfer failures, and HTTP 5xx/unhandled exceptions. Request bodies, cookies, passwords, and remote credentials are not logged. Rotation is 5 MiB with up to five backups. See [docs/LOGGING.md](docs/LOGGING.md).
+
+
+## 0.8.0 · Persistent Workspace Foundation
+
+- SSE-first event fabric for workspace, StreamCopy, Quick Index and storage inventory, with slow HTTP fallback.
+- Backend-owned view state persists scroll positions, Commander paths/active pane and key workbench preferences.
+- `↗ Open view` creates an explicit detached multi-monitor view without overwriting the global active page.
+- Quick Index also refreshes a current SQLite file catalog. **Fast Search** uses FTS5 when available or indexed fallback without rescanning the filesystem for each query.
+- Read-only **Relocation Planner** recommends leave/native relocation/junction/archive candidates.
+- Disk descriptor map exposes real offsets, partitions and unallocated gaps.
+- Partition Boundary Planner distinguishes end grow/shrink from start relocation. Protected system/boot/application disks are plan-only; supported end resize on non-protected disks requires the existing per-disk write gate, elevation, typed confirmation and fresh identity validation.
+- Photos/People adds local face-similarity search using existing SFace embeddings.
+- `npm run update:safe:win` creates a SQLite-consistent state snapshot, validates the new runtime and rolls back the runtime on failure.
+
+0.7.5 release guides: [RU](docs/RELEASE_0.7.5.ru.md) · [EN](docs/RELEASE_0.7.5.md) · [FR](docs/RELEASE_0.7.5.fr.md) · [DE](docs/RELEASE_0.7.5.de.md) · [ET](docs/RELEASE_0.7.5.et.md).
+
+Roadmap: [RU](docs/ROADMAP_0.8.ru.md) · [EN](docs/ROADMAP_0.8.md). Failure validation: [RU](docs/FAILURE_TESTING.ru.md) · [EN](docs/FAILURE_TESTING.md). Safe update: [RU](docs/UPDATE_SAFE.ru.md) · [EN](docs/UPDATE_SAFE.md).

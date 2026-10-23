@@ -285,3 +285,77 @@ def face_thumbnail(face_id: int, size: int = 256) -> bytes:
         output = io.BytesIO()
         crop.save(output, format="JPEG", quality=88)
         return output.getvalue()
+
+
+
+def similar_faces(
+    face_id: int,
+    *,
+    limit: int = 50,
+    min_score: float = 0.35,
+) -> list[dict]:
+    try:
+        import numpy as np  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise PeopleEngineUnavailable("Install the vision extra") from exc
+
+    bounded_limit = max(1, min(500, int(limit)))
+    threshold = max(-1.0, min(1.0, float(min_score)))
+    with connect() as connection:
+        source = connection.execute(
+            """
+            SELECT faces.id,faces.embedding,faces.embedding_dim,photos.scan_id
+            FROM faces
+            JOIN photos ON photos.id=faces.photo_id
+            WHERE faces.id=? AND faces.embedding IS NOT NULL
+            """,
+            (int(face_id),),
+        ).fetchone()
+        if source is None:
+            raise KeyError(face_id)
+        rows = connection.execute(
+            """
+            SELECT faces.id,faces.person_id,faces.embedding,faces.embedding_dim,
+                   photos.id AS photo_id,photos.path,persons.name AS person_name
+            FROM faces
+            JOIN photos ON photos.id=faces.photo_id
+            LEFT JOIN persons ON persons.id=faces.person_id
+            WHERE photos.scan_id=?
+              AND faces.id<>?
+              AND faces.embedding IS NOT NULL
+              AND faces.embedding_dim=?
+            """,
+            (
+                int(source["scan_id"]),
+                int(face_id),
+                int(source["embedding_dim"]),
+            ),
+        ).fetchall()
+
+    reference = np.frombuffer(
+        source["embedding"],
+        dtype=np.float32,
+        count=int(source["embedding_dim"]),
+    )
+    matches = []
+    for row in rows:
+        candidate = np.frombuffer(
+            row["embedding"],
+            dtype=np.float32,
+            count=int(row["embedding_dim"]),
+        )
+        score = float(np.dot(reference, candidate))
+        if score < threshold:
+            continue
+        matches.append(
+            {
+                "face_id": int(row["id"]),
+                "person_id": row["person_id"],
+                "person_name": row["person_name"],
+                "photo_id": int(row["photo_id"]),
+                "path": str(row["path"]),
+                "score": round(score, 6),
+            }
+        )
+    matches.sort(key=lambda item: item["score"], reverse=True)
+    return matches[:bounded_limit]

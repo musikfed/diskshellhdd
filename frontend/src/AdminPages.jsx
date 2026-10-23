@@ -138,6 +138,13 @@ function gibToBytes(value) {
   return Math.floor(number * 1024 ** 3)
 }
 
+function gibOffsetToBytes(value) {
+  if (value === '' || value === null || value === undefined) return null
+  const number = Number(value)
+  if (!Number.isFinite(number) || number < 0) throw new Error('Offset должен быть неотрицательным числом GiB')
+  return Math.floor(number * 1024 ** 3)
+}
+
 const TERMINAL_SCAN = new Set(['completed', 'failed', 'cancelled'])
 const TERMINAL_PLAN = new Set(['completed', 'partial', 'failed', 'blocked', 'cancelled'])
 
@@ -379,7 +386,7 @@ export function DisksAdmin({ setError }) {
           }
         : {
             boundary: 'start',
-            target_start_offset: gibToBytes(boundaryDraft.startGiB),
+            target_start_offset: gibOffsetToBytes(boundaryDraft.startGiB),
           }
       const value = await api(
         `/api/disks/${boundaryDraft.diskNumber}/partitions/${boundaryDraft.partitionNumber}/boundary-plan`,

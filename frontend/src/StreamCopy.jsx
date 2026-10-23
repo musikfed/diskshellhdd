@@ -203,6 +203,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     usbTopology,
     sourceCacheMiB,
     destinationCacheMiB,
+    verifyMode,
+    deleteSourceAfterVerify,
   ])
 
   useEffect(() => {
@@ -231,7 +233,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
             localStorage.removeItem('streamcopy:activeJobId')
           }
           setJob(null)
-          setError('StreamCopy job больше не существует в backend. Возможно, backend был перезапущен.')
+          setError('StreamCopy journal не нашёл задачу. Проверь data/diskshell.db и backend log.')
         } else if (!stopped) {
           setError(e.message)
         }

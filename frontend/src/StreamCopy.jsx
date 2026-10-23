@@ -25,11 +25,11 @@ const TOPOLOGY = [
 const TERMINAL = new Set(['completed', 'completed_with_warnings', 'failed', 'cancelled'])
 
 function saved(key, fallback) {
-  return localStorage.getItem(\`streamcopy:\${key}\`) || fallback
+  return localStorage.getItem(`streamcopy:${key}`) || fallback
 }
 
 function Band({ role, title, children, tone = '' }) {
-  return <section className={\`stream-band \${tone}\`}>
+  return <section className={`stream-band ${tone}`}>
     <div className="stream-band-title">
       <small>{role}</small>
       <b>{title}</b>
@@ -48,8 +48,8 @@ function SelectField({ label, value, onChange, options, disabled = false }) {
 }
 
 export default function StreamCopy({ health, setError, refreshHealth }) {
-  const [sourcePath, setSourcePath] = useState(() => saved('sourcePath', 'H:\\\\'))
-  const [destinationPath, setDestinationPath] = useState(() => saved('destinationPath', 'W:\\\\'))
+  const [sourcePath, setSourcePath] = useState(() => saved('sourcePath', 'H:\\'))
+  const [destinationPath, setDestinationPath] = useState(() => saved('destinationPath', 'W:\\'))
   const [sourceMedia, setSourceMedia] = useState(() => saved('sourceMedia', 'hdd'))
   const [destinationMedia, setDestinationMedia] = useState(() => saved('destinationMedia', 'hdd'))
   const [sourceTransport, setSourceTransport] = useState(() => saved('sourceTransport', 'usb3'))
@@ -91,7 +91,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       usbTopology,
       sourceCacheMiB,
       destinationCacheMiB,
-    })) localStorage.setItem(\`streamcopy:\${key}\`, String(value))
+    })) localStorage.setItem(`streamcopy:${key}`, String(value))
   }, [
     sourcePath,
     destinationPath,
@@ -122,7 +122,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     let stopped = false
     const poll = async () => {
       try {
-        const next = await api(\`/api/streamcopy/jobs/\${job.id}\`)
+        const next = await api(`/api/streamcopy/jobs/${job.id}`)
         if (!stopped) setJob(next)
       } catch (e) {
         if (!stopped) setError(e.message)
@@ -168,7 +168,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   async function cancel() {
     if (!job?.id) return
     try {
-      setJob(await api(\`/api/streamcopy/jobs/\${job.id}/cancel\`, {
+      setJob(await api(`/api/streamcopy/jobs/${job.id}/cancel`, {
         method: 'POST',
         body: '{}',
       }))
@@ -218,9 +218,9 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       <Band role="02 · STREAM" title="Профиль потока" tone="stream">
         <div className="stream-profile-strip">
           <div><small>Strategy</small><b>{profile?.strategy || '…'}</b></div>
-          <div><small>Chunk</small><b>{profile ? \`\${profile.chunk_mib} MiB\` : '…'}</b></div>
-          <div><small>Queue</small><b>{profile ? \`\${profile.queue_depth} buffers\` : '…'}</b></div>
-          <div><small>RAM ring</small><b>{profile ? \`\${profile.max_buffer_mib} MiB max\` : '…'}</b></div>
+          <div><small>Chunk</small><b>{profile ? `${profile.chunk_mib} MiB` : '…'}</b></div>
+          <div><small>Queue</small><b>{profile ? `${profile.queue_depth} buffers` : '…'}</b></div>
+          <div><small>RAM ring</small><b>{profile ? `${profile.max_buffer_mib} MiB max` : '…'}</b></div>
           <div className="grow"><small>Ordering</small><b>{profile?.ordering || '…'}</b></div>
         </div>
         <div className="streamcopy-row topology-row">
@@ -258,15 +258,15 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           </div>
           <div>
             <small>Average</small>
-            <b>{job ? \`\${Number(job.average_mib_s || 0).toFixed(1)} MiB/s\` : '—'}</b>
+            <b>{job ? `${Number(job.average_mib_s || 0).toFixed(1)} MiB/s` : '—'}</b>
           </div>
           <div>
             <small>Bytes</small>
-            <b>{job ? \`\${fmtBytes(job.bytes)} / \${fmtBytes(job.total_bytes)}\` : '—'}</b>
+            <b>{job ? `${fmtBytes(job.bytes)} / ${fmtBytes(job.total_bytes)}` : '—'}</b>
           </div>
           <div>
             <small>Files</small>
-            <b>{job ? \`\${job.files} / \${job.total_files}\` : '—'}</b>
+            <b>{job ? `${job.files} / ${job.total_files}` : '—'}</b>
           </div>
           <div>
             <small>Skipped</small>
@@ -274,7 +274,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           </div>
         </div>
         <div className="stream-progress">
-          <i style={{ width: \`\${Math.max(0, Math.min(100, percent))}%\` }} />
+          <i style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
         </div>
         {job?.current_path && <p className="stream-current">{job.current_path}</p>}
         {job?.error && <p className="warning">{job.error}</p>}
@@ -291,7 +291,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         </div>
         {job?.warnings?.length > 0 && <details className="stream-warnings">
           <summary>Warnings / skipped: {job.warnings.length}</summary>
-          {job.warnings.slice(-40).map((item, index) => <div key={\`\${item.path}-\${index}\`}>
+          {job.warnings.slice(-40).map((item, index) => <div key={`${item.path}-${index}`}>
             <b>{item.path}</b><span>{item.message}</span>
           </div>)}
         </details>}

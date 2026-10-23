@@ -478,8 +478,9 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
             completed_files = int(job["files"])
             skipped = int(job["skipped"])
             average_mib_s = float(job["average_mib_s"])
-        log_event(
-            "streamcopy.completed",
+        completion_logger = log_warning if skipped else log_event
+        completion_logger(
+            "streamcopy.completed_with_warnings" if skipped else "streamcopy.completed",
             job_id=job_id,
             status=status,
             bytes=completed_bytes,
@@ -496,7 +497,7 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
             finished_at=_now(),
             current_path="",
         )
-        log_warning(
+        log_event(
             "streamcopy.cancelled",
             job_id=job_id,
             reason=str(exc),

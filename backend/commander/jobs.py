@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from backend.core.logging_setup import log_error, log_event, log_warning
 from backend.files.endpoint_availability import (
     bind_local_volume,
     local_endpoint_state,
@@ -940,6 +941,17 @@ def start_commander_batch_job(
         _jobs[job_id] = job
         _cancel_events[job_id] = event
 
+    log_event(
+        "commander.started",
+        job_id=job_id,
+        operation=op,
+        items=len(prepared),
+        files=total_files,
+        bytes=total_bytes,
+        source_kind=first["source"]["kind"],
+        destination_kind=first["destination"]["kind"],
+    )
+
     threading.Thread(
         target=_run_batch_job,
         args=(job_id, op, prepared, event),
@@ -1008,6 +1020,8 @@ def _run_batch_job(
         current_path: str,
         error: str,
     ) -> None:
+        became_waiting = False
+        resumed = False
         with _lock:
             job = _jobs[job_id]
             was_waiting = bool(job["waiting_endpoint"])
@@ -1019,14 +1033,30 @@ def _run_batch_job(
                 if not was_waiting:
                     job["waiting_since"] = _now()
                     job["wait_cycles"] += 1
+                    became_waiting = True
                 job["status"] = "waiting_endpoint"
                 job["retrying"] = False
             else:
                 if was_waiting:
                     job["auto_resumes"] += 1
+                    resumed = True
                 job["waiting_since"] = None
                 job["waiting_for"] = []
                 job["status"] = "running"
+
+        if became_waiting:
+            log_warning(
+                "commander.endpoint_waiting",
+                job_id=job_id,
+                path=current_path,
+                error=error,
+            )
+        elif resumed:
+            log_event(
+                "commander.endpoint_resumed",
+                job_id=job_id,
+                path=current_path,
+            )
 
     try:
         for index, transfer in enumerate(transfers, start=1):
@@ -1274,6 +1304,7 @@ def _run_batch_job(
             job = _jobs[job_id]
             job["status"] = "cancelled"
             job["finished_at"] = _now()
+        log_event("commander.cancelled", job_id=job_id)
         return
     except Exception as exc:  # noqa: BLE001
         with _lock:
@@ -1281,6 +1312,11 @@ def _run_batch_job(
             job["status"] = "failed"
             job["error"] = f"{type(exc).__name__}: {exc}"
             job["finished_at"] = _now()
+        log_error(
+            "commander.failed",
+            job_id=job_id,
+            error=f"{type(exc).__name__}: {exc}",
+        )
         return
     finally:
         with _lock:
@@ -1291,6 +1327,22 @@ def _run_batch_job(
         job["status"] = "completed"
         job["progress_percent"] = 100.0
         job["finished_at"] = _now()
+        completed_bytes = int(job["bytes"])
+        completed_files = int(job["files"])
+        skipped = int(job["skipped"])
+        missing = int(job["missing"])
+        warnings_count = len(job["warnings"])
+
+    completion_logger = log_warning if warnings_count else log_event
+    completion_logger(
+        "commander.completed_with_warnings" if warnings_count else "commander.completed",
+        job_id=job_id,
+        bytes=completed_bytes,
+        files=completed_files,
+        skipped=skipped,
+        missing=missing,
+        warnings=warnings_count,
+    )
 
 
 def get_commander_job(job_id: str) -> dict[str, Any]:

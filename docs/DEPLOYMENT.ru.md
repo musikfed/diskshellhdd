@@ -1,6 +1,6 @@
-# Развёртывание DiskShell 0.7.1
+# Развёртывание DiskShell 0.7.4
 
-DiskShell 0.7.1 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
+DiskShell 0.7.4 развивает первую рабочую admin baseline; GitHub `main` считается источником истины.
 
 ## Важно про права администратора
 
@@ -317,3 +317,10 @@ SSH/SFTP сначала использует keepalive и четыре быст�
 UI inventory опрашивается периодически. Исчезнувший том помечается OFFLINE; открытая Commander pane восстанавливается после reconnect. Временная ошибка Windows disk inventory больше не должна ронять страницу «Диски».
 
 Перезапуск **самого backend** пока завершает in-memory job. Partial остаётся на target и может быть продолжен через Continue после запуска; автоматическое восстановление job после restart потребует persistent transfer journal. SSH credentials намеренно остаются RAM-only.
+
+
+## Журнал и тихая консоль 0.7.4
+
+Routine HTTP access-log отключён. Поллинг UI и успешные 200/304 не должен засорять elevated PowerShell. Консоль предназначена для WARNING/ERROR. Полный event journal находится в `data/logs/diskshell.log`; файл ротируется по 5 MiB и хранит до пяти backup-файлов. Admin launchers печатают путь журнала при старте.
+
+См. [LOGGING.ru.md](LOGGING.ru.md).

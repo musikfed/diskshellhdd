@@ -1,4 +1,4 @@
-# DiskShell HDD 0.7.0
+# DiskShell HDD 0.7.4
 
 [Русская версия](README.ru.md) · English
 
@@ -239,3 +239,10 @@ Active StreamCopy jobs are backend-owned. Closing/refreshing the page or navigat
 ### Workspace 0.7.3 · current page is backend-owned
 
 The current workbench page, active volume, and scan id are now persisted in backend SQLite rather than browser storage alone. Clearing browser site data or switching browsers does not force a landing page; DiskShell restores the current workspace. An active StreamCopy job on another page is exposed through a `↩ StreamCopy · status` header chip. See [docs/WORKSPACE_STATE.md](docs/WORKSPACE_STATE.md).
+
+
+## Logging 0.7.4 · operator events instead of polling noise
+
+The browser/UI is treated as a control surface. Successful HTTP polling traffic (`/api/files/roots`, `/api/ui-state`, StreamCopy status, frontend `304`) is no longer printed to the backend console. The console is reserved for warnings and errors.
+
+Meaningful events are written to the rotating `data/logs/diskshell.log` journal: backend start, Commander/StreamCopy lifecycle, endpoint waiting/resume, completed-with-warnings, transfer failures, and HTTP 5xx/unhandled exceptions. Request bodies, cookies, passwords, and remote credentials are not logged. Rotation is 5 MiB with up to five backups. See [docs/LOGGING.md](docs/LOGGING.md).

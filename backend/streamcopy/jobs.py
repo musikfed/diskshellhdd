@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from backend.core.logging_setup import log_error, log_event, log_warning
 from backend.files.service import FileWriteBlocked
 from backend.files.write_authorization import file_writes_allowed
 
@@ -473,6 +474,20 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
             job["progress_percent"] = 100.0
             job["finished_at"] = _now()
             job["updated_at"] = _now()
+            completed_bytes = int(job["bytes"])
+            completed_files = int(job["files"])
+            skipped = int(job["skipped"])
+            average_mib_s = float(job["average_mib_s"])
+        completion_logger = log_warning if skipped else log_event
+        completion_logger(
+            "streamcopy.completed_with_warnings" if skipped else "streamcopy.completed",
+            job_id=job_id,
+            status=status,
+            bytes=completed_bytes,
+            files=completed_files,
+            skipped=skipped,
+            average_mib_s=average_mib_s,
+        )
     except StreamCopyCancelled as exc:
         consumer_fatal.set()
         _set_job(
@@ -482,6 +497,11 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
             finished_at=_now(),
             current_path="",
         )
+        log_event(
+            "streamcopy.cancelled",
+            job_id=job_id,
+            reason=str(exc),
+        )
     except BaseException as exc:  # noqa: BLE001
         consumer_fatal.set()
         _set_job(
@@ -489,6 +509,11 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
             status="failed",
             error=f"{type(exc).__name__}: {exc}",
             finished_at=_now(),
+        )
+        log_error(
+            "streamcopy.failed",
+            job_id=job_id,
+            error=f"{type(exc).__name__}: {exc}",
         )
 
 
@@ -569,6 +594,16 @@ def start_streamcopy_job(
     with _lock:
         _jobs[job_id] = job
         _cancel_events[job_id] = cancel
+
+    log_event(
+        "streamcopy.started",
+        job_id=job_id,
+        source=source,
+        destination=destination,
+        strategy=profile["strategy"],
+        chunk_mib=profile["chunk_mib"],
+        queue_depth=profile["queue_depth"],
+    )
 
     thread = threading.Thread(
         target=_run_job,

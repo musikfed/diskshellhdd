@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, got_request_exception, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from backend.api.analytics import bp as analytics_bp
@@ -20,17 +20,48 @@ from backend.api.ui_state import bp as ui_state_bp
 from backend.api.vault import bp as vault_bp
 from backend.config import settings
 from backend.core.database import init_database
+from backend.core.logging_setup import configure_logging, get_logger, log_event
 from backend.files.write_authorization import file_write_state
 from backend.storage_brain.service import ensure_defaults
 from backend.vault.service import vault_write_state
 
 
-VERSION = "0.7.3"
+VERSION = "0.7.4"
 
 
 def create_app() -> Flask:
     app = Flask(__name__)
     CORS(app, origins=["http://127.0.0.1:5173", "http://localhost:5173"])
+
+    def _log_unhandled_exception(sender, exception, **extra):
+        del sender, extra
+        request.environ["_diskshell_exception_logged"] = True
+        get_logger().exception(
+            "http.unhandled_exception method=%r path=%r error=%r",
+            request.method,
+            request.path,
+            f"{type(exception).__name__}: {exception}",
+        )
+
+    got_request_exception.connect(
+        _log_unhandled_exception,
+        app,
+        weak=False,
+    )
+
+    @app.after_request
+    def _journal_server_errors(response):
+        if (
+            response.status_code >= 500
+            and not request.environ.get("_diskshell_exception_logged")
+        ):
+            get_logger().error(
+                "http.server_error method=%r path=%r status=%r",
+                request.method,
+                request.path,
+                response.status_code,
+            )
+        return response
 
     for blueprint in (
         disks_bp,
@@ -107,8 +138,17 @@ app = create_app()
 
 def main() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    configure_logging()
     init_database()
     ensure_defaults()
+    log_event(
+        "backend.started",
+        version=VERSION,
+        host=settings.host,
+        port=settings.port,
+        debug=settings.debug,
+        log_file=settings.data_dir / "logs" / "diskshell.log",
+    )
 
     # DiskShell may be started from an elevated Administrator/root shell for
     # raw-disk and storage operations. Never make the Flask interactive

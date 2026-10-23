@@ -1,4 +1,4 @@
-# DiskShell HDD 0.7.0
+# DiskShell HDD 0.7.4
 
 Русский · [English](README.md)
 
@@ -326,3 +326,10 @@ completed
 ### Workspace 0.7.3 · актуальная вкладка живёт в backend
 
 Последняя рабочая вкладка, активный том и scan id теперь сохраняются в SQLite backend, а не только в браузере. Очистка cookies/site data или переход в другой браузер не возвращают DiskShell на «главную»: при открытии восстанавливается актуальная вкладка. Если StreamCopy работает на фоне другой страницы, в шапке появляется `↩ StreamCopy · status`. Подробнее: [docs/WORKSPACE_STATE.ru.md](docs/WORKSPACE_STATE.ru.md).
+
+
+## Logging 0.7.4 · консоль только для событий, а не polling
+
+Browser/UI считается control surface. Успешные HTTP polling-запросы (`/api/files/roots`, `/api/ui-state`, StreamCopy status, frontend `304`) больше не печатаются в backend-консоль. В консоли остаются предупреждения и ошибки.
+
+Значимые события пишутся в ротируемый журнал `data/logs/diskshell.log`: backend start, Commander/StreamCopy start/complete/cancel, endpoint waiting/resume, completed-with-warnings, transfer failure и HTTP 5xx/unhandled exceptions. Request bodies, cookies, пароли и remote credentials не журналируются. Ротация: 5 MiB × до 5 backup-файлов. Подробнее: [docs/LOGGING.ru.md](docs/LOGGING.ru.md).

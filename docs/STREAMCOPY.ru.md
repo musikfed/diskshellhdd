@@ -1,43 +1,127 @@
-# StreamCopy EXP 0.7.3
+# StreamCopy EXP 0.7.5 · River Keeper
 
-StreamCopy — отдельный экспериментальный local-copy engine. Обычный Commander не изменён.
+StreamCopy — отдельный экспериментальный local-copy engine. Обычный Commander не заменён и использует собственный transfer manager.
 
-## Модель
+## Идея
 
-Папка сначала сканируется один раз в manifest, после чего данные проходят через ограниченный producer/consumer ring buffer:
+Папка является одной логической рекой данных:
 
 ```text
-SOURCE → producer → bounded RAM queue → consumer → DESTINATION
+SOURCE
+  ↓ persistent manifest
+producer
+  ↓ bounded RAM queue
+consumer
+  ↓ .dspart
+  ↓ verified publish
+DESTINATION
 ```
 
-Файлы на приёмнике остаются обычными файлами файловой системы. RAW-сектора и собственный формат хранения не используются.
+RAM используется только как ограниченный рабочий буфер. Состояние самой задачи хранится в SQLite `data/diskshell.db`.
 
-## Ручной профиль носителей
+## Persistent River Journal
 
-Тип SOURCE и DESTINATION выбирается оператором и блокируется на время job:
+В SQLite сохраняются:
+
+- job и её профиль;
+- source/destination path;
+- стабильная identity локальных томов;
+- manifest items;
+- size + source mtime каждого item;
+- статус каждого файла;
+- подтверждённый offset;
+- checkpoints и SHA-256 каждого checkpoint-блока;
+- counters/progress/warnings;
+- lease owner/expiry для защиты от двух backend-владельцев одной job.
+
+Это рабочее состояние transfer engine, а не обычный текстовый log.
+
+## Checkpoint / “шаг назад”
+
+Checkpoint по умолчанию — **128 MiB**. Незавершённый файл пишется в детерминированный:
+
+```text
+name.ext.dspart-<job-id>
+```
+
+После обрыва StreamCopy не доверяет фактическому размеру partial как произвольному offset.
+
+Он идёт назад по сохранённым checkpoints и для кандидата проверяет SHA-256 соответствующего диапазона:
+
+```text
+source block
+partial block
+stored checkpoint digest
+```
+
+Только если все значения совпали, этот offset считается безопасным. Неподтверждённый хвост partial отрезается и участок записывается заново.
+
+Если безопасный checkpoint не найден, текущий файл начинается заново с offset 0. Уже завершённые и опубликованные файлы не копируются повторно.
+
+## Hot-unplug
+
+SOURCE и DESTINATION bindятся к stable local volume identity (Windows Volume GUID, serial fallback).
+
+```text
+running
+  ↓ disk removed
+waiting_endpoint
+  ↓ same volume identity returns
+recovering
+  ↓ verify checkpoint / truncate unsafe tail
+running
+```
+
+Новый носитель с той же буквой диска не принимается как исходный endpoint.
+
+## Restart backend
+
+Незавершённые jobs остаются в SQLite. При старте backend запускается recovery manager.
+
+У каждой активной job есть lease:
+
+```text
+lease_owner
+lease_expires_at
+```
+
+Пока живой backend обновляет lease, другой backend не получает job. После смерти процесса lease истекает, новый backend claim'ит задачу и восстанавливает её из journal/checkpoints.
+
+Живой Python thread не восстанавливается — создаётся новый worker той же persistent job.
+
+## Browser
+
+Browser остаётся только control surface. Закрытие, refresh, очистка cookies/localStorage или другой браузер не уничтожают job. Workspace state хранится backend-side, а StreamCopy UI заново подключается к active/latest persistent job.
+
+## COPY вместо Move
+
+StreamCopy не имеет отдельного разрушительного Move primitive.
+
+Есть два режима:
+
+1. **COPY** — источник остаётся. Проверка: Size или SHA-256.
+2. **COPY → SHA-256 → DELETE SOURCE** — target сначала полностью записывается, проверяется SHA-256 и публикуется. Только затем удаляется соответствующий source file.
+
+Если backend упал после publish, но до source delete, recovery видит completed target, повторно проверяет его и завершает только безопасную delete-фазу.
+
+Если есть skipped/conflict/error, соответствующий source не удаляется.
+
+## Destination conflicts
+
+Существующий конечный target автоматически не перезаписывается. Item получает warning/skip. Собственные partial-файлы имеют job-specific `.dspart` имя и не считаются готовым target.
+
+## Media profile
+
+Media type задаётся вручную и фиксируется для job:
 
 - HDD;
 - SSD/NVMe;
-- USB flash/card.
+- flash.
 
-Подключение задаётся отдельно: Internal, USB 2.0, USB 3.x, USB4/Thunderbolt или Unknown. USB не меняет media type. Поэтому HDD→HDD через USB 3.x остаётся HDD→HDD sequential pipeline.
+USB2/USB3/USB4 — transport hint, а не media type. Поэтому USB3 HDD → USB3 HDD остаётся HDD→HDD pipeline.
 
-Для двух USB-устройств есть topology hint: unknown, shared hub/controller или separate paths/controllers.
+Drive cache — только hint для bounded RAM queue. Например HDD cache 32 MiB → 128 MiB не означает 128 MiB приложения.
 
-Drive cache SOURCE/DESTINATION задаётся вручную как hint. Это не размер RAM buffer. Для тестовой пары 32 MiB → 128 MiB при USB3/USB3 и неизвестной topology используется 8 MiB chunk и ограниченная очередь до 48 MiB; shared USB path уменьшает очередь до 32 MiB.
+## Scope
 
-## Safety
-
-StreamCopy использует общий FILE WRITE gate. Существующий destination-файл в 0.7.3 не перезаписывается автоматически: item получает warning/skip. Один unreadable source item также должен быть пропущен без остановки всего batch.
-
-Это экспериментальный движок: пока нет Move, remote/SFTP, persistent journal, resume после restart, extent-ordering или RAW-placement.
-
-
-## Backend-owned jobs и повторное подключение UI
-
-StreamCopy job принадлежит backend, а не React-странице. Переход на другую страницу DiskShell, refresh или закрытие вкладки браузера не посылают cancel и не останавливают worker. UI сохраняет active job id локально; при повторном открытии сначала пытается восстановить его, а затем запрашивает у backend последнюю активную StreamCopy job. После подключения снова показываются исходный/целевой пути, профиль и живой прогресс.
-
-Это не persistence после restart backend: текущий job registry и worker threads остаются RAM-only. Перезапуск backend требует отдельного persistent journal/resume слоя.
-
-
-В 0.7.3 восстановление вкладки StreamCopy больше не зависит от browser storage: актуальная вкладка хранится в backend workspace state. Новый браузер открывает ту же рабочую вкладку и затем подцепляется к active/latest backend job.
+0.7.5 River Keeper local-only. Remote SFTP/FTP StreamCopy пока не реализован; remote transfers остаются в Commander. Extent-ordering/physical-locality scheduler и RAW placement также пока не входят в StreamCopy.

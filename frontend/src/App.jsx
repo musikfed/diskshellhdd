@@ -174,16 +174,18 @@ export default function App() {
     }
   }, [page])
   useEffect(() => {
-    if (!workspaceReady || !activeVolume) return
-    localStorage.setItem('activeVolume', activeVolume)
+    if (!workspaceReady) return
+    if (activeVolume) localStorage.setItem('activeVolume', activeVolume)
+    else localStorage.removeItem('activeVolume')
     api('/api/ui-state', {
       method: 'PATCH',
       body: JSON.stringify({ active_volume: activeVolume }),
     }).catch(() => {})
   }, [activeVolume, workspaceReady])
   useEffect(() => {
-    if (!workspaceReady || !scanId) return
-    localStorage.setItem('scanId', scanId)
+    if (!workspaceReady) return
+    if (scanId) localStorage.setItem('scanId', scanId)
+    else localStorage.removeItem('scanId')
     api('/api/ui-state', {
       method: 'PATCH',
       body: JSON.stringify({ scan_id: scanId }),

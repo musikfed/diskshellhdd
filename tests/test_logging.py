@@ -38,3 +38,26 @@ def test_log_fields_are_single_line(tmp_path):
     lines = (tmp_path / "diskshell.log").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert "line1\\nline2" in lines[0]
+
+
+
+def test_http_500_is_journaled_without_access_log(tmp_path):
+    from backend.app import create_app
+
+    logger = configure_logging(tmp_path)
+    app = create_app()
+
+    @app.get("/__test_500")
+    def _test_500():
+        return {"error": "synthetic"}, 500
+
+    response = app.test_client().get("/__test_500")
+    assert response.status_code == 500
+
+    for handler in logger.handlers:
+        handler.flush()
+
+    content = (tmp_path / "diskshell.log").read_text(encoding="utf-8")
+    assert "http.server_error" in content
+    assert "/__test_500" in content
+    assert '"GET /__test_500 HTTP/' not in content

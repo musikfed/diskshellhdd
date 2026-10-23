@@ -117,3 +117,21 @@ def test_streamcopy_existing_destination_is_skipped_not_overwritten(tmp_path, mo
     assert job["status"] == "completed_with_warnings"
     assert job["skipped"] == 1
     assert target.read_bytes() == b"old"
+
+
+def test_streamcopy_rejects_copying_directory_into_its_own_parent(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+    source = tmp_path / "source"
+    source.mkdir()
+
+    try:
+        streamcopy_jobs.start_streamcopy_job(
+            str(source),
+            str(tmp_path),
+            "hdd",
+            "hdd",
+        )
+    except ValueError as exc:
+        assert "source itself" in str(exc)
+    else:
+        raise AssertionError("expected StreamCopy to reject self-targeting directory copy")

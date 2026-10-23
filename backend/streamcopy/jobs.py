@@ -39,12 +39,16 @@ def stream_profile(
     source_transport: str = "unknown",
     destination_transport: str = "unknown",
     usb_topology: str = "unknown",
+    source_cache_mib: int | float | str | None = None,
+    destination_cache_mib: int | float | str | None = None,
 ) -> dict[str, Any]:
     src = str(source_media).casefold()
     dst = str(destination_media).casefold()
     src_transport = str(source_transport).casefold()
     dst_transport = str(destination_transport).casefold()
     topology = str(usb_topology).casefold()
+    source_cache = max(0, min(1024, int(float(source_cache_mib or 0))))
+    destination_cache = max(0, min(1024, int(float(destination_cache_mib or 0))))
     if src not in MEDIA_TYPES or dst not in MEDIA_TYPES:
         raise ValueError("media type must be hdd, ssd or flash")
     if src_transport not in TRANSPORT_TYPES or dst_transport not in TRANSPORT_TYPES:
@@ -58,6 +62,16 @@ def stream_profile(
     elif src == "hdd" and dst == "hdd":
         chunk_mib = 8
         depth = 6 if topology == "separate" else 3 if topology == "shared" else 4
+        if source_cache and destination_cache:
+            # Hardware drive cache is not our RAM queue, but it is useful as a
+            # conservative hint. Use the geometric mean so a 32/128 MiB pair
+            # does not blindly allocate either extreme.
+            hinted_depth = max(
+                3,
+                min(8, round(((source_cache * destination_cache) ** 0.5) / chunk_mib)),
+            )
+            topology_cap = 4 if topology == "shared" else 8 if topology == "separate" else 6
+            depth = min(hinted_depth, topology_cap)
         strategy = "hdd-hdd-sequential-pipeline"
     elif src == "hdd" and dst == "ssd":
         chunk_mib, depth = 8, 6
@@ -101,6 +115,13 @@ def stream_profile(
         "source_transport": src_transport,
         "destination_transport": dst_transport,
         "usb_topology": topology,
+        "source_cache_mib": source_cache or None,
+        "destination_cache_mib": destination_cache or None,
+        "cache_note": (
+            "Drive cache sizes are hints only; StreamCopy keeps a separate bounded RAM ring buffer."
+            if source_cache or destination_cache
+            else "Drive cache sizes were not provided."
+        ),
         "transport_note": transport_note,
         "ordering": "single manifest / directory order / one producer + one consumer",
         "experimental": True,
@@ -460,6 +481,8 @@ def start_streamcopy_job(
     source_transport: str = "unknown",
     destination_transport: str = "unknown",
     usb_topology: str = "unknown",
+    source_cache_mib: int | float | str | None = None,
+    destination_cache_mib: int | float | str | None = None,
 ) -> dict[str, Any]:
     if not file_writes_allowed():
         raise FileWriteBlocked("File writes are locked")
@@ -479,6 +502,8 @@ def start_streamcopy_job(
         source_transport,
         destination_transport,
         usb_topology,
+        source_cache_mib,
+        destination_cache_mib,
     )
     destination.mkdir(parents=True, exist_ok=True)
     if not destination.is_dir():

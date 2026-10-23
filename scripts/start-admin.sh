@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_ROOT}"
 
+echo "DiskShell journal: ${PROJECT_ROOT}/data/logs/diskshell.log"
+echo "Routine HTTP access polling is hidden; console is reserved for warnings/errors."
+
 if [[ "${EUID}" -ne 0 ]]; then
   exec sudo -E "${PROJECT_ROOT}/.venv/bin/python" -m backend.app
 fi

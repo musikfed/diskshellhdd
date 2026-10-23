@@ -508,13 +508,43 @@ function People({ scanId, setError }) {
   const [selected, setSelected] = useState(null)
   const [photos, setPhotos] = useState([])
   const [mode, setMode] = useState('all')
+  const [similar, setSimilar] = useState([])
   const refresh = async () => { if (!scanId) return; const x = await api(`/api/people?scan_id=${scanId}`); setPeople(x.people || []) }
   useEffect(() => { api('/api/people/capabilities').then(setCaps).catch(e => setError(e.message)); refresh().catch(()=>{}) }, [scanId]) // eslint-disable-line react-hooks/exhaustive-deps
   async function analyze() { try { await api(`/api/people/analyze/${scanId}`, { method:'POST', body:'{}' }); await refresh() } catch (e) { setError(e.message) } }
-  async function openPerson(p, nextMode = mode) { setSelected(p); setMode(nextMode); try { const x = await api(`/api/people/${p.id}/photos?mode=${nextMode}`); setPhotos(x.photos || []) } catch (e) { setError(e.message) } }
+  async function openPerson(p, nextMode = mode) {
+    setSelected(p)
+    setMode(nextMode)
+    setSimilar([])
+    try {
+      const x = await api(`/api/people/${p.id}/photos?mode=${nextMode}`)
+      setPhotos(x.photos || [])
+    } catch (e) { setError(e.message) }
+  }
+  async function findSimilar() {
+    if (!selected?.cover_face_id) return
+    try {
+      const x = await api(`/api/people/faces/${selected.cover_face_id}/similar?limit=80&min_score=0.35`)
+      setSimilar(x.matches || [])
+    } catch (e) { setError(e.message) }
+  }
   return <div className="stack"><Card title="Local Face Engine"><div className="hero"><div className="mascot">🦉</div><div><p>OpenCV YuNet + SFace, только локально. Облако: <b>нет</b>.</p><p>Detector: {caps?.detector_ready ? 'ready' : 'model not configured'} · Recognizer: {caps?.recognizer_ready ? 'ready' : 'model not configured'}</p><button className="primary" disabled={!scanId || !caps?.ready} onClick={analyze}>Проанализировать фото из scan {scanId || '—'}</button></div></div></Card>
     <div className="people-grid">{people.map(p => <button key={p.id} className="person" onClick={() => openPerson(p)}>{p.cover_face_id ? <img src={`/api/people/faces/${p.cover_face_id}/thumbnail`} /> : <div className="face-placeholder">👤</div>}<b>{p.name}</b><small>{p.photos} photos · {p.faces} faces</small></button>)}</div>
-    {selected && <Card title={selected.name}><div className="tabs">{['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}</div><div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div></Card>}</div>
+    {selected && <Card title={selected.name}>
+      <div className="tabs">
+        {['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}
+        <button disabled={!selected.cover_face_id || !caps?.recognizer_ready} onClick={findSimilar}>≈ похожие лица</button>
+      </div>
+      {similar.length > 0 && <div className="face-similarity-grid">
+        {similar.map(item => <div key={item.face_id}>
+          <img src={`/api/people/faces/${item.face_id}/thumbnail`} alt="" />
+          <b>{item.person_name || `face #${item.face_id}`}</b>
+          <small>similarity {(Number(item.score) * 100).toFixed(1)}%</small>
+          <span title={item.path}>{item.path}</span>
+        </div>)}
+      </div>}
+      <div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div>
+    </Card>}</div>
 }
 
 

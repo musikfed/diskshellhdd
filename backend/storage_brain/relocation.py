@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import PurePath
 from typing import Any
 
 from backend.core.database import connect, init_database

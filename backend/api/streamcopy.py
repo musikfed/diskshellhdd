@@ -25,6 +25,8 @@ def profile():
                 str(payload.get("source_transport") or "unknown"),
                 str(payload.get("destination_transport") or "unknown"),
                 str(payload.get("usb_topology") or "unknown"),
+                payload.get("source_cache_mib"),
+                payload.get("destination_cache_mib"),
             )
         )
     except ValueError as exc:
@@ -43,6 +45,8 @@ def start_job():
             source_transport=str(payload.get("source_transport") or "unknown"),
             destination_transport=str(payload.get("destination_transport") or "unknown"),
             usb_topology=str(payload.get("usb_topology") or "unknown"),
+            source_cache_mib=payload.get("source_cache_mib"),
+            destination_cache_mib=payload.get("destination_cache_mib"),
         )
         return jsonify(job), 202
     except FileWriteBlocked as exc:

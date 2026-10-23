@@ -16,16 +16,16 @@ def test_workspace_state_persists_without_browser_storage(tmp_path, monkeypatch)
 
     saved = update_workspace_state(
         active_page="streamcopy",
-        active_volume=r"W:\\",
+        active_volume="W:\\",
         scan_id="42",
     )
     assert saved["active_page"] == "streamcopy"
-    assert saved["active_volume"] == r"W:\"
+    assert saved["active_volume"] == "W:\\"
     assert saved["scan_id"] == "42"
 
     restored = get_workspace_state()
     assert restored["active_page"] == "streamcopy"
-    assert restored["active_volume"] == r"W:\"
+    assert restored["active_volume"] == "W:\\"
     assert restored["scan_id"] == "42"
 
 
@@ -34,13 +34,13 @@ def test_workspace_state_allows_partial_updates_and_clear(tmp_path, monkeypatch)
 
     update_workspace_state(
         active_page="files",
-        active_volume=r"H:\",
+        active_volume="H:\\",
         scan_id="9",
     )
     value = update_workspace_state(active_page="diagnostics")
 
     assert value["active_page"] == "diagnostics"
-    assert value["active_volume"] == r"H:\"
+    assert value["active_volume"] == "H:\\"
     assert value["scan_id"] == "9"
 
     cleared = update_workspace_state(active_volume="", scan_id="")

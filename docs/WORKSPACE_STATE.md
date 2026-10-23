@@ -10,4 +10,4 @@ When StreamCopy is active while another page is open, the header shows a `↩ St
 
 This is intentionally a single local workspace with no account binding. The most recent navigation action from any browser becomes the current workspace state for that DiskShell instance.
 
-Workspace state survives backend restart because it is stored in SQLite. The live StreamCopy worker is still RAM-only; transfer recovery after backend restart requires a separate persistent transfer journal.
+Workspace state survives backend restart because it is stored in SQLite. StreamCopy 0.7.5 has its own persistent River Keeper: after backend restart a new worker claims an unfinished persistent job and resumes from a verified checkpoint. Commander remains a separate transfer manager with its own recovery model.

@@ -524,7 +524,18 @@ def _copy_item(
         job = _load_job(job_id)
         item = journal.get_item(job_id, item_index)
 
-        if item["status"] in {"completed", "skipped"}:
+        if item["status"] == "skipped":
+            return
+
+        if item["status"] == "completed":
+            if job.get("delete_source_after_verify") and source.exists():
+                try:
+                    _verify_pair(source, target, "sha256")
+                    source.unlink()
+                except OSError:
+                    if any(not state["available"] for state in _endpoint_states(job)):
+                        continue
+                    raise
             return
 
         if item["status"] == "publishing" and target.exists():
@@ -632,7 +643,12 @@ def _copy_item(
 
                 while True:
                     _control_check(cancel, lease_lost)
-                    kind, payload = stream_queue.get(timeout=0.5)
+                    try:
+                        kind, payload = stream_queue.get(timeout=0.5)
+                    except queue.Empty:
+                        if producer_thread.is_alive():
+                            continue
+                        kind, payload = ("done", None)
                     if kind == "done":
                         break
                     data = payload
@@ -702,15 +718,21 @@ def _copy_item(
                 f"Stream length mismatch for {source}: expected {item['size']}, got {offset}"
             )
 
-        _publish_completed_item(
-            job_id,
-            item,
-            _load_job(job_id),
-            source=source,
-            target=target,
-            partial=partial,
-        )
-        return
+        try:
+            _publish_completed_item(
+                job_id,
+                item,
+                _load_job(job_id),
+                source=source,
+                target=target,
+                partial=partial,
+            )
+            return
+        except OSError:
+            current_job = _load_job(job_id)
+            if any(not state["available"] for state in _endpoint_states(current_job)):
+                continue
+            raise
 
 
 def _cleanup_deleted_source_tree(job: dict[str, Any]) -> None:

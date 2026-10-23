@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS workspace_state (
     active_page TEXT NOT NULL DEFAULT 'dashboard',
     active_volume TEXT NOT NULL DEFAULT '',
     scan_id TEXT NOT NULL DEFAULT '',
+    view_state_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -374,6 +375,13 @@ def init_database() -> None:
             [
                 ("started_at", "TEXT"),
                 ("completed_at", "TEXT"),
+            ],
+        )
+        _ensure_columns(
+            connection,
+            "workspace_state",
+            [
+                ("view_state_json", "TEXT NOT NULL DEFAULT '{}'"),
             ],
         )
         _ensure_columns(

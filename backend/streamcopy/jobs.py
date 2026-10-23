@@ -1,32 +1,50 @@
 from __future__ import annotations
 
-import errno
+import hashlib
 import os
 import queue
 import threading
 import time
 import uuid
-from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from backend.core.logging_setup import log_error, log_event, log_warning
+from backend.files.endpoint_availability import bind_local_volume, local_endpoint_state
 from backend.files.service import FileWriteBlocked
 from backend.files.write_authorization import file_writes_allowed
+from backend.streamcopy import journal
 
 
 MEDIA_TYPES = {"hdd", "ssd", "flash"}
 TRANSPORT_TYPES = {"internal", "usb2", "usb3", "usb4", "unknown"}
 USB_TOPOLOGIES = {"unknown", "shared", "separate"}
-TERMINAL_STATES = {"completed", "completed_with_warnings", "failed", "cancelled"}
+TERMINAL_STATES = journal.TERMINAL_STATES
 
+CHECKPOINT_BYTES = 128 * 1024 * 1024
+ENDPOINT_RECHECK_SECONDS = 3.0
+LEASE_SECONDS = 15.0
+LEASE_HEARTBEAT_SECONDS = 3.0
+RECOVERY_POLL_SECONDS = 3.0
+
+_INSTANCE_ID = uuid.uuid4().hex
 _lock = threading.Lock()
 _jobs: dict[str, dict[str, Any]] = {}
 _cancel_events: dict[str, threading.Event] = {}
+_threads: dict[str, threading.Thread] = {}
+_recovery_started = False
 
 
 class StreamCopyCancelled(RuntimeError):
+    pass
+
+
+class StreamCopyLeaseLost(RuntimeError):
+    pass
+
+
+class StreamCopySourceChanged(RuntimeError):
     pass
 
 
@@ -64,9 +82,6 @@ def stream_profile(
         chunk_mib = 8
         depth = 6 if topology == "separate" else 3 if topology == "shared" else 4
         if source_cache and destination_cache:
-            # Hardware drive cache is not our RAM queue, but it is useful as a
-            # conservative hint. Use the geometric mean so a 32/128 MiB pair
-            # does not blindly allocate either extreme.
             hinted_depth = max(
                 3,
                 min(8, round(((source_cache * destination_cache) ** 0.5) / chunk_mib)),
@@ -89,18 +104,17 @@ def stream_profile(
         if topology == "shared":
             transport_note = (
                 "Both endpoints are HDD over USB 3.x on a shared hub/controller. "
-                "The HDDs remain the scheduling profile; queue depth is reduced to avoid "
-                "building a large backlog on the shared USB path."
+                "The HDDs remain the scheduling profile; queue depth is reduced."
             )
         elif topology == "separate":
             transport_note = (
-                "Both endpoints are HDD over USB 3.x on separate controllers/paths. "
-                "The HDDs remain the scheduling profile; USB 3.x is treated as transport headroom."
+                "Both endpoints are HDD over USB 3.x on separate paths/controllers. "
+                "USB 3.x is transport headroom; HDD scheduling remains active."
             )
         else:
             transport_note = (
-                "Both endpoints are HDD over USB 3.x. HDD→HDD sequential scheduling is used. "
-                "USB topology is unknown, so a conservative queue depth is selected."
+                "Both endpoints are HDD over USB 3.x. HDD→HDD sequential scheduling is used "
+                "with conservative queue depth because USB topology is unknown."
             )
     else:
         transport_note = "Media type controls scheduling; transport is a secondary constraint."
@@ -124,387 +138,686 @@ def stream_profile(
             else "Drive cache sizes were not provided."
         ),
         "transport_note": transport_note,
-        "ordering": "single manifest / directory order / one producer + one consumer",
+        "ordering": "persistent manifest / sequential items / one producer + one consumer",
+        "checkpoint_mib": CHECKPOINT_BYTES // (1024 * 1024),
         "experimental": True,
     }
 
 
-def _set_job(job_id: str, **changes: Any) -> None:
+def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    value = dict(job)
+    value.pop("lease_owner", None)
+    value.pop("lease_expires_at", None)
+    value.pop("source_endpoint", None)
+    value.pop("destination_endpoint", None)
+    value["checkpoint_mib"] = CHECKPOINT_BYTES // (1024 * 1024)
+    value["recovery_mode"] = "rollback_to_verified_checkpoint"
+    value["operation"] = "copy_then_delete" if value.get("delete_source_after_verify") else "copy"
+    return value
+
+
+def _cache_job(job: dict[str, Any]) -> dict[str, Any]:
     with _lock:
-        if job_id in _jobs:
-            _jobs[job_id].update(changes)
-            _jobs[job_id]["updated_at"] = _now()
+        current = _jobs.get(job["id"], {})
+        started = current.get("_started_monotonic", time.monotonic())
+        cached = dict(job)
+        cached["_started_monotonic"] = started
+        _jobs[job["id"]] = cached
+        return cached
 
 
-def _record_warning(job_id: str, path: str, message: str) -> None:
+def _load_job(job_id: str) -> dict[str, Any]:
+    job = journal.get_job(job_id)
+    _cache_job(job)
+    return job
+
+
+def _persist_job(job_id: str, **changes: Any) -> None:
     with _lock:
-        job = _jobs[job_id]
-        job["skipped"] += 1
-        job["warnings"].append({"path": path, "message": message})
-        if len(job["warnings"]) > 200:
-            job["warnings"] = job["warnings"][-200:]
-        job["updated_at"] = _now()
+        cached = _jobs.get(job_id)
+        if cached is not None:
+            if "warnings_json" in changes:
+                cached["warnings"] = changes["warnings_json"]
+            for key, value in changes.items():
+                if key != "warnings_json":
+                    cached[key] = value
+            cached["updated_at"] = changes.get("updated_at", _now())
+    journal.update_job(job_id, **changes)
 
 
-def _progress(job_id: str, byte_count: int, current_path: str, file_completed: bool = False) -> None:
+def _append_warning(job_id: str, path: str, message: str) -> None:
+    job = _load_job(job_id)
+    warnings = list(job.get("warnings") or [])
+    warnings.append({"path": path, "message": message})
+    if len(warnings) > 200:
+        warnings = warnings[-200:]
+    skipped = max(int(job.get("skipped") or 0), len(warnings))
+    _persist_job(job_id, warnings_json=warnings, skipped=skipped)
+
+
+def _control_check(cancel: threading.Event, lease_lost: threading.Event) -> None:
+    if lease_lost.is_set():
+        raise StreamCopyLeaseLost("StreamCopy lease was lost to another backend")
+    if cancel.is_set():
+        raise StreamCopyCancelled("Operation cancelled by operator")
+
+
+def _endpoint_states(job: dict[str, Any]) -> list[dict[str, Any]]:
+    states = []
+    for role, endpoint in (
+        ("source", job.get("source_endpoint") or {}),
+        ("destination", job.get("destination_endpoint") or {}),
+    ):
+        state = local_endpoint_state(endpoint)
+        states.append({"role": role, **state})
+    return states
+
+
+def _wait_for_endpoints(
+    job_id: str,
+    cancel: threading.Event,
+    lease_lost: threading.Event,
+) -> None:
+    was_waiting = False
+    while True:
+        _control_check(cancel, lease_lost)
+        job = _load_job(job_id)
+        states = _endpoint_states(job)
+        unavailable = [state for state in states if not state.get("available")]
+        if not unavailable:
+            if was_waiting or job.get("status") == "waiting_endpoint":
+                _persist_job(
+                    job_id,
+                    status="recovering",
+                    waiting_since=None,
+                    auto_resumes=int(job.get("auto_resumes") or 0) + 1,
+                    error=None,
+                )
+                log_event("streamcopy.endpoint_resumed", job_id=job_id)
+            return
+
+        if not was_waiting and job.get("status") != "waiting_endpoint":
+            _persist_job(
+                job_id,
+                status="waiting_endpoint",
+                waiting_since=_now(),
+                wait_cycles=int(job.get("wait_cycles") or 0) + 1,
+                error="; ".join(
+                    f"{state['role']}:{state.get('reason')}" for state in unavailable
+                ),
+            )
+            log_warning(
+                "streamcopy.endpoint_waiting",
+                job_id=job_id,
+                reason=";".join(
+                    f"{state['role']}:{state.get('reason')}" for state in unavailable
+                ),
+            )
+        was_waiting = True
+        time.sleep(ENDPOINT_RECHECK_SECONDS)
+
+
+def _source_stat_matches(item: dict[str, Any]) -> bool:
+    try:
+        stat = Path(item["source_path"]).stat()
+    except OSError:
+        return False
+    if int(stat.st_size) != int(item["size"]):
+        return False
+    expected_mtime = item.get("source_mtime_ns")
+    return expected_mtime is None or int(stat.st_mtime_ns) == int(expected_mtime)
+
+
+def _hash_range(path: Path, start: int, size: int) -> str:
+    digest = hashlib.sha256()
+    remaining = int(size)
+    with path.open("rb", buffering=0) as stream:
+        stream.seek(int(start))
+        while remaining > 0:
+            data = stream.read(min(8 * 1024 * 1024, remaining))
+            if not data:
+                raise OSError(f"Unexpected EOF while hashing {path}")
+            digest.update(data)
+            remaining -= len(data)
+    return digest.hexdigest()
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb", buffering=0) as stream:
+        while True:
+            data = stream.read(8 * 1024 * 1024)
+            if not data:
+                return digest.hexdigest()
+            digest.update(data)
+
+
+def _partial_path(target: Path, job_id: str) -> Path:
+    return target.with_name(f"{target.name}.dspart-{job_id[:12]}")
+
+
+def _build_manifest(job_id: str, source: Path, destination_root: Path) -> None:
+    if source.is_file():
+        stat = source.stat()
+        target_root = destination_root
+        target = destination_root / source.name
+        items = [
+            {
+                "item_index": 0,
+                "source_path": str(source),
+                "target_path": str(target),
+                "partial_path": str(_partial_path(target, job_id)),
+                "size": int(stat.st_size),
+                "source_mtime_ns": int(stat.st_mtime_ns),
+            }
+        ]
+        directory_count = 0
+    else:
+        target_root = destination_root / source.name
+        items: list[dict[str, Any]] = []
+        directories: set[str] = {str(target_root)}
+        for root, dirs, names in os.walk(source, followlinks=False):
+            root_path = Path(root)
+            relative_root = root_path.relative_to(source)
+            target_dir = target_root if str(relative_root) == "." else target_root / relative_root
+            directories.add(str(target_dir))
+
+            kept: list[str] = []
+            for name in dirs:
+                child = root_path / name
+                try:
+                    if child.is_symlink() or getattr(child, "is_junction", lambda: False)():
+                        _append_warning(job_id, str(child), "link/junction skipped during manifest")
+                        continue
+                except OSError as exc:
+                    _append_warning(job_id, str(child), f"{type(exc).__name__}: {exc}")
+                    continue
+                kept.append(name)
+            dirs[:] = kept
+
+            for name in names:
+                child = root_path / name
+                try:
+                    if child.is_symlink():
+                        _append_warning(job_id, str(child), "symlink skipped during manifest")
+                        continue
+                    stat = child.stat()
+                except (OSError, PermissionError) as exc:
+                    _append_warning(job_id, str(child), f"{type(exc).__name__}: {exc}")
+                    continue
+                relative = child.relative_to(source)
+                target = target_root / relative
+                items.append(
+                    {
+                        "item_index": len(items),
+                        "source_path": str(child),
+                        "target_path": str(target),
+                        "partial_path": str(_partial_path(target, job_id)),
+                        "size": int(stat.st_size),
+                        "source_mtime_ns": int(stat.st_mtime_ns),
+                    }
+                )
+        directory_count = len(directories)
+
+    journal.replace_manifest(
+        job_id,
+        target_root=str(target_root),
+        items=items,
+        directory_count=directory_count,
+    )
+    _load_job(job_id)
+
+
+def _safe_resume_offset(
+    job_id: str,
+    item: dict[str, Any],
+    *,
+    cancel: threading.Event,
+    lease_lost: threading.Event,
+) -> int:
+    _control_check(cancel, lease_lost)
+    source = Path(item["source_path"])
+    partial = Path(item["partial_path"])
+
+    if not _source_stat_matches(item):
+        raise StreamCopySourceChanged(
+            f"Source identity changed: {item['source_path']}"
+        )
+    if not partial.exists():
+        journal.discard_checkpoints_after(job_id, int(item["item_index"]), 0)
+        return 0
+
+    partial_size = int(partial.stat().st_size)
+    for checkpoint in journal.list_checkpoints(job_id, int(item["item_index"])):
+        _control_check(cancel, lease_lost)
+        offset = int(checkpoint["offset"])
+        block_start = int(checkpoint["block_start"])
+        block_size = int(checkpoint["block_size"])
+        expected = str(checkpoint["digest"])
+        if offset > partial_size or block_start + block_size != offset:
+            continue
+        try:
+            source_digest = _hash_range(source, block_start, block_size)
+            partial_digest = _hash_range(partial, block_start, block_size)
+        except OSError:
+            raise
+        if source_digest == expected and partial_digest == expected:
+            journal.discard_checkpoints_after(job_id, int(item["item_index"]), offset)
+            with partial.open("r+b", buffering=0) as stream:
+                stream.truncate(offset)
+            return offset
+
+    journal.discard_checkpoints_after(job_id, int(item["item_index"]), 0)
+    with partial.open("r+b", buffering=0) as stream:
+        stream.truncate(0)
+    return 0
+
+
+def _verify_pair(source: Path, target: Path, mode: str) -> None:
+    if int(source.stat().st_size) != int(target.stat().st_size):
+        raise OSError(
+            f"Size verification failed: source={source.stat().st_size}, target={target.stat().st_size}"
+        )
+    if mode == "sha256" and _hash_file(source) != _hash_file(target):
+        raise OSError(f"SHA-256 verification failed: {target}")
+
+
+def _sync_durable_progress(job_id: str, current_offset: int = 0) -> dict[str, Any]:
+    summary = journal.summarize_items(job_id)
+    job = _load_job(job_id)
+    durable_bytes = int(summary["completed_bytes"]) + int(current_offset)
+    total = int(job.get("total_bytes") or 0)
+    progress = round(durable_bytes * 100 / total, 2) if total else 100.0
+    skipped = max(int(job.get("skipped") or 0), int(summary["skipped_files"]))
+    _persist_job(
+        job_id,
+        bytes=durable_bytes,
+        files=int(summary["completed_files"]),
+        skipped=skipped,
+        skipped_bytes=int(summary["skipped_bytes"]),
+        progress_percent=progress,
+    )
+    return summary
+
+
+def _progress_ram(job_id: str, base_bytes: int, offset: int, current_path: str) -> None:
     with _lock:
-        job = _jobs[job_id]
-        job["bytes"] += int(byte_count)
-        if file_completed:
-            job["files"] += 1
+        job = _jobs.get(job_id)
+        if job is None:
+            return
+        job["bytes"] = int(base_bytes) + int(offset)
         job["current_path"] = current_path
-        total = int(job["total_bytes"] or 0)
+        total = int(job.get("total_bytes") or 0)
         job["progress_percent"] = round(job["bytes"] * 100 / total, 2) if total else 100.0
         elapsed = max(0.001, time.monotonic() - float(job["_started_monotonic"]))
         job["average_mib_s"] = round(job["bytes"] / (1024 * 1024) / elapsed, 2)
         job["updated_at"] = _now()
 
 
-def _manifest(source: Path, destination_root: Path, job_id: str) -> tuple[Path, list[Path], list[tuple[Path, Path, int]]]:
-    if source.is_file():
-        target_root = destination_root
-        return target_root, [], [(source, destination_root / source.name, int(source.stat().st_size))]
-    if not source.is_dir():
-        raise FileNotFoundError(source)
-
-    target_root = destination_root / source.name
-    directories: list[Path] = [target_root]
-    files: list[tuple[Path, Path, int]] = []
-    for root, dirs, names in os.walk(source, followlinks=False):
-        root_path = Path(root)
-        relative_root = root_path.relative_to(source)
-        target_dir = target_root if str(relative_root) == "." else target_root / relative_root
-        directories.append(target_dir)
-
-        kept: list[str] = []
-        for name in dirs:
-            child = root_path / name
-            try:
-                if child.is_symlink() or getattr(child, "is_junction", lambda: False)():
-                    _record_warning(job_id, str(child), "link/junction skipped")
-                    continue
-            except OSError as exc:
-                _record_warning(job_id, str(child), f"{type(exc).__name__}: {exc}")
-                continue
-            kept.append(name)
-        dirs[:] = kept
-
-        for name in names:
-            child = root_path / name
-            try:
-                if child.is_symlink():
-                    _record_warning(job_id, str(child), "symlink skipped")
-                    continue
-                size = int(child.stat().st_size)
-            except (OSError, PermissionError) as exc:
-                _record_warning(job_id, str(child), f"{type(exc).__name__}: {exc}")
-                continue
-            relative = child.relative_to(source)
-            files.append((child, target_root / relative, size))
-    return target_root, directories, files
-
-
-def _same_path_or_nested(source: Path, destination_root: Path) -> bool:
-    source_resolved = source.resolve(strict=True)
-    destination_resolved = destination_root.resolve(strict=False)
-    if os.name == "nt":
-        src = str(source_resolved).casefold()
-        dst = str(destination_resolved).casefold()
-        return dst == src or dst.startswith(src.rstrip("\\/") + os.sep.casefold())
+def _mark_skipped(job_id: str, item: dict[str, Any], message: str) -> None:
+    partial = Path(item["partial_path"])
     try:
-        destination_resolved.relative_to(source_resolved)
-        return True
-    except ValueError:
-        return destination_resolved == source_resolved
+        partial.unlink(missing_ok=True)
+    except OSError:
+        pass
+    journal.discard_checkpoints_after(job_id, int(item["item_index"]), 0)
+    journal.update_item(
+        job_id,
+        int(item["item_index"]),
+        status="skipped",
+        confirmed_offset=0,
+        error=message,
+    )
+    _append_warning(job_id, str(item["source_path"]), message)
+    _sync_durable_progress(job_id)
 
 
-def _is_fatal_destination_error(exc: BaseException) -> bool:
-    if isinstance(exc, OSError) and exc.errno in {
-        errno.ENOSPC,
-        errno.EROFS,
-        errno.EIO,
-        errno.ENODEV,
-    }:
-        return True
-    return False
+def _publish_completed_item(
+    job_id: str,
+    item: dict[str, Any],
+    job: dict[str, Any],
+    *,
+    source: Path,
+    target: Path,
+    partial: Path | None,
+) -> None:
+    verify_mode = str(job.get("verify_mode") or "size")
+    verification_target = partial if partial is not None else target
+    _verify_pair(source, verification_target, verify_mode)
+
+    if partial is not None:
+        if target.exists():
+            raise FileExistsError(target)
+        journal.update_item(job_id, int(item["item_index"]), status="publishing", error=None)
+        partial.rename(target)
+
+    journal.update_item(
+        job_id,
+        int(item["item_index"]),
+        status="completed",
+        confirmed_offset=int(item["size"]),
+        error=None,
+    )
+    _sync_durable_progress(job_id)
+
+    if job.get("delete_source_after_verify"):
+        try:
+            source.unlink()
+        except FileNotFoundError:
+            pass
 
 
-def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[str, Any]) -> None:
-    cancel = _cancel_events[job_id]
-    stream_queue: queue.Queue[tuple] = queue.Queue(maxsize=int(profile["queue_depth"]))
-    producer_error: list[BaseException] = []
-    producer_done = threading.Event()
-    consumer_fatal = threading.Event()
-    chunk_size = int(profile["chunk_bytes"])
+def _copy_item(
+    job_id: str,
+    item: dict[str, Any],
+    cancel: threading.Event,
+    lease_lost: threading.Event,
+) -> None:
+    item_index = int(item["item_index"])
+    source = Path(item["source_path"])
+    target = Path(item["target_path"])
+    partial = Path(item["partial_path"])
 
-    try:
-        target_root, directories, files = _manifest(source, destination_root, job_id)
-        if cancel.is_set():
-            raise StreamCopyCancelled("Operation cancelled by operator")
+    while True:
+        _control_check(cancel, lease_lost)
+        _wait_for_endpoints(job_id, cancel, lease_lost)
+        job = _load_job(job_id)
+        item = journal.get_item(job_id, item_index)
 
-        active_files: list[tuple[Path, Path, int]] = []
-        skipped_bytes = 0
-        for src, dst, size in files:
+        if item["status"] in {"completed", "skipped"}:
+            return
+
+        if item["status"] == "publishing" and target.exists():
             try:
-                if dst.exists():
-                    _record_warning(job_id, str(dst), "destination exists; skipped")
-                    skipped_bytes += size
-                    continue
+                _publish_completed_item(
+                    job_id,
+                    item,
+                    job,
+                    source=source,
+                    target=target,
+                    partial=None,
+                )
+                return
             except OSError as exc:
-                _record_warning(job_id, str(dst), f"{type(exc).__name__}: {exc}")
-                skipped_bytes += size
-                continue
-            active_files.append((src, dst, size))
+                if any(not state["available"] for state in _endpoint_states(job)):
+                    continue
+                raise exc
 
-        total_bytes = sum(size for _src, _dst, size in active_files)
-        with _lock:
-            job = _jobs[job_id]
-            job.update(
-                {
-                    "status": "running",
-                    "target_root": str(target_root),
-                    "total_files": len(active_files),
-                    "total_bytes": total_bytes,
-                    "skipped_bytes": skipped_bytes,
-                    "manifest_files": len(files),
-                    "manifest_directories": len(set(directories)),
-                    "progress_percent": 0.0 if total_bytes else 100.0,
-                    "updated_at": _now(),
-                }
+        if target.exists():
+            _mark_skipped(job_id, item, f"destination exists; skipped: {target}")
+            return
+
+        try:
+            resume_offset = _safe_resume_offset(
+                job_id,
+                item,
+                cancel=cancel,
+                lease_lost=lease_lost,
             )
+        except OSError:
+            if any(not state["available"] for state in _endpoint_states(job)):
+                continue
+            raise
 
-        for directory in sorted(set(directories), key=lambda p: len(p.parts)):
-            if cancel.is_set():
-                raise StreamCopyCancelled("Operation cancelled by operator")
-            try:
-                directory.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                if _is_fatal_destination_error(exc):
-                    raise
-                _record_warning(job_id, str(directory), f"{type(exc).__name__}: {exc}")
+        if not _source_stat_matches(item):
+            raise StreamCopySourceChanged(f"Source changed: {source}")
 
-        def put(message: tuple) -> None:
-            while True:
-                if cancel.is_set():
-                    raise StreamCopyCancelled("Operation cancelled by operator")
-                if consumer_fatal.is_set():
-                    raise RuntimeError("destination stream stopped")
-                try:
-                    stream_queue.put(message, timeout=0.2)
-                    return
-                except queue.Full:
-                    continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        journal.update_item(job_id, item_index, status="in_progress", error=None)
+        _persist_job(
+            job_id,
+            status="running",
+            current_item_index=item_index,
+            current_path=str(source),
+            error=None,
+        )
+
+        summary = journal.summarize_items(job_id)
+        base_bytes = int(summary["completed_bytes"])
+        _progress_ram(job_id, base_bytes, resume_offset, str(source))
+
+        stream_queue: queue.Queue[tuple[str, Any]] = queue.Queue(
+            maxsize=int(job["profile"]["queue_depth"])
+        )
+        producer_stop = threading.Event()
+        producer_error: list[BaseException] = []
+        chunk_size = int(job["profile"]["chunk_bytes"])
 
         def producer() -> None:
             try:
-                for index, (src, dst, size) in enumerate(active_files):
-                    if cancel.is_set() or consumer_fatal.is_set():
-                        break
-                    put(("begin", index, str(src), str(dst), size))
-                    sent = 0
-                    try:
-                        with src.open("rb", buffering=0) as source_stream:
-                            while sent < size:
-                                if cancel.is_set() or consumer_fatal.is_set():
-                                    break
-                                data = source_stream.read(min(chunk_size, size - sent))
-                                if not data:
-                                    raise OSError(
-                                        f"Unexpected EOF after {sent} of {size} bytes"
-                                    )
-                                put(("data", index, data))
-                                sent += len(data)
-                    except (OSError, PermissionError) as exc:
-                        put(("source_error", index, str(src), f"{type(exc).__name__}: {exc}"))
-                        continue
-                    put(("end", index, str(src), str(dst), size))
+                with source.open("rb", buffering=0) as source_stream:
+                    source_stream.seek(resume_offset)
+                    remaining = int(item["size"]) - resume_offset
+                    while remaining > 0 and not producer_stop.is_set():
+                        _control_check(cancel, lease_lost)
+                        data = source_stream.read(min(chunk_size, remaining))
+                        if not data:
+                            raise OSError(
+                                f"Unexpected EOF after {int(item['size']) - remaining} bytes"
+                            )
+                        while not producer_stop.is_set():
+                            try:
+                                stream_queue.put(("data", data), timeout=0.2)
+                                break
+                            except queue.Full:
+                                _control_check(cancel, lease_lost)
+                        remaining -= len(data)
             except BaseException as exc:  # noqa: BLE001
                 producer_error.append(exc)
             finally:
-                producer_done.set()
-                while not consumer_fatal.is_set():
+                while not producer_stop.is_set():
                     try:
-                        stream_queue.put(("done",), timeout=0.2)
+                        stream_queue.put(("done", None), timeout=0.2)
                         break
                     except queue.Full:
-                        if cancel.is_set():
-                            break
+                        continue
 
         producer_thread = threading.Thread(
             target=producer,
-            name=f"streamcopy-producer-{job_id[:8]}",
             daemon=True,
+            name=f"streamcopy-producer-{job_id[:8]}-{item_index}",
         )
         producer_thread.start()
 
-        current_index: int | None = None
-        current_source = ""
-        current_target: Path | None = None
-        destination_stream = None
-        sink_disabled = False
-        current_written = 0
+        offset = resume_offset
+        block_start = resume_offset
+        block_digest = hashlib.sha256()
+        copy_error: BaseException | None = None
 
-        while True:
-            if cancel.is_set():
-                raise StreamCopyCancelled("Operation cancelled by operator")
-            try:
-                message = stream_queue.get(timeout=0.25)
-            except queue.Empty:
-                if producer_done.is_set():
-                    break
-                continue
+        try:
+            mode = "r+b" if partial.exists() else "w+b"
+            with partial.open(mode, buffering=0) as destination_stream:
+                destination_stream.truncate(resume_offset)
+                destination_stream.seek(resume_offset)
 
-            kind = message[0]
-            if kind == "done":
-                break
-
-            if kind == "begin":
-                _, current_index, current_source, target_text, _size = message
-                current_target = Path(target_text)
-                sink_disabled = False
-                current_written = 0
-                try:
-                    current_target.parent.mkdir(parents=True, exist_ok=True)
-                    destination_stream = current_target.open("xb", buffering=0)
-                except (OSError, PermissionError) as exc:
-                    destination_stream = None
-                    sink_disabled = True
-                    if _is_fatal_destination_error(exc):
-                        consumer_fatal.set()
-                        raise
-                    _record_warning(job_id, str(current_target), f"{type(exc).__name__}: {exc}")
-                _set_job(job_id, current_path=current_source)
-                continue
-
-            if kind == "data":
-                _, index, data = message
-                if index != current_index:
-                    consumer_fatal.set()
-                    raise RuntimeError("stream framing error")
-                if not sink_disabled and destination_stream is not None:
-                    try:
-                        written = destination_stream.write(data)
-                        if written != len(data):
-                            raise OSError(
-                                f"Short write: expected {len(data)} bytes, wrote {written}"
-                            )
-                    except (OSError, PermissionError) as exc:
-                        if _is_fatal_destination_error(exc):
-                            consumer_fatal.set()
-                            raise
-                        sink_disabled = True
-                        _record_warning(
-                            job_id,
-                            str(current_target or ""),
-                            f"{type(exc).__name__}: {exc}",
+                while True:
+                    _control_check(cancel, lease_lost)
+                    kind, payload = stream_queue.get(timeout=0.5)
+                    if kind == "done":
+                        break
+                    data = payload
+                    written = destination_stream.write(data)
+                    if written != len(data):
+                        raise OSError(
+                            f"Short write: expected {len(data)} bytes, wrote {written}"
                         )
-                if not sink_disabled:
-                    current_written += len(data)
-                    _progress(job_id, len(data), current_source)
+                    block_digest.update(data)
+                    offset += len(data)
+                    _progress_ram(job_id, base_bytes, offset, str(source))
+
+                    if offset - block_start == CHECKPOINT_BYTES:
+                        destination_stream.flush()
+                        os.fsync(destination_stream.fileno())
+                        digest = block_digest.hexdigest()
+                        journal.add_checkpoint(
+                            job_id,
+                            item_index,
+                            offset=offset,
+                            block_start=block_start,
+                            block_size=offset - block_start,
+                            digest=digest,
+                        )
+                        _sync_durable_progress(job_id, offset)
+                        block_start = offset
+                        block_digest = hashlib.sha256()
+                    elif offset - block_start > CHECKPOINT_BYTES:
+                        raise RuntimeError("StreamCopy checkpoint alignment invariant failed")
+
+                destination_stream.flush()
+                os.fsync(destination_stream.fileno())
+        except BaseException as exc:  # noqa: BLE001
+            copy_error = exc
+        finally:
+            producer_stop.set()
+            producer_thread.join(timeout=3)
+
+        if copy_error is None and producer_error:
+            copy_error = producer_error[0]
+
+        if copy_error is not None:
+            if isinstance(copy_error, (StreamCopyCancelled, StreamCopyLeaseLost)):
+                raise copy_error
+            current_job = _load_job(job_id)
+            if any(not state["available"] for state in _endpoint_states(current_job)):
+                log_warning(
+                    "streamcopy.flow_interrupted",
+                    job_id=job_id,
+                    item_index=item_index,
+                    path=source,
+                    error=f"{type(copy_error).__name__}: {copy_error}",
+                )
                 continue
+            if isinstance(copy_error, (OSError, PermissionError)) and not target.exists():
+                if not _source_stat_matches(item):
+                    _mark_skipped(
+                        job_id,
+                        item,
+                        f"{type(copy_error).__name__}: {copy_error}",
+                    )
+                    return
+            raise copy_error
 
-            if kind == "source_error":
-                _, index, source_text, error_text = message
-                if index == current_index and destination_stream is not None:
-                    destination_stream.close()
-                    destination_stream = None
-                if current_written:
-                    _progress(job_id, -current_written, source_text)
-                    current_written = 0
-                if current_target is not None:
-                    try:
-                        current_target.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                sink_disabled = True
-                _record_warning(job_id, source_text, error_text)
-                continue
+        if offset != int(item["size"]):
+            raise OSError(
+                f"Stream length mismatch for {source}: expected {item['size']}, got {offset}"
+            )
 
-            if kind == "end":
-                _, index, source_text, target_text, expected_size = message
-                if index != current_index:
-                    consumer_fatal.set()
-                    raise RuntimeError("stream framing error")
-                if destination_stream is not None:
-                    destination_stream.close()
-                    destination_stream = None
-                target = Path(target_text)
-                if sink_disabled:
-                    if current_written:
-                        _progress(job_id, -current_written, source_text)
-                        current_written = 0
-                    try:
-                        target.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                else:
-                    try:
-                        actual = int(target.stat().st_size)
-                        if actual != int(expected_size):
-                            raise OSError(
-                                f"Size verification failed: expected {expected_size}, got {actual}"
-                            )
-                    except OSError as exc:
-                        _record_warning(job_id, target_text, f"{type(exc).__name__}: {exc}")
-                        try:
-                            target.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                    else:
-                        _progress(job_id, 0, source_text, file_completed=True)
-                current_index = None
-                current_target = None
-                current_source = ""
-                sink_disabled = False
-                current_written = 0
+        _publish_completed_item(
+            job_id,
+            item,
+            _load_job(job_id),
+            source=source,
+            target=target,
+            partial=partial,
+        )
+        return
 
-        if destination_stream is not None:
-            destination_stream.close()
-        producer_thread.join(timeout=2)
-        if producer_error:
-            raise producer_error[0]
-        if cancel.is_set():
-            raise StreamCopyCancelled("Operation cancelled by operator")
 
-        with _lock:
-            job = _jobs[job_id]
-            status = "completed_with_warnings" if job["skipped"] else "completed"
-            job["status"] = status
-            job["current_path"] = ""
-            job["progress_percent"] = 100.0
-            job["finished_at"] = _now()
-            job["updated_at"] = _now()
-            completed_bytes = int(job["bytes"])
-            completed_files = int(job["files"])
-            skipped = int(job["skipped"])
-            average_mib_s = float(job["average_mib_s"])
-        completion_logger = log_warning if skipped else log_event
-        completion_logger(
-            "streamcopy.completed_with_warnings" if skipped else "streamcopy.completed",
-            job_id=job_id,
+def _cleanup_deleted_source_tree(job: dict[str, Any]) -> None:
+    if not job.get("delete_source_after_verify"):
+        return
+    source = Path(job["source_path"])
+    if not source.exists() or not source.is_dir():
+        return
+    for root, dirs, _files in os.walk(source, topdown=False):
+        for name in dirs:
+            try:
+                (Path(root) / name).rmdir()
+            except OSError:
+                pass
+    try:
+        source.rmdir()
+    except OSError:
+        pass
+
+
+def _heartbeat(
+    job_id: str,
+    stop: threading.Event,
+    lease_lost: threading.Event,
+) -> None:
+    while not stop.wait(LEASE_HEARTBEAT_SECONDS):
+        try:
+            if not journal.renew_lease(job_id, _INSTANCE_ID, LEASE_SECONDS):
+                lease_lost.set()
+                return
+        except Exception:  # noqa: BLE001
+            lease_lost.set()
+            return
+
+
+def _run_job(job_id: str) -> None:
+    cancel = _cancel_events[job_id]
+    lease_lost = threading.Event()
+    heartbeat_stop = threading.Event()
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat,
+        args=(job_id, heartbeat_stop, lease_lost),
+        daemon=True,
+        name=f"streamcopy-heartbeat-{job_id[:8]}",
+    )
+    heartbeat_thread.start()
+
+    try:
+        job = _load_job(job_id)
+        _wait_for_endpoints(job_id, cancel, lease_lost)
+
+        items = journal.list_items(job_id)
+        if not items:
+            source = Path(job["source_path"])
+            destination = Path(job["destination_path"])
+            _persist_job(job_id, status="planning", error=None)
+            _build_manifest(job_id, source, destination)
+            items = journal.list_items(job_id)
+
+        _persist_job(job_id, status="recovering", error=None)
+        for item in items:
+            _control_check(cancel, lease_lost)
+            _copy_item(job_id, item, cancel, lease_lost)
+
+        job = _load_job(job_id)
+        _cleanup_deleted_source_tree(job)
+        summary = journal.summarize_items(job_id)
+        warnings = list(job.get("warnings") or [])
+        status = (
+            "completed_with_warnings"
+            if warnings or summary["skipped_files"]
+            else "completed"
+        )
+        _persist_job(
+            job_id,
             status=status,
-            bytes=completed_bytes,
-            files=completed_files,
-            skipped=skipped,
-            average_mib_s=average_mib_s,
+            bytes=int(summary["completed_bytes"]),
+            files=int(summary["completed_files"]),
+            skipped=max(int(job.get("skipped") or 0), int(summary["skipped_files"])),
+            skipped_bytes=int(summary["skipped_bytes"]),
+            progress_percent=100.0,
+            current_item_index=None,
+            current_path="",
+            error=None,
+            finished_at=_now(),
+        )
+        completion_logger = log_warning if status == "completed_with_warnings" else log_event
+        completion_logger(
+            f"streamcopy.{status}",
+            job_id=job_id,
+            files=summary["completed_files"],
+            bytes=summary["completed_bytes"],
+            skipped=summary["skipped_files"],
         )
     except StreamCopyCancelled as exc:
-        consumer_fatal.set()
-        _set_job(
+        _persist_job(
             job_id,
             status="cancelled",
             error=str(exc),
             finished_at=_now(),
             current_path="",
         )
-        log_event(
-            "streamcopy.cancelled",
-            job_id=job_id,
-            reason=str(exc),
-        )
+        log_event("streamcopy.cancelled", job_id=job_id)
+    except StreamCopyLeaseLost as exc:
+        log_error("streamcopy.lease_lost", job_id=job_id, error=str(exc))
     except BaseException as exc:  # noqa: BLE001
-        consumer_fatal.set()
-        _set_job(
+        _persist_job(
             job_id,
             status="failed",
             error=f"{type(exc).__name__}: {exc}",
@@ -515,6 +828,74 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
             job_id=job_id,
             error=f"{type(exc).__name__}: {exc}",
         )
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=1)
+        journal.release_lease(job_id, _INSTANCE_ID)
+        with _lock:
+            _cancel_events.pop(job_id, None)
+            _threads.pop(job_id, None)
+
+
+def _spawn_claimed_job(job_id: str) -> bool:
+    with _lock:
+        existing = _threads.get(job_id)
+        if existing is not None and existing.is_alive():
+            return False
+        event = threading.Event()
+        _cancel_events[job_id] = event
+        job = journal.get_job(job_id)
+        _cache_job(job)
+        thread = threading.Thread(
+            target=_run_job,
+            args=(job_id,),
+            daemon=True,
+            name=f"streamcopy-{job_id[:8]}",
+        )
+        _threads[job_id] = thread
+        thread.start()
+        return True
+
+
+def recover_streamcopy_jobs_once() -> int:
+    recovered = 0
+    for job in journal.list_jobs(active_only=True, limit=100):
+        job_id = str(job["id"])
+        with _lock:
+            thread = _threads.get(job_id)
+            if thread is not None and thread.is_alive():
+                continue
+        if journal.claim_job(job_id, _INSTANCE_ID, LEASE_SECONDS):
+            _persist_job(job_id, status="recovering", error=None)
+            if _spawn_claimed_job(job_id):
+                recovered += 1
+                log_event("streamcopy.recovered", job_id=job_id)
+    return recovered
+
+
+def start_streamcopy_recovery_manager() -> None:
+    global _recovery_started
+    with _lock:
+        if _recovery_started:
+            return
+        _recovery_started = True
+
+    def manager() -> None:
+        while True:
+            try:
+                recover_streamcopy_jobs_once()
+            except Exception as exc:  # noqa: BLE001
+                log_error(
+                    "streamcopy.recovery_manager_error",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            time.sleep(RECOVERY_POLL_SECONDS)
+
+    threading.Thread(
+        target=manager,
+        daemon=True,
+        name="streamcopy-recovery-manager",
+    ).start()
 
 
 def start_streamcopy_job(
@@ -527,6 +908,8 @@ def start_streamcopy_job(
     usb_topology: str = "unknown",
     source_cache_mib: int | float | str | None = None,
     destination_cache_mib: int | float | str | None = None,
+    verify_mode: str = "size",
+    delete_source_after_verify: bool = False,
 ) -> dict[str, Any]:
     if not file_writes_allowed():
         raise FileWriteBlocked("File writes are locked")
@@ -537,18 +920,32 @@ def start_streamcopy_job(
         raise FileNotFoundError(source)
     if source.is_symlink():
         raise ValueError("source root cannot be a symlink")
-    if _same_path_or_nested(source, destination):
-        raise ValueError("destination cannot be the source or be nested inside it")
+
+    source_resolved = source.resolve(strict=True)
+    destination_resolved = destination.resolve(strict=False)
+    if destination_resolved == source_resolved:
+        raise ValueError("destination cannot be the source")
     if source.is_dir():
-        source_resolved = source.resolve(strict=True)
-        target_resolved = (destination.resolve(strict=False) / source.name).resolve(strict=False)
-        same_target = (
-            str(source_resolved).casefold() == str(target_resolved).casefold()
+        try:
+            destination_resolved.relative_to(source_resolved)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("destination cannot be nested inside source")
+        target_resolved = (destination_resolved / source.name).resolve(strict=False)
+        if (
+            str(target_resolved).casefold() == str(source_resolved).casefold()
             if os.name == "nt"
-            else source_resolved == target_resolved
-        )
-        if same_target:
+            else target_resolved == source_resolved
+        ):
             raise ValueError("destination folder would resolve to the source itself")
+
+    mode = str(verify_mode or "size").casefold()
+    if mode not in {"size", "sha256"}:
+        raise ValueError("verify_mode must be size or sha256")
+    delete_after = bool(delete_source_after_verify)
+    if delete_after:
+        mode = "sha256"
 
     profile = stream_profile(
         source_media,
@@ -559,71 +956,86 @@ def start_streamcopy_job(
         source_cache_mib,
         destination_cache_mib,
     )
+
     destination.mkdir(parents=True, exist_ok=True)
     if not destination.is_dir():
         raise NotADirectoryError(destination)
 
+    source_endpoint = bind_local_volume({"kind": "local", "path": str(source)})
+    destination_endpoint = bind_local_volume({"kind": "local", "path": str(destination)})
+
     job_id = uuid.uuid4().hex
+    created = _now()
     job = {
         "id": job_id,
         "type": "streamcopy_experimental",
         "status": "planning",
         "source_path": str(source),
         "destination_path": str(destination),
-        "target_root": None,
+        "source_endpoint": source_endpoint,
+        "destination_endpoint": destination_endpoint,
         "profile": profile,
+        "verify_mode": mode,
+        "delete_source_after_verify": delete_after,
+        "target_root": None,
+        "current_item_index": None,
+        "current_path": "",
         "bytes": 0,
         "total_bytes": 0,
         "files": 0,
         "total_files": 0,
-        "manifest_files": 0,
-        "manifest_directories": 0,
         "skipped": 0,
         "skipped_bytes": 0,
+        "manifest_files": 0,
+        "manifest_directories": 0,
         "warnings": [],
         "error": None,
-        "current_path": "",
-        "average_mib_s": 0.0,
         "progress_percent": 0.0,
-        "created_at": _now(),
-        "updated_at": _now(),
+        "average_mib_s": 0.0,
+        "wait_cycles": 0,
+        "auto_resumes": 0,
+        "waiting_since": None,
+        "lease_owner": _INSTANCE_ID,
+        "lease_expires_at": time.time() + LEASE_SECONDS,
+        "created_at": created,
+        "updated_at": created,
         "finished_at": None,
-        "_started_monotonic": time.monotonic(),
+        "persistent": True,
     }
-    cancel = threading.Event()
-    with _lock:
-        _jobs[job_id] = job
-        _cancel_events[job_id] = cancel
-
+    journal.create_job(job)
+    _cache_job(job)
+    if not journal.claim_job(job_id, _INSTANCE_ID, LEASE_SECONDS):
+        raise RuntimeError("could not claim new StreamCopy job")
+    _spawn_claimed_job(job_id)
     log_event(
         "streamcopy.started",
         job_id=job_id,
         source=source,
         destination=destination,
         strategy=profile["strategy"],
-        chunk_mib=profile["chunk_mib"],
-        queue_depth=profile["queue_depth"],
+        verify_mode=mode,
+        delete_source_after_verify=delete_after,
+        checkpoint_mib=CHECKPOINT_BYTES // (1024 * 1024),
     )
-
-    thread = threading.Thread(
-        target=_run_job,
-        args=(job_id, source, destination, profile),
-        name=f"streamcopy-{job_id[:8]}",
-        daemon=True,
-    )
-    thread.start()
     return get_streamcopy_job(job_id)
 
 
-def _public_job(job: dict[str, Any]) -> dict[str, Any]:
-    value = deepcopy(job)
-    value.pop("_started_monotonic", None)
-    return value
-
-
 def get_streamcopy_job(job_id: str) -> dict[str, Any]:
+    job = journal.get_job(job_id)
     with _lock:
-        return _public_job(_jobs[job_id])
+        live = _jobs.get(job_id)
+        if live is not None:
+            for key in (
+                "bytes",
+                "progress_percent",
+                "average_mib_s",
+                "current_path",
+                "status",
+                "error",
+            ):
+                if key in live:
+                    job[key] = live[key]
+    return _public_job(job)
 
 
 def list_streamcopy_jobs(
@@ -631,24 +1043,43 @@ def list_streamcopy_jobs(
     active_only: bool = False,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    bounded_limit = max(1, min(100, int(limit)))
+    values = journal.list_jobs(active_only=active_only, limit=limit)
     with _lock:
-        values = list(_jobs.values())
-        if active_only:
-            values = [job for job in values if job.get("status") not in TERMINAL_STATES]
-        values.sort(
-            key=lambda job: str(job.get("created_at") or ""),
-            reverse=True,
-        )
-        return [_public_job(job) for job in values[:bounded_limit]]
+        for value in values:
+            live = _jobs.get(value["id"])
+            if live is None:
+                continue
+            for key in (
+                "bytes",
+                "progress_percent",
+                "average_mib_s",
+                "current_path",
+                "status",
+                "error",
+            ):
+                if key in live:
+                    value[key] = live[key]
+    return [_public_job(value) for value in values]
 
 
 def cancel_streamcopy_job(job_id: str) -> dict[str, Any]:
+    job = journal.get_job(job_id)
+    if job["status"] in TERMINAL_STATES:
+        return _public_job(job)
+
     with _lock:
-        event = _cancel_events[job_id]
-        job = _jobs[job_id]
-        if job["status"] not in TERMINAL_STATES:
-            event.set()
-            job["cancel_requested"] = True
-            job["updated_at"] = _now()
+        event = _cancel_events.get(job_id)
+    if event is not None:
+        event.set()
+        return get_streamcopy_job(job_id)
+
+    if not journal.claim_job(job_id, _INSTANCE_ID, LEASE_SECONDS):
+        raise RuntimeError("StreamCopy job is currently owned by another backend instance")
+    _persist_job(
+        job_id,
+        status="cancelled",
+        error="Operation cancelled by operator",
+        finished_at=_now(),
+    )
+    journal.release_lease(job_id, _INSTANCE_ID)
     return get_streamcopy_job(job_id)

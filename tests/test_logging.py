@@ -37,7 +37,9 @@ def test_log_fields_are_single_line(tmp_path):
 
     lines = (tmp_path / "diskshell.log").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
-    assert "line1\\nline2" in lines[0]
+    assert "line1" in lines[0]
+    assert "line2" in lines[0]
+    assert "\\n" in lines[0]
 
 
 

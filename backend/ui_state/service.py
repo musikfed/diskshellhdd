@@ -15,6 +15,8 @@ PAGE_IDS = {
     "analytics",
     "storage",
     "files",
+    "search",
+    "relocation",
     "streamcopy",
     "people",
     "vault",

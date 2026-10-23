@@ -92,3 +92,5 @@ def cancel_job(job_id: str):
         return jsonify(cancel_streamcopy_job(job_id))
     except KeyError:
         return jsonify({"error": "job_not_found"}), 404
+    except RuntimeError as exc:
+        return jsonify({"error": "job_owned_elsewhere", "message": str(exc)}), 409

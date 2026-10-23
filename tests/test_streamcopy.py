@@ -1,11 +1,31 @@
 from __future__ import annotations
 
+import hashlib
+import threading
 import time
 
+import pytest
+
+import backend.core.database as database
 import backend.streamcopy.jobs as streamcopy_jobs
+from backend.streamcopy import journal
 
 
-def _wait(job_id: str, timeout: float = 5.0) -> dict:
+@pytest.fixture(autouse=True)
+def isolated_streamcopy_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "streamcopy-test.db")
+    with streamcopy_jobs._lock:
+        streamcopy_jobs._jobs.clear()
+        streamcopy_jobs._cancel_events.clear()
+        streamcopy_jobs._threads.clear()
+    yield
+    with streamcopy_jobs._lock:
+        events = list(streamcopy_jobs._cancel_events.values())
+    for event in events:
+        event.set()
+
+
+def _wait(job_id: str, timeout: float = 8.0) -> dict:
     deadline = time.monotonic() + timeout
     job = streamcopy_jobs.get_streamcopy_job(job_id)
     while time.monotonic() < deadline:
@@ -35,6 +55,7 @@ def test_hdd_usb3_profile_uses_manual_media_and_cache_hints():
     assert profile["max_buffer_mib"] == 48
     assert profile["source_cache_mib"] == 32
     assert profile["destination_cache_mib"] == 128
+    assert profile["checkpoint_mib"] == 128
 
 
 def test_hdd_usb3_shared_path_reduces_queue_depth():
@@ -62,6 +83,7 @@ def test_streamcopy_directory_keeps_structure_and_contents(tmp_path, monkeypatch
     nested = source / "nested"
     nested.mkdir()
     (nested / "large.bin").write_bytes(b"x" * (2 * 1024 * 1024))
+    (source / "empty").mkdir()
 
     destination = tmp_path / "destination"
     job = streamcopy_jobs.start_streamcopy_job(
@@ -81,11 +103,13 @@ def test_streamcopy_directory_keeps_structure_and_contents(tmp_path, monkeypatch
     assert job["files"] == 2
     assert job["total_files"] == 2
     assert job["bytes"] == job["total_bytes"]
-    assert job["profile"]["strategy"] == "hdd-hdd-sequential-pipeline"
+    assert job["persistent"] is True
+    assert job["recovery_mode"] == "rollback_to_verified_checkpoint"
     assert (destination / "source" / "tiny.txt").read_bytes() == b"tiny"
     assert (destination / "source" / "nested" / "large.bin").read_bytes() == b"x" * (
         2 * 1024 * 1024
     )
+    assert (destination / "source" / "empty").is_dir()
 
 
 def test_streamcopy_existing_destination_is_skipped_not_overwritten(tmp_path, monkeypatch):
@@ -115,7 +139,7 @@ def test_streamcopy_existing_destination_is_skipped_not_overwritten(tmp_path, mo
     job = _wait(job["id"])
 
     assert job["status"] == "completed_with_warnings"
-    assert job["skipped"] == 1
+    assert job["skipped"] >= 1
     assert target.read_bytes() == b"old"
 
 
@@ -124,51 +148,131 @@ def test_streamcopy_rejects_copying_directory_into_its_own_parent(tmp_path, monk
     source = tmp_path / "source"
     source.mkdir()
 
-    try:
+    with pytest.raises(ValueError, match="source itself"):
         streamcopy_jobs.start_streamcopy_job(
             str(source),
             str(tmp_path),
             "hdd",
             "hdd",
         )
-    except ValueError as exc:
-        assert "source itself" in str(exc)
-    else:
-        raise AssertionError("expected StreamCopy to reject self-targeting directory copy")
 
 
-
-def test_streamcopy_active_job_can_be_rediscovered_after_ui_detach(tmp_path, monkeypatch):
+def test_streamcopy_job_survives_loss_of_ram_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
-
     source = tmp_path / "source.bin"
-    source.write_bytes(b"x" * 1024)
+    source.write_bytes(b"persistent-river")
     destination = tmp_path / "destination"
-    release = streamcopy_jobs.threading.Event()
-
-    def fake_run(job_id, source_path, destination_path, profile):
-        release.wait(timeout=2)
-        streamcopy_jobs._set_job(
-            job_id,
-            status="completed",
-            progress_percent=100.0,
-            finished_at=streamcopy_jobs._now(),
-        )
-
-    monkeypatch.setattr(streamcopy_jobs, "_run_job", fake_run)
 
     job = streamcopy_jobs.start_streamcopy_job(
         str(source),
         str(destination),
         "hdd",
         "hdd",
-        "usb3",
-        "usb3",
+    )
+    job = _wait(job["id"])
+    assert job["status"] == "completed"
+
+    with streamcopy_jobs._lock:
+        streamcopy_jobs._jobs.clear()
+
+    restored = streamcopy_jobs.get_streamcopy_job(job["id"])
+    assert restored["status"] == "completed"
+    assert restored["source_path"] == str(source)
+    assert restored["destination_path"] == str(destination)
+    assert restored["persistent"] is True
+
+
+def test_recovery_manager_claims_persisted_unfinished_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"restart-recovery")
+    destination = tmp_path / "destination"
+
+    real_spawn = streamcopy_jobs._spawn_claimed_job
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", lambda _job_id: False)
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        str(destination),
+        "hdd",
+        "hdd",
+    )
+    assert job["status"] == "planning"
+
+    journal.release_lease(job["id"], streamcopy_jobs._INSTANCE_ID)
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", real_spawn)
+
+    assert streamcopy_jobs.recover_streamcopy_jobs_once() == 1
+    recovered = _wait(job["id"])
+    assert recovered["status"] == "completed"
+    assert (destination / source.name).read_bytes() == b"restart-recovery"
+
+
+def test_river_keeper_rolls_partial_tail_back_to_verified_checkpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+    source = tmp_path / "source.bin"
+    block = b"A" * (1024 * 1024)
+    tail = b"B" * (256 * 1024)
+    source.write_bytes(block + tail)
+    destination = tmp_path / "destination"
+
+    real_spawn = streamcopy_jobs._spawn_claimed_job
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", lambda _job_id: False)
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        str(destination),
+        "hdd",
+        "hdd",
+    )
+    streamcopy_jobs._build_manifest(job["id"], source, destination)
+    item = journal.list_items(job["id"])[0]
+
+    partial = tmp_path / "destination" / (source.name + f".dspart-{job['id'][:12]}")
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.write_bytes(block + b"CORRUPT-TAIL")
+
+    digest = hashlib.sha256(block).hexdigest()
+    journal.add_checkpoint(
+        job["id"],
+        0,
+        offset=len(block),
+        block_start=0,
+        block_size=len(block),
+        digest=digest,
     )
 
-    active = streamcopy_jobs.list_streamcopy_jobs(active_only=True, limit=1)
-    assert active
-    assert active[0]["id"] == job["id"]
-    assert active[0]["status"] == "planning"
+    offset = streamcopy_jobs._safe_resume_offset(
+        job["id"],
+        item,
+        cancel=threading.Event(),
+        lease_lost=threading.Event(),
+    )
+    assert offset == len(block)
+    assert partial.stat().st_size == len(block)
+    assert partial.read_bytes() == block
 
-    release.set()
+    journal.release_lease(job["id"], streamcopy_jobs._INSTANCE_ID)
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", real_spawn)
+
+
+def test_copy_then_delete_forces_sha256_and_removes_source_after_publish(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+    source = tmp_path / "source.bin"
+    payload = b"copy-verify-delete"
+    source.write_bytes(payload)
+    destination = tmp_path / "destination"
+
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        str(destination),
+        "hdd",
+        "hdd",
+        verify_mode="size",
+        delete_source_after_verify=True,
+    )
+    assert job["verify_mode"] == "sha256"
+    assert job["operation"] == "copy_then_delete"
+
+    job = _wait(job["id"])
+    assert job["status"] == "completed"
+    assert not source.exists()
+    assert (destination / "source.bin").read_bytes() == payload

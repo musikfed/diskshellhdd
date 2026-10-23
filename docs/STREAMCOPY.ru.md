@@ -1,4 +1,4 @@
-# StreamCopy EXP 0.7.1
+# StreamCopy EXP 0.7.2
 
 StreamCopy — отдельный экспериментальный local-copy engine. Обычный Commander не изменён.
 
@@ -28,6 +28,13 @@ Drive cache SOURCE/DESTINATION задаётся вручную как hint. Эт
 
 ## Safety
 
-StreamCopy использует общий FILE WRITE gate. Существующий destination-файл в 0.7.1 не перезаписывается автоматически: item получает warning/skip. Один unreadable source item также должен быть пропущен без остановки всего batch.
+StreamCopy использует общий FILE WRITE gate. Существующий destination-файл в 0.7.2 не перезаписывается автоматически: item получает warning/skip. Один unreadable source item также должен быть пропущен без остановки всего batch.
 
 Это экспериментальный движок: пока нет Move, remote/SFTP, persistent journal, resume после restart, extent-ordering или RAW-placement.
+
+
+## Backend-owned jobs и повторное подключение UI
+
+StreamCopy job принадлежит backend, а не React-странице. Переход на другую страницу DiskShell, refresh или закрытие вкладки браузера не посылают cancel и не останавливают worker. UI сохраняет active job id локально; при повторном открытии сначала пытается восстановить его, а затем запрашивает у backend последнюю активную StreamCopy job. После подключения снова показываются исходный/целевой пути, профиль и живой прогресс.
+
+Это не persistence после restart backend: текущий job registry и worker threads остаются RAM-only. Перезапуск backend требует отдельного persistent journal/resume слоя.

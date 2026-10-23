@@ -135,3 +135,40 @@ def test_streamcopy_rejects_copying_directory_into_its_own_parent(tmp_path, monk
         assert "source itself" in str(exc)
     else:
         raise AssertionError("expected StreamCopy to reject self-targeting directory copy")
+
+
+
+def test_streamcopy_active_job_can_be_rediscovered_after_ui_detach(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"x" * 1024)
+    destination = tmp_path / "destination"
+    release = streamcopy_jobs.threading.Event()
+
+    def fake_run(job_id, source_path, destination_path, profile):
+        release.wait(timeout=2)
+        streamcopy_jobs._set_job(
+            job_id,
+            status="completed",
+            progress_percent=100.0,
+            finished_at=streamcopy_jobs._now(),
+        )
+
+    monkeypatch.setattr(streamcopy_jobs, "_run_job", fake_run)
+
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        str(destination),
+        "hdd",
+        "hdd",
+        "usb3",
+        "usb3",
+    )
+
+    active = streamcopy_jobs.list_streamcopy_jobs(active_only=True, limit=1)
+    assert active
+    assert active[0]["id"] == job["id"]
+    assert active[0]["status"] == "planning"
+
+    release.set()

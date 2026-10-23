@@ -580,11 +580,32 @@ def start_streamcopy_job(
     return get_streamcopy_job(job_id)
 
 
+def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    value = deepcopy(job)
+    value.pop("_started_monotonic", None)
+    return value
+
+
 def get_streamcopy_job(job_id: str) -> dict[str, Any]:
     with _lock:
-        job = deepcopy(_jobs[job_id])
-    job.pop("_started_monotonic", None)
-    return job
+        return _public_job(_jobs[job_id])
+
+
+def list_streamcopy_jobs(
+    *,
+    active_only: bool = False,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    bounded_limit = max(1, min(100, int(limit)))
+    with _lock:
+        values = list(_jobs.values())
+        if active_only:
+            values = [job for job in values if job.get("status") not in TERMINAL_STATES]
+        values.sort(
+            key=lambda job: str(job.get("created_at") or ""),
+            reverse=True,
+        )
+        return [_public_job(job) for job in values[:bounded_limit]]
 
 
 def cancel_streamcopy_job(job_id: str) -> dict[str, Any]:

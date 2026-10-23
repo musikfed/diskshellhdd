@@ -130,11 +130,25 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         const lastJobId = localStorage.getItem('streamcopy:lastJobId')
         if (lastJobId) {
           try {
-            adopt(await api(`/api/streamcopy/jobs/${lastJobId}`))
+            recovered = await api(`/api/streamcopy/jobs/${lastJobId}`)
           } catch (e) {
             if (e.status === 404) localStorage.removeItem('streamcopy:lastJobId')
             else if (!stopped) setError(e.message)
           }
+        }
+
+        if (!recovered) {
+          try {
+            const value = await api('/api/streamcopy/jobs?limit=1')
+            recovered = Array.isArray(value.jobs) ? value.jobs[0] : null
+          } catch (e) {
+            if (!stopped) setError(e.message)
+          }
+        }
+
+        if (recovered) {
+          localStorage.setItem('streamcopy:lastJobId', recovered.id)
+          adopt(recovered)
         }
       }
 

@@ -514,6 +514,16 @@ def start_streamcopy_job(
         raise ValueError("source root cannot be a symlink")
     if _same_path_or_nested(source, destination):
         raise ValueError("destination cannot be the source or be nested inside it")
+    if source.is_dir():
+        source_resolved = source.resolve(strict=True)
+        target_resolved = (destination.resolve(strict=False) / source.name).resolve(strict=False)
+        same_target = (
+            str(source_resolved).casefold() == str(target_resolved).casefold()
+            if os.name == "nt"
+            else source_resolved == target_resolved
+        )
+        if same_target:
+            raise ValueError("destination folder would resolve to the source itself")
 
     profile = stream_profile(
         source_media,

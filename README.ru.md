@@ -1,4 +1,4 @@
-# DiskShell HDD 0.7.5
+# DiskShell HDD 0.8.0
 
 Русский · [English](README.md)
 
@@ -332,3 +332,20 @@ Hot-unplug переводит job в `waiting_endpoint`; после возвра
 Browser/UI считается control surface. Успешные HTTP polling-запросы (`/api/files/roots`, `/api/ui-state`, StreamCopy status, frontend `304`) больше не печатаются в backend-консоль. В консоли остаются предупреждения и ошибки.
 
 Значимые события пишутся в ротируемый журнал `data/logs/diskshell.log`: backend start, Commander/StreamCopy start/complete/cancel, endpoint waiting/resume, completed-with-warnings, transfer failure и HTTP 5xx/unhandled exceptions. Request bodies, cookies, пароли и remote credentials не журналируются. Ротация: 5 MiB × до 5 backup-файлов. Подробнее: [docs/LOGGING.ru.md](docs/LOGGING.ru.md).
+
+
+## 0.8.0 · Persistent Workspace Foundation
+
+- SSE-first event fabric: workspace, StreamCopy, Quick Index и storage inventory публикуют события; HTTP polling остаётся только медленным fallback.
+- Backend-owned view state хранит scroll, Commander paths/active pane, Scan path, Storage Brain scopes, Diagnostics/Security preferences.
+- `↗ Open view` открывает detached view для второго монитора; detached window не перезаписывает глобальную active page.
+- Quick Index параллельно обновляет current SQLite file catalog; **Быстрый поиск** использует FTS5 или indexed fallback без нового обхода файловой системы на каждый запрос.
+- **Relocation Planner** read-only классифицирует крупные каталоги и рекомендует leave/native relocate/junction/archive; destructive executor в 0.8.0 не включён.
+- Disk descriptor map показывает реальные offsets, partitions и unallocated gaps.
+- Partition Boundary Planner различает end grow/shrink и start relocation. Protected system/boot/application disks — plan-only; end resize на непротектированном диске требует per-disk WRITE + Administrator + typed confirmation + повторную identity check.
+- Photos/People получил локальный similarity search по существующим SFace embeddings.
+- `npm run update:safe:win` делает SQLite-consistent snapshot, update/build/tests и runtime rollback при ошибке.
+
+Release guides 0.7.5: [RU](docs/RELEASE_0.7.5.ru.md) · [EN](docs/RELEASE_0.7.5.md) · [FR](docs/RELEASE_0.7.5.fr.md) · [DE](docs/RELEASE_0.7.5.de.md) · [ET](docs/RELEASE_0.7.5.et.md).
+
+Roadmap: [RU](docs/ROADMAP_0.8.ru.md) · [EN](docs/ROADMAP_0.8.md). Failure validation: [RU](docs/FAILURE_TESTING.ru.md) · [EN](docs/FAILURE_TESTING.md). Safe update: [RU](docs/UPDATE_SAFE.ru.md) · [EN](docs/UPDATE_SAFE.md).

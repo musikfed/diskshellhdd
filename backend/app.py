@@ -13,6 +13,7 @@ from backend.api.files import bp as files_bp
 from backend.api.people import bp as people_bp
 from backend.api.recovery import bp as recovery_bp
 from backend.api.scans import bp as scans_bp
+from backend.api.search import bp as search_bp
 from backend.api.security import bp as security_bp
 from backend.api.storage import bp as storage_bp
 from backend.api.storage_lab import bp as storage_lab_bp
@@ -69,6 +70,7 @@ def create_app() -> Flask:
         disks_bp,
         diagnostics_bp,
         scans_bp,
+        search_bp,
         analytics_bp,
         commander_bp,
         storage_bp,

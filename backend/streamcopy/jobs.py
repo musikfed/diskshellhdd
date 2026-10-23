@@ -29,7 +29,7 @@ LEASE_HEARTBEAT_SECONDS = 3.0
 RECOVERY_POLL_SECONDS = 3.0
 
 _INSTANCE_ID = uuid.uuid4().hex
-_lock = threading.Lock()
+_lock = threading.RLock()
 _jobs: dict[str, dict[str, Any]] = {}
 _cancel_events: dict[str, threading.Event] = {}
 _threads: dict[str, threading.Thread] = {}

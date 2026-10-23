@@ -35,6 +35,7 @@ def create_app() -> Flask:
 
     def _log_unhandled_exception(sender, exception, **extra):
         del sender, extra
+        request.environ["_diskshell_exception_logged"] = True
         get_logger().exception(
             "http.unhandled_exception method=%r path=%r error=%r",
             request.method,
@@ -47,6 +48,20 @@ def create_app() -> Flask:
         app,
         weak=False,
     )
+
+    @app.after_request
+    def _journal_server_errors(response):
+        if (
+            response.status_code >= 500
+            and not request.environ.get("_diskshell_exception_logged")
+        ):
+            get_logger().error(
+                "http.server_error method=%r path=%r status=%r",
+                request.method,
+                request.path,
+                response.status_code,
+            )
+        return response
 
     for blueprint in (
         disks_bp,

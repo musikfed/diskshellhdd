@@ -7,6 +7,7 @@ from backend.api.analytics import bp as analytics_bp
 from backend.api.commander import bp as commander_bp
 from backend.api.content import bp as content_bp
 from backend.api.diagnostics import bp as diagnostics_bp
+from backend.api.events import bp as events_bp
 from backend.api.disks import bp as disks_bp
 from backend.api.files import bp as files_bp
 from backend.api.people import bp as people_bp
@@ -27,7 +28,7 @@ from backend.streamcopy.jobs import start_streamcopy_recovery_manager
 from backend.vault.service import vault_write_state
 
 
-VERSION = "0.7.5"
+VERSION = "0.8.0"
 
 
 def create_app() -> Flask:
@@ -80,6 +81,7 @@ def create_app() -> Flask:
         storage_lab_bp,
         streamcopy_bp,
         ui_state_bp,
+        events_bp,
     ):
         app.register_blueprint(blueprint)
 

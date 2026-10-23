@@ -22,4 +22,4 @@ Browser localStorage остаётся только fallback-кэшем на сл
 
 ## Граница
 
-Workspace state переживает restart backend, потому что хранится в SQLite. Живой StreamCopy worker пока RAM-only: restart backend завершает текущий worker. Для восстановления самой передачи после restart нужен отдельный persistent transfer journal.
+Workspace state переживает restart backend, потому что хранится в SQLite. StreamCopy 0.7.5 уже имеет отдельный persistent River Keeper: restart backend создаёт новый worker незавершённой persistent job после lease expiry/claim и продолжает от проверенного checkpoint. Commander остаётся отдельным transfer manager со своей моделью.

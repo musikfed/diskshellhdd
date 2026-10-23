@@ -57,3 +57,41 @@ def test_workspace_state_rejects_unknown_page(tmp_path, monkeypatch):
         assert "unknown page" in str(exc)
     else:
         raise AssertionError("expected unknown workspace page to be rejected")
+
+
+
+def test_workspace_view_state_merges_and_persists(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "workspace-view.db")
+
+    first = update_workspace_state(
+        active_page="search",
+        view_state={
+            "fileLeftPath": "H:\\",
+            "commanderActiveSide": "right",
+            "pageScroll:search": 240,
+        },
+    )
+    assert first["active_page"] == "search"
+    assert first["view_state"]["fileLeftPath"] == "H:\\"
+    assert first["view_state"]["commanderActiveSide"] == "right"
+
+    second = update_workspace_state(
+        view_state={
+            "fileRightPath": "W:\\",
+            "pageScroll:search": 480,
+            "commanderActiveSide": None,
+        }
+    )
+    assert second["view_state"]["fileLeftPath"] == "H:\\"
+    assert second["view_state"]["fileRightPath"] == "W:\\"
+    assert second["view_state"]["pageScroll:search"] == 480
+    assert "commanderActiveSide" not in second["view_state"]
+
+    restored = get_workspace_state()
+    assert restored["view_state"] == second["view_state"]
+
+
+def test_workspace_accepts_relocation_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "workspace-relocation.db")
+    state = update_workspace_state(active_page="relocation")
+    assert state["active_page"] == "relocation"

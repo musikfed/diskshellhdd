@@ -443,3 +443,30 @@ def release_lease(job_id: str, owner: str) -> None:
             (now_iso(), job_id, owner),
         )
         connection.commit()
+
+
+
+def summarize_items(job_id: str) -> dict[str, int]:
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN size ELSE 0 END), 0)
+                    AS completed_bytes,
+                COALESCE(SUM(CASE WHEN status = 'skipped' THEN size ELSE 0 END), 0)
+                    AS skipped_bytes,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0)
+                    AS completed_files,
+                COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0)
+                    AS skipped_files
+            FROM streamcopy_items
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+    return {
+        "completed_bytes": int(row["completed_bytes"] or 0),
+        "skipped_bytes": int(row["skipped_bytes"] or 0),
+        "completed_files": int(row["completed_files"] or 0),
+        "skipped_files": int(row["skipped_files"] or 0),
+    }

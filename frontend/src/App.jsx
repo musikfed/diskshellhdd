@@ -3,6 +3,7 @@ import { api, eventStreamUrl, fmtBytes, joinPath, thumbnailUrl } from './api.js'
 import { DiagnosticsAdmin, DisksAdmin, FilesAdmin, RecoveryAdmin, ScanAdmin, SecurityAdmin, StorageBrainAdmin } from './AdminPages.jsx'
 import StreamCopy from './StreamCopy.jsx'
 import SearchPage from './SearchPage.jsx'
+import RelocationPage from './RelocationPage.jsx'
 
 const NAV = [
   ['dashboard', '🐙', 'Обзор'],
@@ -12,6 +13,7 @@ const NAV = [
   ['storage', '🧠', 'Storage Brain'],
   ['files', '🐻', 'Файлы'],
   ['search', '⚡', 'Быстрый поиск'],
+  ['relocation', '🧭', 'Relocation Planner'],
   ['streamcopy', '🌊', 'StreamCopy · EXP'],
   ['people', '🦉', 'Photos / People'],
   ['vault', '🔐', 'Vault'],
@@ -300,6 +302,7 @@ export default function App() {
     storage: <StorageBrainAdmin {...context} />,
     files: <FilesAdmin {...context} />,
     search: <SearchPage {...context} />,
+    relocation: <RelocationPage {...context} />,
     streamcopy: <StreamCopy {...context} />,
     people: <People {...context} />,
     vault: <Vault {...context} />,
@@ -378,7 +381,7 @@ export default function App() {
 
 function Dashboard({ health, scanId, setPage }) {
   return <div className="stack">
-    <Card title="DiskShell 0.6 · First Working Admin Baseline"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
+    <Card title="DiskShell 0.8 · Persistent Workspace Foundation"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
     <div className="grid three">
       <Card title="Сейчас"><Metric label="Версия" value={health?.version || '...'} /><Metric label="Активный scan" value={scanId || 'нет'} /><Metric label="Режим" value="localhost / local-first" /></Card>
       <Card title="Правильный цикл"><ol><li>Обследовать</li><li>Понять Analytics</li><li>Построить placement plan</li><li>Сохранить резерв</li><li>Применить только нужное</li></ol></Card>

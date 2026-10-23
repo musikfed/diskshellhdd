@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
 import { DiagnosticsAdmin, DisksAdmin, FilesAdmin, RecoveryAdmin, ScanAdmin, SecurityAdmin, StorageBrainAdmin } from './AdminPages.jsx'
+import StreamCopy from './StreamCopy.jsx'
 
 const NAV = [
   ['dashboard', '🐙', 'Главная'],
@@ -9,6 +10,7 @@ const NAV = [
   ['analytics', '🦊', 'Аналитика'],
   ['storage', '🧠', 'Storage Brain'],
   ['files', '🐻', 'Файлы'],
+  ['streamcopy', '🌊', 'StreamCopy · EXP'],
   ['people', '🦉', 'Photos / People'],
   ['vault', '🔐', 'Vault'],
   ['recovery', '🧭', 'Recovery'],
@@ -156,6 +158,7 @@ export default function App() {
     analytics: <Analytics {...context} />,
     storage: <StorageBrainAdmin {...context} />,
     files: <FilesAdmin {...context} />,
+    streamcopy: <StreamCopy {...context} />,
     people: <People {...context} />,
     vault: <Vault {...context} />,
     recovery: <RecoveryAdmin {...context} />,

@@ -10,6 +10,7 @@ from backend.core.events import emit_event
 from backend.core.logging_setup import log_error
 from backend.files.service import list_roots
 from backend.services.storage.windows_disks import list_windows_disks
+from backend.services.storage.write_authorization import annotate_disks
 
 
 _lock = threading.Lock()
@@ -27,7 +28,7 @@ def _roots_snapshot() -> dict[str, Any]:
 def _disks_snapshot() -> dict[str, Any] | None:
     if os.name != "nt":
         return None
-    return {"disks": list_windows_disks()}
+    return {"disks": annotate_disks(list_windows_disks())}
 
 
 def start_storage_event_watcher(interval_seconds: float = 3.0) -> None:

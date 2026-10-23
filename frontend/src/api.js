@@ -32,3 +32,8 @@ export function joinPath(root, name) {
 export function thumbnailUrl(path, size = 720) {
   return `${base}/api/content/thumbnail?path=${encodeURIComponent(path)}&size=${size}`
 }
+
+
+export function eventStreamUrl() {
+  return `${base}/api/events`
+}

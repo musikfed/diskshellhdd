@@ -6,6 +6,7 @@ from backend.files.service import FileWriteBlocked
 from backend.streamcopy.jobs import (
     cancel_streamcopy_job,
     get_streamcopy_job,
+    list_streamcopy_jobs,
     start_streamcopy_job,
     stream_profile,
 )
@@ -31,6 +32,24 @@ def profile():
         )
     except ValueError as exc:
         return jsonify({"error": "streamcopy_profile_invalid", "message": str(exc)}), 400
+
+
+@bp.get("/jobs")
+def jobs():
+    raw_active = str(request.args.get("active") or "").casefold()
+    active_only = raw_active in {"1", "true", "yes", "on"}
+    try:
+        limit = int(request.args.get("limit") or 20)
+    except ValueError:
+        return jsonify({"error": "streamcopy_jobs_invalid", "message": "limit must be an integer"}), 400
+    return jsonify(
+        {
+            "jobs": list_streamcopy_jobs(
+                active_only=active_only,
+                limit=limit,
+            )
+        }
+    )
 
 
 @bp.post("/jobs")

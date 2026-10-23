@@ -718,13 +718,16 @@ export function DisksAdmin({ setError }) {
   </div>
 }
 
-export function ScanAdmin({ scanId, setScanId, setError }) {
-  const [path, setPath] = useState(localStorage.getItem('scanPath') || 'F:\\')
+export function ScanAdmin({ scanId, setScanId, setError, workspaceViewState = {}, patchViewState }) {
+  const [path, setPath] = useState(workspaceViewState.scanPath || localStorage.getItem('scanPath') || 'F:\\')
   const [roots, setRoots] = useState([])
   const [jobId, setJobId] = useState(localStorage.getItem('scanJobId') || '')
   const [job, setJob] = useState(null)
 
-  useEffect(() => { localStorage.setItem('scanPath', path) }, [path])
+  useEffect(() => {
+    localStorage.setItem('scanPath', path)
+    patchViewState?.({ scanPath: path })
+  }, [path, patchViewState])
   useEffect(() => {
     api('/api/files/roots').then(x => setRoots(x.roots || [])).catch(() => {})
   }, [])
@@ -804,26 +807,38 @@ export function ScanAdmin({ scanId, setScanId, setError }) {
   </div>
 }
 
-export function StorageBrainAdmin({ scanId, setError, refreshHealth }) {
-  const [root, setRoot] = useState(localStorage.getItem('storageRoot') || 'F:\\Storage')
+export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceViewState = {}, patchViewState }) {
+  const [root, setRoot] = useState(workspaceViewState.storageRoot || localStorage.getItem('storageRoot') || 'F:\\Storage')
   const [roots, setRoots] = useState([])
   const [classes, setClasses] = useState([])
   const [plan, setPlan] = useState(null)
-  const [planId, setPlanId] = useState(localStorage.getItem('placementPlanId') || '')
+  const [planId, setPlanId] = useState(workspaceViewState.placementPlanId || localStorage.getItem('placementPlanId') || '')
   const [confirmation, setConfirmation] = useState('')
   const [verify, setVerify] = useState('size')
   const [jobId, setJobId] = useState(localStorage.getItem('placementJobId') || '')
   const [job, setJob] = useState(null)
-  const [sourceScope, setSourceScope] = useState(localStorage.getItem('storageSourceScope') || '')
-  const [excludeScope, setExcludeScope] = useState(localStorage.getItem('storageExcludeScope') || '')
+  const [sourceScope, setSourceScope] = useState(workspaceViewState.storageSourceScope || localStorage.getItem('storageSourceScope') || '')
+  const [excludeScope, setExcludeScope] = useState(workspaceViewState.storageExcludeScope || localStorage.getItem('storageExcludeScope') || '')
   const [fileWrite, setFileWrite] = useState(null)
   const [planQuery, setPlanQuery] = useState('')
   const [pageOffset, setPageOffset] = useState(0)
   const pageLimit = 250
 
-  useEffect(() => { localStorage.setItem('storageRoot', root) }, [root])
-  useEffect(() => { localStorage.setItem('storageSourceScope', sourceScope) }, [sourceScope])
-  useEffect(() => { localStorage.setItem('storageExcludeScope', excludeScope) }, [excludeScope])
+  useEffect(() => {
+    localStorage.setItem('storageRoot', root)
+    patchViewState?.({ storageRoot: root })
+  }, [root, patchViewState])
+  useEffect(() => {
+    localStorage.setItem('storageSourceScope', sourceScope)
+    patchViewState?.({ storageSourceScope: sourceScope })
+  }, [sourceScope, patchViewState])
+  useEffect(() => {
+    localStorage.setItem('storageExcludeScope', excludeScope)
+    patchViewState?.({ storageExcludeScope: excludeScope })
+  }, [excludeScope, patchViewState])
+  useEffect(() => {
+    if (planId) patchViewState?.({ placementPlanId: planId })
+  }, [planId, patchViewState])
 
   useEffect(() => {
     Promise.all([
@@ -1151,11 +1166,11 @@ export function StorageBrainAdmin({ scanId, setError, refreshHealth }) {
 }
 
 
-export function DiagnosticsAdmin({ setError }) {
+export function DiagnosticsAdmin({ setError, workspaceViewState = {}, patchViewState }) {
   const [disks, setDisks] = useState([])
   const [elevated, setElevated] = useState(null)
-  const [diskNumber, setDiskNumber] = useState(localStorage.getItem('diagnosticDisk') || '')
-  const [mode, setMode] = useState(localStorage.getItem('diagnosticMode') || 'quick')
+  const [diskNumber, setDiskNumber] = useState(workspaceViewState.diagnosticDisk || localStorage.getItem('diagnosticDisk') || '')
+  const [mode, setMode] = useState(workspaceViewState.diagnosticMode || localStorage.getItem('diagnosticMode') || 'quick')
   const [jobId, setJobId] = useState(localStorage.getItem('diagnosticJobId') || '')
   const [job, setJob] = useState(null)
   const [history, setHistory] = useState([])
@@ -1188,8 +1203,16 @@ export function DiagnosticsAdmin({ setError }) {
   }
 
   useEffect(() => { refreshBase().catch(e => setError(e.message)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (diskNumber !== '') localStorage.setItem('diagnosticDisk', diskNumber) }, [diskNumber])
-  useEffect(() => { localStorage.setItem('diagnosticMode', mode) }, [mode])
+  useEffect(() => {
+    if (diskNumber !== '') {
+      localStorage.setItem('diagnosticDisk', diskNumber)
+      patchViewState?.({ diagnosticDisk: diskNumber })
+    }
+  }, [diskNumber, patchViewState])
+  useEffect(() => {
+    localStorage.setItem('diagnosticMode', mode)
+    patchViewState?.({ diagnosticMode: mode })
+  }, [mode, patchViewState])
 
   useEffect(() => {
     if (!jobId) return undefined
@@ -1375,10 +1398,10 @@ export function RecoveryAdmin({ setError }) {
   </div>
 }
 
-export function SecurityAdmin({ setError }) {
+export function SecurityAdmin({ setError, workspaceViewState = {}, patchViewState }) {
   const [engines, setEngines] = useState([])
   const [engine, setEngine] = useState('auto')
-  const [path, setPath] = useState(localStorage.getItem('securityPath') || 'F:\\')
+  const [path, setPath] = useState(workspaceViewState.securityPath || localStorage.getItem('securityPath') || 'F:\\')
   const [roots, setRoots] = useState([])
   const [jobId, setJobId] = useState(localStorage.getItem('securityJobId') || '')
   const [job, setJob] = useState(null)
@@ -1398,7 +1421,10 @@ export function SecurityAdmin({ setError }) {
   }
 
   useEffect(() => { refresh().catch(e => setError(e.message)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { localStorage.setItem('securityPath', path) }, [path])
+  useEffect(() => {
+    localStorage.setItem('securityPath', path)
+    patchViewState?.({ securityPath: path })
+  }, [path, patchViewState])
 
   useEffect(() => {
     if (!jobId) return undefined
@@ -1683,10 +1709,10 @@ function CommanderInspector({ preview, archive, remoteOrigin }) {
   </Panel>
 }
 
-export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
+export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceViewState = {}, patchViewState }) {
   const makePane = (side) => ({
     sourceType: 'local',
-    path: localStorage.getItem(`file${side}Path`) || 'F:\\',
+    path: workspaceViewState[`file${side}Path`] || localStorage.getItem(`file${side}Path`) || 'F:\\',
     data: null,
     selected: null,
     selectedPaths: [],
@@ -1709,21 +1735,23 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
   const [left, setLeft] = useState(() => makePane('Left'))
   const [right, setRight] = useState(() => makePane('Right'))
   const [activeSide, setActiveSide] = useState(
-    () => localStorage.getItem('commanderActiveSide') === 'right' ? 'right' : 'left',
+    () => (workspaceViewState.commanderActiveSide || localStorage.getItem('commanderActiveSide')) === 'right' ? 'right' : 'left',
   )
   const [roots, setRoots] = useState([])
   const [connections, setConnections] = useState([])
   const [jobId, setJobId] = useState(localStorage.getItem('commanderJobId') || '')
   const [job, setJob] = useState(null)
   const [smartTransfer, setSmartTransfer] = useState(
-    () => localStorage.getItem('commanderSmartFolders') === '1',
+    () => workspaceViewState.commanderSmartFolders != null
+      ? Boolean(workspaceViewState.commanderSmartFolders)
+      : localStorage.getItem('commanderSmartFolders') === '1',
   )
   const [smartHint, setSmartHint] = useState(null)
   const [preview, setPreview] = useState(null)
   const [archive, setArchive] = useState(null)
   const [remoteOrigin, setRemoteOrigin] = useState('')
   const [archiveFormat, setArchiveFormat] = useState(
-    () => localStorage.getItem('commanderArchiveFormat') || 'zip',
+    () => workspaceViewState.commanderArchiveFormat || localStorage.getItem('commanderArchiveFormat') || 'zip',
   )
   const [fileWrite, setFileWrite] = useState(null)
   const [pendingConflict, setPendingConflict] = useState(null)
@@ -1777,10 +1805,16 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
       }
       if (side === 'left') {
         setLeft(next)
-        if (next.sourceType === 'local') localStorage.setItem('fileLeftPath', data.path)
+        if (next.sourceType === 'local') {
+          localStorage.setItem('fileLeftPath', data.path)
+          patchViewState?.({ fileLeftPath: data.path })
+        }
       } else {
         setRight(next)
-        if (next.sourceType === 'local') localStorage.setItem('fileRightPath', data.path)
+        if (next.sourceType === 'local') {
+          localStorage.setItem('fileRightPath', data.path)
+          patchViewState?.({ fileRightPath: data.path })
+        }
       }
     } catch (e) {
       if (e.status === 409 && e.payload?.error === 'endpoint_unavailable') {
@@ -1903,13 +1937,16 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth }) {
 
   useEffect(() => {
     localStorage.setItem('commanderActiveSide', activeSide)
-  }, [activeSide])
+    patchViewState?.({ commanderActiveSide: activeSide })
+  }, [activeSide, patchViewState])
   useEffect(() => {
     localStorage.setItem('commanderSmartFolders', smartTransfer ? '1' : '0')
-  }, [smartTransfer])
+    patchViewState?.({ commanderSmartFolders: smartTransfer })
+  }, [smartTransfer, patchViewState])
   useEffect(() => {
     localStorage.setItem('commanderArchiveFormat', archiveFormat)
-  }, [archiveFormat])
+    patchViewState?.({ commanderArchiveFormat: archiveFormat })
+  }, [archiveFormat, patchViewState])
 
   useEffect(() => {
     if (!jobId) return undefined

@@ -23,10 +23,11 @@ from backend.core.database import init_database
 from backend.core.logging_setup import configure_logging, get_logger, log_event
 from backend.files.write_authorization import file_write_state
 from backend.storage_brain.service import ensure_defaults
+from backend.streamcopy.jobs import start_streamcopy_recovery_manager
 from backend.vault.service import vault_write_state
 
 
-VERSION = "0.7.4"
+VERSION = "0.7.5"
 
 
 def create_app() -> Flask:
@@ -141,6 +142,7 @@ def main() -> None:
     configure_logging()
     init_database()
     ensure_defaults()
+    start_streamcopy_recovery_manager()
     log_event(
         "backend.started",
         version=VERSION,

@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.7.1
+# Deploying DiskShell 0.7.4
 
-DiskShell 0.7.1 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
+DiskShell 0.7.4 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -267,3 +267,10 @@ Local Windows volumes are identity-bound using the Volume GUID with a serial fal
 Drive inventory is periodically refreshed; an offline root is shown as OFFLINE and temporary Windows storage-enumeration failures no longer need to crash the Disks page.
 
 This state remains in the running backend process. Backend-restart auto-recovery is intentionally deferred to a persistent transfer journal; SSH credentials remain RAM-only.
+
+
+## Quiet console and event journal 0.7.4
+
+Routine HTTP access logging is disabled. UI polling and successful 200/304 traffic no longer floods the elevated shell. The console is reserved for WARNING/ERROR output. The rotating event journal is `data/logs/diskshell.log`, capped at 5 MiB with up to five backups. Admin launchers print the journal path at startup.
+
+See [LOGGING.md](LOGGING.md).

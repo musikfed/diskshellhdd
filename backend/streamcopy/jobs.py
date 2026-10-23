@@ -382,7 +382,11 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
                     raise RuntimeError("stream framing error")
                 if not sink_disabled and destination_stream is not None:
                     try:
-                        destination_stream.write(data)
+                        written = destination_stream.write(data)
+                        if written != len(data):
+                            raise OSError(
+                                f"Short write: expected {len(data)} bytes, wrote {written}"
+                            )
                     except (OSError, PermissionError) as exc:
                         if _is_fatal_destination_error(exc):
                             consumer_fatal.set()

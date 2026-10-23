@@ -1,7 +1,7 @@
 {
   "name": "diskshell-workspace",
   "private": true,
-  "version": "0.7.5",
+  "version": "0.8.0",
   "scripts": {
     "ui:install": "npm --prefix frontend install",
     "dev": "npm --prefix frontend run dev",
@@ -9,6 +9,7 @@
     "ui:lint": "npm --prefix frontend run lint",
     "backend:admin:win": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-admin.ps1",
     "vscode:admin:win": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/open-vscode-admin.ps1",
-    "backend:admin:linux": "bash scripts/start-admin.sh"
+    "backend:admin:linux": "bash scripts/start-admin.sh",
+    "update:safe:win": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/update-safe.ps1"
   }
 }

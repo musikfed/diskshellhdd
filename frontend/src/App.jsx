@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { api, eventStreamUrl, fmtBytes, joinPath, thumbnailUrl } from './api.js'
 import { DiagnosticsAdmin, DisksAdmin, FilesAdmin, RecoveryAdmin, ScanAdmin, SecurityAdmin, StorageBrainAdmin } from './AdminPages.jsx'
 import StreamCopy from './StreamCopy.jsx'
+import SearchPage from './SearchPage.jsx'
 
 const NAV = [
   ['dashboard', '🐙', 'Обзор'],
@@ -10,6 +11,7 @@ const NAV = [
   ['analytics', '🦊', 'Аналитика'],
   ['storage', '🧠', 'Storage Brain'],
   ['files', '🐻', 'Файлы'],
+  ['search', '⚡', 'Быстрый поиск'],
   ['streamcopy', '🌊', 'StreamCopy · EXP'],
   ['people', '🦉', 'Photos / People'],
   ['vault', '🔐', 'Vault'],
@@ -70,7 +72,10 @@ function Safety({ health }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState('dashboard')
+  const urlParams = new URLSearchParams(window.location.search)
+  const requestedView = urlParams.get('view') || ''
+  const detached = urlParams.get('detached') === '1' && NAV.some(([id]) => id === requestedView)
+  const [page, setPage] = useState(detached ? requestedView : 'dashboard')
   const [workspaceReady, setWorkspaceReady] = useState(false)
   const [restoreNotice, setRestoreNotice] = useState('')
   const [activeStreamJob, setActiveStreamJob] = useState(null)
@@ -78,6 +83,7 @@ export default function App() {
   const [roots, setRoots] = useState([])
   const [activeVolume, setActiveVolume] = useState('')
   const [scanId, setScanId] = useState('')
+  const [workspaceViewState, setWorkspaceViewState] = useState({})
   const [error, setError] = useState('')
   const refreshHealth = async () => {
     try {
@@ -97,12 +103,15 @@ export default function App() {
       try {
         const state = await api('/api/ui-state')
         if (stopped) return
-        const nextPage = NAV.some(([id]) => id === state.active_page)
-          ? state.active_page
-          : 'dashboard'
+        const nextPage = detached
+          ? requestedView
+          : NAV.some(([id]) => id === state.active_page)
+            ? state.active_page
+            : 'dashboard'
         setPage(nextPage)
         setActiveVolume(String(state.active_volume || ''))
         setScanId(String(state.scan_id || ''))
+        setWorkspaceViewState(state.view_state || {})
         setRestoreNotice(`↩ Восстановлено: ${NAV.find(item => item[0] === nextPage)?.[2] || nextPage}`)
         timer = setTimeout(() => {
           if (!stopped) setRestoreNotice('')
@@ -110,7 +119,9 @@ export default function App() {
       } catch {
         if (stopped) return
         const cachedPage = localStorage.getItem('activePage')
-        setPage(NAV.some(([id]) => id === cachedPage) ? cachedPage : 'dashboard')
+        setPage(detached
+          ? requestedView
+          : NAV.some(([id]) => id === cachedPage) ? cachedPage : 'dashboard')
         setActiveVolume(localStorage.getItem('activeVolume') || '')
         setScanId(localStorage.getItem('scanId') || '')
       } finally {
@@ -150,7 +161,7 @@ export default function App() {
     }
   }, [])
   useEffect(() => {
-    if (!workspaceReady) return
+    if (!workspaceReady || detached) return
     localStorage.setItem('activePage', page)
     setError('')
     api('/api/ui-state', {
@@ -159,20 +170,33 @@ export default function App() {
     }).catch(() => {
       // Browser storage remains only a fallback cache; backend state is authoritative.
     })
-  }, [page, workspaceReady])
+  }, [page, workspaceReady, detached])
+  const patchViewState = useCallback((patch) => {
+    setWorkspaceViewState(current => ({ ...current, ...patch }))
+    if (!workspaceReady) return
+    api('/api/ui-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ view_state: patch }),
+    }).catch(() => {})
+  }, [workspaceReady])
+
   useEffect(() => {
     const key = `pageScroll:${page}`
+    const fallback = Number(localStorage.getItem(key) || 0)
+    const saved = Number(workspaceViewState[key] ?? fallback)
     const restore = requestAnimationFrame(() => {
-      window.scrollTo(0, Number(localStorage.getItem(key) || 0))
+      window.scrollTo(0, Number.isFinite(saved) ? saved : 0)
     })
-    const save = () => localStorage.setItem(key, String(window.scrollY))
-    window.addEventListener('scroll', save, { passive: true })
+    const save = () => {
+      const value = Math.round(window.scrollY)
+      localStorage.setItem(key, String(value))
+      patchViewState({ [key]: value })
+    }
     return () => {
       cancelAnimationFrame(restore)
       save()
-      window.removeEventListener('scroll', save)
     }
-  }, [page])
+  }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!workspaceReady) return
     if (activeVolume) localStorage.setItem('activeVolume', activeVolume)
@@ -211,6 +235,46 @@ export default function App() {
     return () => { stopped = true }
   }, [page, workspaceReady])
 
+  useEffect(() => {
+    if (!workspaceReady || typeof EventSource === 'undefined') return undefined
+    const source = new EventSource(eventStreamUrl())
+
+    const parse = event => {
+      try { return JSON.parse(event.data)?.payload || {} } catch { return {} }
+    }
+
+    const workspaceChanged = event => {
+      const payload = parse(event)
+      if (payload.active_volume !== undefined) setActiveVolume(String(payload.active_volume || ''))
+      if (payload.scan_id !== undefined) setScanId(String(payload.scan_id || ''))
+      if (payload.view_state && typeof payload.view_state === 'object') {
+        setWorkspaceViewState(payload.view_state)
+      }
+      if (!detached && NAV.some(([id]) => id === payload.active_page)) {
+        setPage(payload.active_page)
+      }
+    }
+    const scanCompleted = event => {
+      const payload = parse(event)
+      if (payload.scan_id != null) setScanId(String(payload.scan_id))
+    }
+    const streamChanged = event => {
+      if (page === 'streamcopy') return
+      const payload = parse(event)
+      if (!payload.job_id) return
+      setActiveStreamJob(current => ({
+        ...(current || {}),
+        id: payload.job_id,
+        status: payload.status || current?.status || 'running',
+      }))
+    }
+
+    source.addEventListener('workspace.changed', workspaceChanged)
+    source.addEventListener('scan.completed', scanCompleted)
+    source.addEventListener('streamcopy.changed', streamChanged)
+    return () => source.close()
+  }, [workspaceReady, detached, page])
+
   const context = useMemo(
     () => ({
       scanId,
@@ -221,8 +285,10 @@ export default function App() {
       roots,
       activeVolume,
       setActiveVolume,
+      workspaceViewState,
+      patchViewState,
     }),
-    [scanId, health, roots, activeVolume],
+    [scanId, health, roots, activeVolume, workspaceViewState, patchViewState],
   )
   const activeRoot = roots.find(item => item.path === activeVolume)
   const activeVolumeOffline = Boolean(activeVolume && (!activeRoot || activeRoot.available === false))
@@ -233,6 +299,7 @@ export default function App() {
     analytics: <Analytics {...context} />,
     storage: <StorageBrainAdmin {...context} />,
     files: <FilesAdmin {...context} />,
+    search: <SearchPage {...context} />,
     streamcopy: <StreamCopy {...context} />,
     people: <People {...context} />,
     vault: <Vault {...context} />,
@@ -273,6 +340,20 @@ export default function App() {
             </select>
           </label>
           {restoreNotice && <div className="workspace-restore-chip">{restoreNotice}</div>}
+          {detached && <div className="workspace-restore-chip">DETACHED VIEW</div>}
+          <button
+            className="workspace-process-chip"
+            onClick={() => {
+              const target = new URL(window.location.href)
+              target.search = ''
+              target.searchParams.set('view', page)
+              target.searchParams.set('detached', '1')
+              window.open(target.toString(), '_blank', 'noopener,noreferrer')
+            }}
+            title="Открыть текущий view в отдельном окне/на другом мониторе"
+          >
+            ↗ Open view
+          </button>
           {activeStreamJob && <button
             className="workspace-process-chip"
             onClick={() => setPage('streamcopy')}

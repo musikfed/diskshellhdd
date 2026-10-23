@@ -160,8 +160,10 @@ def _cache_job(job: dict[str, Any]) -> dict[str, Any]:
     with _lock:
         current = _jobs.get(job["id"], {})
         started = current.get("_started_monotonic", time.monotonic())
+        session_start_bytes = current.get("_session_start_bytes", int(job.get("bytes") or 0))
         cached = dict(job)
         cached["_started_monotonic"] = started
+        cached["_session_start_bytes"] = session_start_bytes
         _jobs[job["id"]] = cached
         return cached
 
@@ -358,6 +360,8 @@ def _build_manifest(job_id: str, source: Path, destination_root: Path) -> None:
                     }
                 )
         directory_count = len(directories)
+        for directory in sorted(directories, key=lambda value: len(Path(value).parts)):
+            Path(directory).mkdir(parents=True, exist_ok=True)
 
     journal.replace_manifest(
         job_id,
@@ -450,7 +454,8 @@ def _progress_ram(job_id: str, base_bytes: int, offset: int, current_path: str) 
         total = int(job.get("total_bytes") or 0)
         job["progress_percent"] = round(job["bytes"] * 100 / total, 2) if total else 100.0
         elapsed = max(0.001, time.monotonic() - float(job["_started_monotonic"]))
-        job["average_mib_s"] = round(job["bytes"] / (1024 * 1024) / elapsed, 2)
+        session_bytes = max(0, job["bytes"] - int(job.get("_session_start_bytes") or 0))
+        job["average_mib_s"] = round(session_bytes / (1024 * 1024) / elapsed, 2)
         job["updated_at"] = _now()
 
 
@@ -528,12 +533,40 @@ def _copy_item(
             return
 
         if item["status"] == "completed":
-            if job.get("delete_source_after_verify") and source.exists():
+            if not target.exists():
+                if source.exists():
+                    journal.update_item(
+                        job_id,
+                        item_index,
+                        status="pending",
+                        confirmed_offset=0,
+                        error="published target disappeared; recopying",
+                    )
+                    journal.discard_checkpoints_after(job_id, item_index, 0)
+                    continue
+                raise FileNotFoundError(
+                    f"Completed target disappeared and source is unavailable: {target}"
+                )
+            if source.exists():
                 try:
-                    _verify_pair(source, target, "sha256")
-                    source.unlink()
+                    _verify_pair(
+                        source,
+                        target,
+                        "sha256" if job.get("delete_source_after_verify") else "size",
+                    )
+                    if job.get("delete_source_after_verify"):
+                        source.unlink()
                 except OSError:
                     if any(not state["available"] for state in _endpoint_states(job)):
+                        continue
+                    if not job.get("delete_source_after_verify"):
+                        journal.update_item(
+                            job_id,
+                            item_index,
+                            status="pending",
+                            confirmed_offset=0,
+                            error="published target no longer matches; recopying",
+                        )
                         continue
                     raise
             return
@@ -789,8 +822,21 @@ def _run_job(job_id: str) -> None:
             source = Path(job["source_path"])
             destination = Path(job["destination_path"])
             _persist_job(job_id, status="planning", error=None)
-            _build_manifest(job_id, source, destination)
-            items = journal.list_items(job_id)
+            while not items:
+                _control_check(cancel, lease_lost)
+                _wait_for_endpoints(job_id, cancel, lease_lost)
+                try:
+                    _build_manifest(job_id, source, destination)
+                    items = journal.list_items(job_id)
+                    break
+                except OSError:
+                    current_job = _load_job(job_id)
+                    if any(
+                        not state["available"]
+                        for state in _endpoint_states(current_job)
+                    ):
+                        continue
+                    raise
 
         _persist_job(job_id, status="recovering", error=None)
         for item in items:

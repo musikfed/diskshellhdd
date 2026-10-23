@@ -341,6 +341,7 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
         current_target: Path | None = None
         destination_stream = None
         sink_disabled = False
+        current_written = 0
 
         while True:
             if cancel.is_set():
@@ -360,6 +361,7 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
                 _, current_index, current_source, target_text, _size = message
                 current_target = Path(target_text)
                 sink_disabled = False
+                current_written = 0
                 try:
                     current_target.parent.mkdir(parents=True, exist_ok=True)
                     destination_stream = current_target.open("xb", buffering=0)
@@ -392,6 +394,7 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
                             f"{type(exc).__name__}: {exc}",
                         )
                 if not sink_disabled:
+                    current_written += len(data)
                     _progress(job_id, len(data), current_source)
                 continue
 
@@ -400,6 +403,9 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
                 if index == current_index and destination_stream is not None:
                     destination_stream.close()
                     destination_stream = None
+                if current_written:
+                    _progress(job_id, -current_written, source_text)
+                    current_written = 0
                 if current_target is not None:
                     try:
                         current_target.unlink(missing_ok=True)
@@ -418,7 +424,15 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
                     destination_stream.close()
                     destination_stream = None
                 target = Path(target_text)
-                if not sink_disabled:
+                if sink_disabled:
+                    if current_written:
+                        _progress(job_id, -current_written, source_text)
+                        current_written = 0
+                    try:
+                        target.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                else:
                     try:
                         actual = int(target.stat().st_size)
                         if actual != int(expected_size):
@@ -437,6 +451,7 @@ def _run_job(job_id: str, source: Path, destination_root: Path, profile: dict[st
                 current_target = None
                 current_source = ""
                 sink_disabled = False
+                current_written = 0
 
         if destination_stream is not None:
             destination_stream.close()

@@ -60,6 +60,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   const [profile, setProfile] = useState(null)
   const [job, setJob] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [restoringJob, setRestoringJob] = useState(true)
   const running = job && !TERMINAL.has(job.status)
 
   const payload = useMemo(() => ({
@@ -79,6 +80,82 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     sourceCacheMiB,
     destinationCacheMiB,
   ])
+
+  useEffect(() => {
+    let stopped = false
+
+    const adopt = next => {
+      if (!next || stopped) return
+      setJob(next)
+      setSourcePath(next.source_path || sourcePath)
+      setDestinationPath(next.destination_path || destinationPath)
+      const nextProfile = next.profile || {}
+      if (nextProfile.source_media) setSourceMedia(nextProfile.source_media)
+      if (nextProfile.destination_media) setDestinationMedia(nextProfile.destination_media)
+      if (nextProfile.source_transport) setSourceTransport(nextProfile.source_transport)
+      if (nextProfile.destination_transport) setDestinationTransport(nextProfile.destination_transport)
+      if (nextProfile.usb_topology) setUsbTopology(nextProfile.usb_topology)
+      if (nextProfile.source_cache_mib != null) setSourceCacheMiB(String(nextProfile.source_cache_mib))
+      if (nextProfile.destination_cache_mib != null) setDestinationCacheMiB(String(nextProfile.destination_cache_mib))
+    }
+
+    const restore = async () => {
+      let recovered = null
+      const activeJobId = localStorage.getItem('streamcopy:activeJobId')
+
+      if (activeJobId) {
+        try {
+          const candidate = await api(`/api/streamcopy/jobs/${activeJobId}`)
+          if (!TERMINAL.has(candidate.status)) recovered = candidate
+        } catch (e) {
+          if (e.status !== 404 && !stopped) setError(e.message)
+        }
+      }
+
+      if (!recovered) {
+        try {
+          const value = await api('/api/streamcopy/jobs?active=1&limit=1')
+          recovered = Array.isArray(value.jobs) ? value.jobs[0] : null
+        } catch (e) {
+          if (!stopped) setError(e.message)
+        }
+      }
+
+      if (recovered) {
+        localStorage.setItem('streamcopy:activeJobId', recovered.id)
+        localStorage.setItem('streamcopy:lastJobId', recovered.id)
+        adopt(recovered)
+      } else {
+        localStorage.removeItem('streamcopy:activeJobId')
+        const lastJobId = localStorage.getItem('streamcopy:lastJobId')
+        if (lastJobId) {
+          try {
+            adopt(await api(`/api/streamcopy/jobs/${lastJobId}`))
+          } catch (e) {
+            if (e.status === 404) localStorage.removeItem('streamcopy:lastJobId')
+            else if (!stopped) setError(e.message)
+          }
+        }
+      }
+
+      if (!stopped) setRestoringJob(false)
+    }
+
+    restore()
+    return () => { stopped = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!job?.id) return
+    localStorage.setItem('streamcopy:lastJobId', job.id)
+    if (TERMINAL.has(job.status)) {
+      if (localStorage.getItem('streamcopy:activeJobId') === job.id) {
+        localStorage.removeItem('streamcopy:activeJobId')
+      }
+    } else {
+      localStorage.setItem('streamcopy:activeJobId', job.id)
+    }
+  }, [job?.id, job?.status])
 
   useEffect(() => {
     for (const [key, value] of Object.entries({
@@ -125,7 +202,15 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         const next = await api(`/api/streamcopy/jobs/${job.id}`)
         if (!stopped) setJob(next)
       } catch (e) {
-        if (!stopped) setError(e.message)
+        if (!stopped && e.status === 404) {
+          if (localStorage.getItem('streamcopy:activeJobId') === job.id) {
+            localStorage.removeItem('streamcopy:activeJobId')
+          }
+          setJob(null)
+          setError('StreamCopy job больше не существует в backend. Возможно, backend был перезапущен.')
+        } else if (!stopped) {
+          setError(e.message)
+        }
       }
     }
     const timer = setInterval(poll, 400)
@@ -281,12 +366,17 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         <div className="stream-actions">
           <button
             className="primary"
-            disabled={busy || running || !health?.safety?.file_writes || !sourcePath || !destinationPath}
+            disabled={busy || restoringJob || running || !health?.safety?.file_writes || !sourcePath || !destinationPath}
             onClick={start}
           >
             🌊 Start StreamCopy
           </button>
           <button className="stop-button" disabled={!running} onClick={cancel}>Stop</button>
+          <span>
+            {restoringJob
+              ? 'Подключаюсь к backend job…'
+              : 'Страницу можно закрыть: job принадлежит backend и продолжит работу, пока backend запущен.'}
+          </span>
           <span>Destination conflicts пока не перезаписываются: existing target → warning/skip.</span>
         </div>
         {job?.warnings?.length > 0 && <details className="stream-warnings">

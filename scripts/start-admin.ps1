@@ -37,6 +37,8 @@ Write-Host ""
 Write-Host "DiskShell backend / elevated Administrator runtime" -ForegroundColor Cyan
 Write-Host "Project: $ProjectRoot"
 Write-Host "URL:     http://127.0.0.1:8765/"
+Write-Host "Journal: $ProjectRoot\\data\\logs\\diskshell.log"
+Write-Host "HTTP access polling is intentionally hidden; console shows warnings/errors only."
 Write-Host ""
 Write-Host "RU: Ctrl+C останавливает backend."
 Write-Host "EN: Ctrl+C stops the backend."

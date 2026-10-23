@@ -156,7 +156,7 @@ export default function App() {
       }
     }
     refreshRoots()
-    const timer = setInterval(refreshRoots, 3000)
+    const timer = setInterval(refreshRoots, 30000)
     return () => {
       stopped = true
       clearInterval(timer)
@@ -271,9 +271,20 @@ export default function App() {
       }))
     }
 
+    const rootsChanged = event => {
+      const payload = parse(event)
+      if (Array.isArray(payload.roots)) setRoots(payload.roots)
+    }
+    const disksChanged = event => {
+      const payload = parse(event)
+      window.dispatchEvent(new CustomEvent('diskshell:disks-changed', { detail: payload }))
+    }
+
     source.addEventListener('workspace.changed', workspaceChanged)
     source.addEventListener('scan.completed', scanCompleted)
     source.addEventListener('streamcopy.changed', streamChanged)
+    source.addEventListener('storage.roots_changed', rootsChanged)
+    source.addEventListener('storage.disks_changed', disksChanged)
     return () => source.close()
   }, [workspaceReady, detached, page])
 

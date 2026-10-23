@@ -23,6 +23,7 @@ from backend.api.vault import bp as vault_bp
 from backend.config import settings
 from backend.core.database import init_database
 from backend.core.logging_setup import configure_logging, get_logger, log_event
+from backend.core.storage_watch import start_storage_event_watcher
 from backend.files.write_authorization import file_write_state
 from backend.storage_brain.service import ensure_defaults
 from backend.streamcopy.jobs import start_streamcopy_recovery_manager
@@ -147,6 +148,7 @@ def main() -> None:
     init_database()
     ensure_defaults()
     start_streamcopy_recovery_manager()
+    start_storage_event_watcher()
     log_event(
         "backend.started",
         version=VERSION,

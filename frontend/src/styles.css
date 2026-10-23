@@ -1033,3 +1033,40 @@ textarea{
   white-space:nowrap;
 }
 .workspace-process-chip:hover{background:rgba(35,126,88,.34)}
+
+
+/* 0.8.0 disk descriptor map + boundary planner */
+.disk-descriptor-map{
+  display:grid;
+  margin-top:10px;
+  border:1px solid rgba(112,151,209,.2);
+  border-radius:12px;
+  overflow:hidden;
+  background:rgba(6,16,28,.5);
+}
+.disk-descriptor-map>div{
+  display:grid;
+  grid-template-columns:minmax(120px,.9fr) minmax(90px,.7fr) minmax(90px,.7fr) minmax(90px,.7fr) minmax(180px,1.6fr);
+  gap:10px;
+  align-items:center;
+  padding:8px 10px;
+  border-top:1px solid rgba(112,151,209,.12);
+  font-size:12px;
+}
+.disk-descriptor-map>div:first-child{border-top:0}
+.disk-descriptor-map .descriptor-head{
+  background:rgba(11,27,47,.85);
+  color:#7892b7;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  font-size:10px;
+  font-weight:850;
+}
+.disk-descriptor-map .free{color:#94a6be}
+.disk-descriptor-map .partition b{color:#cfe0ff}
+.partition-row-actions{display:flex;gap:6px;justify-content:flex-end}
+.partition-row-actions button{padding:6px 9px;font-size:11px}
+@media(max-width:1100px){
+  .disk-descriptor-map{overflow-x:auto}
+  .disk-descriptor-map>div{min-width:760px}
+}

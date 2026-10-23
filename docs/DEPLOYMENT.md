@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.7.0
+# Deploying DiskShell 0.7.1
 
-DiskShell 0.7.0 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
+DiskShell 0.7.1 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 

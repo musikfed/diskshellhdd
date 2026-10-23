@@ -206,6 +206,14 @@ CREATE TABLE IF NOT EXISTS security_scan_results (
     completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS workspace_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    active_page TEXT NOT NULL DEFAULT 'dashboard',
+    active_volume TEXT NOT NULL DEFAULT '',
+    scan_id TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS diagnostic_runs (
     id TEXT PRIMARY KEY,
     disk_number INTEGER NOT NULL,

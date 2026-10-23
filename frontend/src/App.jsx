@@ -4,7 +4,7 @@ import { DiagnosticsAdmin, DisksAdmin, FilesAdmin, RecoveryAdmin, ScanAdmin, Sec
 import StreamCopy from './StreamCopy.jsx'
 
 const NAV = [
-  ['dashboard', '🐙', 'Главная'],
+  ['dashboard', '🐙', 'Обзор'],
   ['disks', '🐧', 'Диски'],
   ['scan', '🔎', 'Обследование'],
   ['analytics', '🦊', 'Аналитика'],
@@ -70,16 +70,14 @@ function Safety({ health }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState(() => {
-    const saved = localStorage.getItem('activePage')
-    return NAV.some(([id]) => id === saved) ? saved : 'dashboard'
-  })
+  const [page, setPage] = useState('dashboard')
+  const [workspaceReady, setWorkspaceReady] = useState(false)
+  const [restoreNotice, setRestoreNotice] = useState('')
+  const [activeStreamJob, setActiveStreamJob] = useState(null)
   const [health, setHealth] = useState(null)
   const [roots, setRoots] = useState([])
-  const [activeVolume, setActiveVolume] = useState(
-    () => localStorage.getItem('activeVolume') || '',
-  )
-  const [scanId, setScanId] = useState(localStorage.getItem('scanId') || '')
+  const [activeVolume, setActiveVolume] = useState('')
+  const [scanId, setScanId] = useState('')
   const [error, setError] = useState('')
   const refreshHealth = async () => {
     try {
@@ -91,6 +89,42 @@ export default function App() {
       return null
     }
   }
+  useEffect(() => {
+    let stopped = false
+    let timer = null
+
+    const restoreWorkspace = async () => {
+      try {
+        const state = await api('/api/ui-state')
+        if (stopped) return
+        const nextPage = NAV.some(([id]) => id === state.active_page)
+          ? state.active_page
+          : 'dashboard'
+        setPage(nextPage)
+        setActiveVolume(String(state.active_volume || ''))
+        setScanId(String(state.scan_id || ''))
+        setRestoreNotice(`↩ Восстановлено: ${NAV.find(item => item[0] === nextPage)?.[2] || nextPage}`)
+        timer = setTimeout(() => {
+          if (!stopped) setRestoreNotice('')
+        }, 5000)
+      } catch {
+        if (stopped) return
+        const cachedPage = localStorage.getItem('activePage')
+        setPage(NAV.some(([id]) => id === cachedPage) ? cachedPage : 'dashboard')
+        setActiveVolume(localStorage.getItem('activeVolume') || '')
+        setScanId(localStorage.getItem('scanId') || '')
+      } finally {
+        if (!stopped) setWorkspaceReady(true)
+      }
+    }
+
+    restoreWorkspace()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
+
   useEffect(() => { refreshHealth() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     let stopped = false
@@ -116,9 +150,16 @@ export default function App() {
     }
   }, [])
   useEffect(() => {
+    if (!workspaceReady) return
     localStorage.setItem('activePage', page)
     setError('')
-  }, [page])
+    api('/api/ui-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ active_page: page }),
+    }).catch(() => {
+      // Browser storage remains only a fallback cache; backend state is authoritative.
+    })
+  }, [page, workspaceReady])
   useEffect(() => {
     const key = `pageScroll:${page}`
     const restore = requestAnimationFrame(() => {
@@ -133,9 +174,43 @@ export default function App() {
     }
   }, [page])
   useEffect(() => {
+    if (!workspaceReady) return
     if (activeVolume) localStorage.setItem('activeVolume', activeVolume)
-  }, [activeVolume])
-  useEffect(() => { if (scanId) localStorage.setItem('scanId', scanId) }, [scanId])
+    else localStorage.removeItem('activeVolume')
+    api('/api/ui-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ active_volume: activeVolume }),
+    }).catch(() => {})
+  }, [activeVolume, workspaceReady])
+  useEffect(() => {
+    if (!workspaceReady) return
+    if (scanId) localStorage.setItem('scanId', scanId)
+    else localStorage.removeItem('scanId')
+    api('/api/ui-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ scan_id: scanId }),
+    }).catch(() => {})
+  }, [scanId, workspaceReady])
+  useEffect(() => {
+    if (!workspaceReady) return
+    if (page === 'streamcopy') {
+      setActiveStreamJob(null)
+      return
+    }
+    let stopped = false
+    api('/api/streamcopy/jobs?active=1&limit=1')
+      .then(value => {
+        if (!stopped) {
+          const jobs = Array.isArray(value.jobs) ? value.jobs : []
+          setActiveStreamJob(jobs[0] || null)
+        }
+      })
+      .catch(() => {
+        if (!stopped) setActiveStreamJob(null)
+      })
+    return () => { stopped = true }
+  }, [page, workspaceReady])
+
   const context = useMemo(
     () => ({
       scanId,
@@ -166,6 +241,15 @@ export default function App() {
     security: <SecurityAdmin {...context} />,
     lab: <StorageLab {...context} />,
   }
+  if (!workspaceReady) {
+    return <div className="workspace-restore-screen">
+      <div className="workspace-restore-card">
+        <b>↩ DiskShell workspace</b>
+        <span>Восстанавливаю актуальную вкладку из backend…</span>
+      </div>
+    </div>
+  }
+
   return <div className="app">
     <aside>
       <div className="brand"><div className="shell">🐚</div><div><b>DiskShell</b><small>Storage Brain</small></div></div>
@@ -188,6 +272,14 @@ export default function App() {
               </option>)}
             </select>
           </label>
+          {restoreNotice && <div className="workspace-restore-chip">{restoreNotice}</div>}
+          {activeStreamJob && <button
+            className="workspace-process-chip"
+            onClick={() => setPage('streamcopy')}
+            title="Вернуться к активной backend-задаче StreamCopy"
+          >
+            ↩ StreamCopy · {activeStreamJob.status}
+          </button>}
           <div className="scan-chip">Scan: {scanId || '—'}</div>
           {activeVolumeOffline && <div className="scan-chip">Volume offline · auto-detecting return</div>}
         </div>

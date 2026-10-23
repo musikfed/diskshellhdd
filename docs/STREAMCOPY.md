@@ -1,4 +1,4 @@
-# StreamCopy EXP 0.7.2
+# StreamCopy EXP 0.7.3
 
 StreamCopy is a separate experimental local-copy engine; the regular Commander is unchanged.
 
@@ -16,3 +16,6 @@ StreamCopy uses the existing FILE WRITE gate. Existing destination files are ski
 A StreamCopy job belongs to the backend, not the React page. Navigating away, refreshing, or closing the browser tab does not send cancel and does not stop the worker. The UI stores the active job id and, when reopened, first restores that id and then falls back to discovering the newest active StreamCopy job from the backend. Source/destination settings, the locked profile, and live progress are reattached.
 
 This is not backend-restart persistence: the job registry and worker threads are still RAM-only. Backend restart recovery requires a separate persistent journal/resume layer.
+
+
+In 0.7.3 the StreamCopy page selection no longer depends on browser storage. Backend workspace state restores the same workbench page in another browser, after which StreamCopy reattaches to the active/latest backend job.

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from backend.core.events import emit_event
 from backend.core.logging_setup import log_error, log_event, log_warning
 from backend.files.endpoint_availability import bind_local_volume, local_endpoint_state
 from backend.files.service import FileWriteBlocked
@@ -34,6 +35,7 @@ _jobs: dict[str, dict[str, Any]] = {}
 _cancel_events: dict[str, threading.Event] = {}
 _threads: dict[str, threading.Thread] = {}
 _recovery_started = False
+_event_last_emit: dict[str, float] = {}
 
 
 class StreamCopyCancelled(RuntimeError):
@@ -185,6 +187,8 @@ def _persist_job(job_id: str, **changes: Any) -> None:
                     cached[key] = value
             cached["updated_at"] = changes.get("updated_at", _now())
     journal.update_job(job_id, **changes)
+    event_payload = {"job_id": job_id, **{k: v for k, v in changes.items() if k != "warnings_json"}}
+    emit_event("streamcopy.changed", event_payload)
 
 
 def _append_warning(job_id: str, path: str, message: str) -> None:
@@ -457,6 +461,21 @@ def _progress_ram(job_id: str, base_bytes: int, offset: int, current_path: str) 
         session_bytes = max(0, job["bytes"] - int(job.get("_session_start_bytes") or 0))
         job["average_mib_s"] = round(session_bytes / (1024 * 1024) / elapsed, 2)
         job["updated_at"] = _now()
+        now = time.monotonic()
+        last = _event_last_emit.get(job_id, 0.0)
+        if now - last >= 0.5:
+            _event_last_emit[job_id] = now
+            emit_event(
+                "streamcopy.progress",
+                {
+                    "job_id": job_id,
+                    "bytes": job["bytes"],
+                    "total_bytes": total,
+                    "progress_percent": job["progress_percent"],
+                    "average_mib_s": job["average_mib_s"],
+                    "current_path": current_path,
+                },
+            )
 
 
 def _mark_skipped(job_id: str, item: dict[str, Any], message: str) -> None:
@@ -903,6 +922,7 @@ def _run_job(job_id: str) -> None:
         with _lock:
             _cancel_events.pop(job_id, None)
             _threads.pop(job_id, None)
+            _event_last_emit.pop(job_id, None)
 
 
 def _spawn_claimed_job(job_id: str) -> bool:

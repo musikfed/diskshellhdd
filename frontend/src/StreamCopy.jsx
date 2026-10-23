@@ -57,6 +57,10 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   const [usbTopology, setUsbTopology] = useState(() => saved('usbTopology', 'unknown'))
   const [sourceCacheMiB, setSourceCacheMiB] = useState(() => saved('sourceCacheMiB', '32'))
   const [destinationCacheMiB, setDestinationCacheMiB] = useState(() => saved('destinationCacheMiB', '128'))
+  const [verifyMode, setVerifyMode] = useState(() => saved('verifyMode', 'size'))
+  const [deleteSourceAfterVerify, setDeleteSourceAfterVerify] = useState(
+    () => saved('deleteSourceAfterVerify', 'false') === 'true',
+  )
   const [profile, setProfile] = useState(null)
   const [job, setJob] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -79,6 +83,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     usbTopology,
     sourceCacheMiB,
     destinationCacheMiB,
+    verifyMode,
+    deleteSourceAfterVerify,
   ])
 
   useEffect(() => {
@@ -97,6 +103,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       if (nextProfile.usb_topology) setUsbTopology(nextProfile.usb_topology)
       if (nextProfile.source_cache_mib != null) setSourceCacheMiB(String(nextProfile.source_cache_mib))
       if (nextProfile.destination_cache_mib != null) setDestinationCacheMiB(String(nextProfile.destination_cache_mib))
+      if (next.verify_mode) setVerifyMode(next.verify_mode)
+      setDeleteSourceAfterVerify(Boolean(next.delete_source_after_verify))
     }
 
     const restore = async () => {
@@ -182,6 +190,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       usbTopology,
       sourceCacheMiB,
       destinationCacheMiB,
+      verifyMode,
+      deleteSourceAfterVerify,
     })) localStorage.setItem(`streamcopy:${key}`, String(value))
   }, [
     sourcePath,
@@ -193,6 +203,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     usbTopology,
     sourceCacheMiB,
     destinationCacheMiB,
+    verifyMode,
+    deleteSourceAfterVerify,
   ])
 
   useEffect(() => {
@@ -221,7 +233,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
             localStorage.removeItem('streamcopy:activeJobId')
           }
           setJob(null)
-          setError('StreamCopy job больше не существует в backend. Возможно, backend был перезапущен.')
+          setError('StreamCopy journal не нашёл задачу. Проверь data/diskshell.db и backend log.')
         } else if (!stopped) {
           setError(e.message)
         }
@@ -254,6 +266,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           source_path: sourcePath,
           destination_path: destinationPath,
           ...payload,
+          verify_mode: deleteSourceAfterVerify ? 'sha256' : verifyMode,
+          delete_source_after_verify: deleteSourceAfterVerify,
         }),
       })
       setJob(next)
@@ -320,12 +334,37 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           <div><small>Chunk</small><b>{profile ? `${profile.chunk_mib} MiB` : '…'}</b></div>
           <div><small>Queue</small><b>{profile ? `${profile.queue_depth} buffers` : '…'}</b></div>
           <div><small>RAM ring</small><b>{profile ? `${profile.max_buffer_mib} MiB max` : '…'}</b></div>
+          <div><small>River keeper</small><b>{profile ? `${profile.checkpoint_mib} MiB checkpoint` : '…'}</b></div>
           <div className="grow"><small>Ordering</small><b>{profile?.ordering || '…'}</b></div>
         </div>
         <div className="streamcopy-row topology-row">
           <SelectField label="Если оба через USB: topology" value={usbTopology} onChange={setUsbTopology} options={TOPOLOGY} disabled={running} />
           <p>{profile?.transport_note}</p>
           <p>{profile?.cache_note}</p>
+        </div>
+        <div className="streamcopy-row topology-row">
+          <SelectField
+            label="Проверка"
+            value={deleteSourceAfterVerify ? 'sha256' : verifyMode}
+            onChange={setVerifyMode}
+            options={[['size', 'Размер'], ['sha256', 'SHA-256']]}
+            disabled={running || deleteSourceAfterVerify}
+          />
+          <label>
+            <span>Завершение</span>
+            <select
+              value={deleteSourceAfterVerify ? 'copy-delete' : 'copy'}
+              onChange={e => setDeleteSourceAfterVerify(e.target.value === 'copy-delete')}
+              disabled={running}
+            >
+              <option value="copy">COPY · источник оставить</option>
+              <option value="copy-delete">COPY → SHA-256 → DELETE source</option>
+            </select>
+          </label>
+          <p>
+            StreamCopy не делает Move как отдельную операцию. Удаление source возможно только
+            после опубликованной копии и сильного SHA-256 сравнения.
+          </p>
         </div>
         {bothUsbHdd && <div className="streamcopy-note">
           USB 3.x — только транспорт. Для пары HDD→HDD StreamCopy не переключает тип носителя:
@@ -389,9 +428,13 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           <span>
             {restoringJob
               ? 'Подключаюсь к backend job…'
-              : 'Страницу можно закрыть: job принадлежит backend и продолжит работу, пока backend запущен.'}
+              : 'Job хранится в backend journal: браузер можно закрыть, а после restart backend задача восстанавливается из checkpoint.'}
           </span>
-          <span>Destination conflicts пока не перезаписываются: existing target → warning/skip.</span>
+          <span>
+            При обрыве диска StreamCopy ждёт тот же Volume ID; после возврата проверяет последний
+            checkpoint и откатывает непроверенный хвост на шаг назад.
+          </span>
+          <span>Destination conflicts не перезаписываются: existing target → warning/skip.</span>
         </div>
         {job?.warnings?.length > 0 && <details className="stream-warnings">
           <summary>Warnings / skipped: {job.warnings.length}</summary>

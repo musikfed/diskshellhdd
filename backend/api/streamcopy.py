@@ -66,6 +66,8 @@ def start_job():
             usb_topology=str(payload.get("usb_topology") or "unknown"),
             source_cache_mib=payload.get("source_cache_mib"),
             destination_cache_mib=payload.get("destination_cache_mib"),
+            verify_mode=str(payload.get("verify_mode") or "size"),
+            delete_source_after_verify=bool(payload.get("delete_source_after_verify", False)),
         )
         return jsonify(job), 202
     except FileWriteBlocked as exc:
@@ -80,6 +82,8 @@ def job_status(job_id: str):
         return jsonify(get_streamcopy_job(job_id))
     except KeyError:
         return jsonify({"error": "job_not_found"}), 404
+    except RuntimeError as exc:
+        return jsonify({"error": "job_owned_elsewhere", "message": str(exc)}), 409
 
 
 @bp.post("/jobs/<job_id>/cancel")
@@ -88,3 +92,5 @@ def cancel_job(job_id: str):
         return jsonify(cancel_streamcopy_job(job_id))
     except KeyError:
         return jsonify({"error": "job_not_found"}), 404
+    except RuntimeError as exc:
+        return jsonify({"error": "job_owned_elsewhere", "message": str(exc)}), 409

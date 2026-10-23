@@ -1,4 +1,4 @@
-# DiskShell HDD 0.7.4
+# DiskShell HDD 0.7.5
 
 [Русская версия](README.ru.md) · English
 
@@ -226,14 +226,13 @@ The same wait/retry policy surrounds directory creation, final size verification
 Scope: the backend process must remain alive. Persistent job recovery across a backend restart is a separate transfer-journal milestone; remote credentials/profiles remain RAM-only.
 
 
-## StreamCopy EXP 0.7.3
+## StreamCopy EXP 0.7.5 · River Keeper
 
-A separate **StreamCopy · EXP** local-copy page now experiments with a manually locked media profile and a bounded producer/consumer pipeline. USB3 is treated as transport rather than media type; HDD→HDD stays an HDD sequential profile. Drive cache sizes can be supplied as hints. The regular Commander is unchanged. See [docs/STREAMCOPY.md](docs/STREAMCOPY.md).
+**StreamCopy · EXP** now persists the transfer river in SQLite rather than relying on RAM-only job state. Manifest items, stable local-volume identities and 128 MiB checkpoints survive backend restart. A job-specific `.dspart` is verified against persisted SHA-256 checkpoint data; the unverified tail is truncated and rewritten from the last safe checkpoint.
 
+Hot-unplug enters `waiting_endpoint` and resumes only when the same volume identity returns. Backend restart creates a new worker for the same persistent job after lease claim.
 
-### StreamCopy 0.7.3 · UI is not a failure point
-
-Active StreamCopy jobs are backend-owned. Closing/refreshing the page or navigating elsewhere in DiskShell does not stop the copy; reopening StreamCopy automatically finds and reattaches to the active backend job. Backend restart is still a boundary because the live job registry remains RAM-only.
+There is no destructive Move primitive: use **COPY**, or optional **COPY → SHA-256 → DELETE SOURCE** after verified publication. See [docs/STREAMCOPY.md](docs/STREAMCOPY.md).
 
 
 ### Workspace 0.7.3 · current page is backend-owned
@@ -241,7 +240,7 @@ Active StreamCopy jobs are backend-owned. Closing/refreshing the page or navigat
 The current workbench page, active volume, and scan id are now persisted in backend SQLite rather than browser storage alone. Clearing browser site data or switching browsers does not force a landing page; DiskShell restores the current workspace. An active StreamCopy job on another page is exposed through a `↩ StreamCopy · status` header chip. See [docs/WORKSPACE_STATE.md](docs/WORKSPACE_STATE.md).
 
 
-## Logging 0.7.4 · operator events instead of polling noise
+## Logging 0.7.5 · operator events instead of polling noise
 
 The browser/UI is treated as a control surface. Successful HTTP polling traffic (`/api/files/roots`, `/api/ui-state`, StreamCopy status, frontend `304`) is no longer printed to the backend console. The console is reserved for warnings and errors.
 

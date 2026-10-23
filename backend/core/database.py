@@ -214,6 +214,70 @@ CREATE TABLE IF NOT EXISTS workspace_state (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS streamcopy_jobs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    destination_path TEXT NOT NULL,
+    source_endpoint_json TEXT NOT NULL DEFAULT '{}',
+    destination_endpoint_json TEXT NOT NULL DEFAULT '{}',
+    profile_json TEXT NOT NULL DEFAULT '{}',
+    verify_mode TEXT NOT NULL DEFAULT 'size',
+    delete_source_after_verify INTEGER NOT NULL DEFAULT 0,
+    target_root TEXT,
+    current_item_index INTEGER,
+    current_path TEXT NOT NULL DEFAULT '',
+    bytes INTEGER NOT NULL DEFAULT 0,
+    total_bytes INTEGER NOT NULL DEFAULT 0,
+    files INTEGER NOT NULL DEFAULT 0,
+    total_files INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    skipped_bytes INTEGER NOT NULL DEFAULT 0,
+    manifest_files INTEGER NOT NULL DEFAULT 0,
+    manifest_directories INTEGER NOT NULL DEFAULT 0,
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    progress_percent REAL NOT NULL DEFAULT 0,
+    average_mib_s REAL NOT NULL DEFAULT 0,
+    wait_cycles INTEGER NOT NULL DEFAULT 0,
+    auto_resumes INTEGER NOT NULL DEFAULT 0,
+    waiting_since TEXT,
+    lease_owner TEXT,
+    lease_expires_at REAL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS streamcopy_items (
+    job_id TEXT NOT NULL,
+    item_index INTEGER NOT NULL,
+    source_path TEXT NOT NULL,
+    target_path TEXT NOT NULL,
+    partial_path TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    source_mtime_ns INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    confirmed_offset INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    PRIMARY KEY (job_id, item_index),
+    FOREIGN KEY (job_id) REFERENCES streamcopy_jobs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS streamcopy_checkpoints (
+    job_id TEXT NOT NULL,
+    item_index INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    block_start INTEGER NOT NULL,
+    block_size INTEGER NOT NULL,
+    digest TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (job_id, item_index, offset),
+    FOREIGN KEY (job_id, item_index)
+        REFERENCES streamcopy_items(job_id, item_index)
+        ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS diagnostic_runs (
     id TEXT PRIMARY KEY,
     disk_number INTEGER NOT NULL,
@@ -246,6 +310,12 @@ CREATE INDEX IF NOT EXISTS idx_photos_scan ON photos(scan_id);
 CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);
+CREATE INDEX IF NOT EXISTS idx_streamcopy_jobs_status
+ON streamcopy_jobs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_streamcopy_items_job_status
+ON streamcopy_items(job_id, status, item_index);
+CREATE INDEX IF NOT EXISTS idx_streamcopy_checkpoints_item
+ON streamcopy_checkpoints(job_id, item_index, offset DESC);
 CREATE INDEX IF NOT EXISTS idx_diagnostic_runs_disk
 ON diagnostic_runs(disk_number, started_at DESC);
 """

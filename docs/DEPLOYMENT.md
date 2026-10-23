@@ -1,6 +1,6 @@
-# Deploying DiskShell 0.7.4
+# Deploying DiskShell 0.7.5
 
-DiskShell 0.7.4 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
+DiskShell 0.7.5 builds on the first frozen admin baseline; GitHub `main` is the source of truth.
 
 ## Administrator/root privileges
 
@@ -269,8 +269,13 @@ Drive inventory is periodically refreshed; an offline root is shown as OFFLINE a
 This state remains in the running backend process. Backend-restart auto-recovery is intentionally deferred to a persistent transfer journal; SSH credentials remain RAM-only.
 
 
-## Quiet console and event journal 0.7.4
+## Quiet console and event journal 0.7.5
 
 Routine HTTP access logging is disabled. UI polling and successful 200/304 traffic no longer floods the elevated shell. The console is reserved for WARNING/ERROR output. The rotating event journal is `data/logs/diskshell.log`, capped at 5 MiB with up to five backups. Admin launchers print the journal path at startup.
 
 See [LOGGING.md](LOGGING.md).
+
+
+## StreamCopy River Keeper 0.7.5
+
+Unfinished local StreamCopy jobs are persisted in SQLite `data/diskshell.db`. After backend restart the recovery manager claims the job after the previous lease expires. Remaining `.dspart-<job>` partial files are part of recovery state and should not be manually deleted while a job is unfinished.

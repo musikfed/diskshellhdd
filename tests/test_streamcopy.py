@@ -630,3 +630,90 @@ def test_sftp_endpoint_rebinds_after_connection_id_changes(tmp_path, monkeypatch
     rebound = endpoints.rebind(endpoint)
     assert rebound["connection_id"] == "sftp-b"
     assert rebound["remote_identity"] == identity
+
+
+
+def test_local_hdd_profile_can_opt_into_ntfs_locality():
+    profile = streamcopy_jobs.stream_profile(
+        "hdd",
+        "hdd",
+        "usb3",
+        "usb3",
+        "unknown",
+        32,
+        128,
+        "ntfs_locality",
+    )
+
+    assert profile["ordering_mode"] == "ntfs_locality"
+    assert profile["ordering_requested"] == "ntfs_locality"
+    assert profile["locality_scheduler"]["enabled"] is True
+    assert profile["locality_scheduler"]["automatic"] is False
+    assert "first-LCN" in profile["ordering"]
+
+
+def test_network_profile_forces_manifest_even_when_locality_requested():
+    profile = streamcopy_jobs.stream_profile(
+        "hdd",
+        "hdd",
+        "network",
+        "usb3",
+        "unknown",
+        32,
+        128,
+        "ntfs_locality",
+    )
+
+    assert profile["ordering_requested"] == "ntfs_locality"
+    assert profile["ordering_mode"] == "manifest"
+    assert profile["locality_scheduler"]["enabled"] is False
+
+
+def test_local_manifest_uses_opt_in_locality_scheduler(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("a.bin", "b.bin", "c.bin"):
+        (source / name).write_bytes(name.encode("ascii"))
+    destination = tmp_path / "destination"
+
+    real_spawn = streamcopy_jobs._spawn_claimed_job
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", lambda _job_id: False)
+
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        str(destination),
+        "hdd",
+        "hdd",
+        ordering_mode="ntfs_locality",
+    )
+
+    def reverse_order(items):
+        values = [dict(item) for item in reversed(items)]
+        for index, item in enumerate(values):
+            item["item_index"] = index
+        return values, {
+            "mode": "ntfs_first_lcn",
+            "files": len(values),
+            "known_lcn": len(values),
+            "unknown_lcn": 0,
+            "coverage_percent": 100.0,
+        }
+
+    monkeypatch.setattr(
+        streamcopy_jobs,
+        "order_manifest_by_ntfs_locality",
+        reverse_order,
+    )
+    streamcopy_jobs._build_manifest(job["id"], source, destination)
+    items = journal.list_items(job["id"])
+
+    assert [item["source_path"].split("\\")[-1].split("/")[-1] for item in items] == [
+        "c.bin",
+        "b.bin",
+        "a.bin",
+    ]
+
+    journal.release_lease(job["id"], streamcopy_jobs._INSTANCE_ID)
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", real_spawn)

@@ -184,12 +184,18 @@ export function DisksAdmin({ setError }) {
   }
   useEffect(() => {
     let stopped = false
+    let refreshing = false
     const refresh = async () => {
+      if (refreshing) return
+      refreshing = true
       const [diskResult, capabilityResult] = await Promise.allSettled([
         api('/api/disks'),
         api('/api/disks/capabilities'),
       ])
-      if (stopped) return
+      if (stopped) {
+        refreshing = false
+        return
+      }
       if (diskResult.status === 'fulfilled') {
         setData(diskResult.value)
         setInventoryError('')
@@ -197,6 +203,7 @@ export function DisksAdmin({ setError }) {
         setInventoryError(diskResult.reason?.message || 'Disk inventory temporarily unavailable')
       }
       if (capabilityResult.status === 'fulfilled') setCapabilities(capabilityResult.value)
+      refreshing = false
     }
     const onDiskEvent = event => {
       if (stopped) return
@@ -210,7 +217,7 @@ export function DisksAdmin({ setError }) {
     }
     window.addEventListener('diskshell:disks-changed', onDiskEvent)
     refresh()
-    const timer = setInterval(refresh, 30000)
+    const timer = setInterval(refresh, 120000)
     return () => {
       stopped = true
       clearInterval(timer)

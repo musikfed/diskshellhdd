@@ -27,28 +27,7 @@ PAGE_IDS = {
 }
 
 
-def _ensure_row(connection) -> None:
-    connection.execute(
-        """
-        INSERT OR IGNORE INTO workspace_state
-            (id, active_page, active_volume, scan_id, view_state_json)
-        VALUES (1, 'dashboard', '', '', '{}')
-        """
-    )
-
-
-def get_workspace_state() -> dict[str, Any]:
-    init_database()
-    with connect() as connection:
-        _ensure_row(connection)
-        row = connection.execute(
-            """
-            SELECT active_page, active_volume, scan_id, view_state_json, updated_at
-            FROM workspace_state
-            WHERE id = 1
-            """
-        ).fetchone()
-        connection.commit()
+def _state_from_row(row) -> dict[str, Any]:
     return {
         "active_page": str(row["active_page"] or "dashboard"),
         "active_volume": str(row["active_volume"] or ""),
@@ -58,6 +37,21 @@ def get_workspace_state() -> dict[str, Any]:
         "scope": "local_backend",
         "browser_independent": True,
     }
+
+
+def get_workspace_state() -> dict[str, Any]:
+    init_database()
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT active_page, active_volume, scan_id, view_state_json, updated_at
+            FROM workspace_state
+            WHERE id = 1
+            """
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("workspace_state row is missing after database initialization")
+    return _state_from_row(row)
 
 
 def update_workspace_state(
@@ -87,35 +81,50 @@ def update_workspace_state(
         updates.append("scan_id = ?")
         values.append(str(scan_id))
 
-    if view_state is not None:
-        if not isinstance(view_state, dict):
-            raise ValueError("view_state must be an object")
-        with connect() as state_connection:
-            _ensure_row(state_connection)
-            state_row = state_connection.execute(
-                "SELECT view_state_json FROM workspace_state WHERE id = 1"
-            ).fetchone()
-            existing = json.loads(state_row["view_state_json"] or "{}")
-        merged = dict(existing)
-        for key, value in view_state.items():
-            if value is None:
-                merged.pop(str(key), None)
-            else:
-                merged[str(key)] = value
-        updates.append("view_state_json = ?")
-        values.append(json.dumps(merged, ensure_ascii=False, separators=(",", ":")))
+    if view_state is not None and not isinstance(view_state, dict):
+        raise ValueError("view_state must be an object")
 
     with connect() as connection:
-        _ensure_row(connection)
+        if view_state is not None:
+            state_row = connection.execute(
+                "SELECT view_state_json FROM workspace_state WHERE id = 1"
+            ).fetchone()
+            if state_row is None:
+                raise RuntimeError(
+                    "workspace_state row is missing after database initialization"
+                )
+            existing = json.loads(state_row["view_state_json"] or "{}")
+            merged = dict(existing)
+            for key, value in view_state.items():
+                if value is None:
+                    merged.pop(str(key), None)
+                else:
+                    merged[str(key)] = value
+            updates.append("view_state_json = ?")
+            values.append(
+                json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
+            )
+
         if updates:
             updates.append("updated_at = CURRENT_TIMESTAMP")
             connection.execute(
                 f"UPDATE workspace_state SET {', '.join(updates)} WHERE id = 1",
                 values,
             )
+
+        row = connection.execute(
+            """
+            SELECT active_page, active_volume, scan_id, view_state_json, updated_at
+            FROM workspace_state
+            WHERE id = 1
+            """
+        ).fetchone()
         connection.commit()
 
-    state = get_workspace_state()
+    if row is None:
+        raise RuntimeError("workspace_state row is missing after update")
+
+    state = _state_from_row(row)
     emit_event(
         "workspace.changed",
         {

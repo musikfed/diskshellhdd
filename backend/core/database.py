@@ -255,9 +255,16 @@ CREATE TABLE IF NOT EXISTS workspace_state (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT OR IGNORE INTO workspace_state
-    (id, active_page, active_volume, scan_id, view_state_json)
-VALUES (1, 'dashboard', '', '', '{}');
+CREATE TABLE IF NOT EXISTS workspace_views (
+    view_id TEXT PRIMARY KEY,
+    active_page TEXT NOT NULL DEFAULT 'dashboard',
+    active_volume TEXT NOT NULL DEFAULT '',
+    scan_id TEXT NOT NULL DEFAULT '',
+    view_state_json TEXT NOT NULL DEFAULT '{}',
+    detached INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS streamcopy_jobs (
     id TEXT PRIMARY KEY,
@@ -388,6 +395,8 @@ CREATE INDEX IF NOT EXISTS idx_commander_jobs_status
 ON commander_jobs(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_diagnostic_runs_disk
 ON diagnostic_runs(disk_number, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_views_updated
+ON workspace_views(updated_at DESC);
 """
 
 
@@ -463,6 +472,13 @@ def init_database() -> None:
                 [
                     ("view_state_json", "TEXT NOT NULL DEFAULT '{}'"),
                 ],
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO workspace_state
+                    (id, active_page, active_volume, scan_id, view_state_json)
+                VALUES (1, 'dashboard', '', '', '{}')
+                """
             )
             _ensure_columns(
                 connection,

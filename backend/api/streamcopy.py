@@ -3,6 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request
 
 from backend.files.service import FileWriteBlocked
+from backend.remote.service import RemoteConnectionError
 from backend.streamcopy.jobs import (
     cancel_streamcopy_job,
     get_streamcopy_job,
@@ -84,7 +85,7 @@ def start_job():
         return jsonify(job), 202
     except FileWriteBlocked as exc:
         return jsonify({"error": "file_write_blocked", "message": str(exc)}), 403
-    except (KeyError, TypeError, ValueError, OSError) as exc:
+    except (KeyError, TypeError, ValueError, OSError, RemoteConnectionError) as exc:
         return jsonify({"error": "streamcopy_job_failed", "message": str(exc)}), 400
 
 

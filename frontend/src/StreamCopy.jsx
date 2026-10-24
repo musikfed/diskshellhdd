@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, fmtBytes } from './api.js'
+import { api, eventStreamUrl, fmtBytes } from './api.js'
 import './StreamCopy.css'
 
 const MEDIA = [
@@ -223,13 +223,15 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   useEffect(() => {
     if (!job?.id || TERMINAL.has(job.status)) return undefined
     let stopped = false
-    const poll = async () => {
+    const jobId = job.id
+
+    const reconcile = async () => {
       try {
-        const next = await api(`/api/streamcopy/jobs/${job.id}`)
-        if (!stopped) setJob(next)
+        const nextJob = await api(`/api/streamcopy/jobs/${jobId}`)
+        if (!stopped) setJob(nextJob)
       } catch (e) {
         if (!stopped && e.status === 404) {
-          if (localStorage.getItem('streamcopy:activeJobId') === job.id) {
+          if (localStorage.getItem('streamcopy:activeJobId') === jobId) {
             localStorage.removeItem('streamcopy:activeJobId')
           }
           setJob(null)
@@ -239,11 +241,28 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         }
       }
     }
-    const timer = setInterval(poll, 400)
-    poll()
+
+    const source = typeof EventSource === 'undefined'
+      ? null
+      : new EventSource(eventStreamUrl())
+
+    const applyEvent = event => {
+      let payload
+      try { payload = JSON.parse(event.data)?.payload || {} } catch { return }
+      if (payload.job_id !== jobId || stopped) return
+      setJob(current => current ? { ...current, ...payload } : current)
+      if (payload.status && TERMINAL.has(payload.status)) reconcile()
+    }
+
+    source?.addEventListener('streamcopy.changed', applyEvent)
+    source?.addEventListener('streamcopy.progress', applyEvent)
+    reconcile()
+    const timer = setInterval(reconcile, 10000)
+
     return () => {
       stopped = true
       clearInterval(timer)
+      source?.close()
     }
   }, [job?.id, job?.status, setError])
 
@@ -297,11 +316,12 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   return <div className="streamcopy-page">
     <div className="streamcopy-hero">
       <div>
-        <span className="streamcopy-kicker">EXPERIMENTAL · LOCAL COPY ENGINE</span>
-        <h2>StreamCopy</h2>
+        <span className="streamcopy-kicker">V2 EXPERIMENTAL · LOCAL RIVER ENGINE</span>
+        <h2>StreamCopy v2</h2>
         <p>
-          Папка рассматривается как один логический поток: один manifest, один producer,
-          один consumer и ограниченный RAM ring buffer. Обычный Commander не изменяется.
+          Папка рассматривается как один логический поток. Маленькие файлы объединяются
+          producer’ом в RAM frames, а крупные идут последовательным River Keeper path.
+          На destination всё равно создаются обычные отдельные файлы.
         </p>
       </div>
       <div className="streamcopy-lock">
@@ -334,6 +354,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           <div><small>Chunk</small><b>{profile ? `${profile.chunk_mib} MiB` : '…'}</b></div>
           <div><small>Queue</small><b>{profile ? `${profile.queue_depth} buffers` : '…'}</b></div>
           <div><small>RAM ring</small><b>{profile ? `${profile.max_buffer_mib} MiB max` : '…'}</b></div>
+          <div><small>Microfiles</small><b>{profile ? `≤ ${profile.microfile_max_mib} MiB` : '…'}</b></div>
+          <div><small>Micro frame</small><b>{profile ? `${profile.micro_frame_mib} MiB` : '…'}</b></div>
           <div><small>River keeper</small><b>{profile ? `${profile.checkpoint_mib} MiB checkpoint` : '…'}</b></div>
           <div className="grow"><small>Ordering</small><b>{profile?.ordering || '…'}</b></div>
         </div>

@@ -36,3 +36,36 @@ def test_workspace_state_api_is_backend_persistent(tmp_path, monkeypatch):
     assert payload["active_volume"] == "W:\\"
     assert payload["scan_id"] == "77"
     assert payload["scope"] == "local_backend"
+
+
+
+def test_workspace_api_isolates_view_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "workspace-view-api.db")
+    client = create_app().test_client()
+
+    first = client.patch(
+        "/api/ui-state",
+        json={
+            "view_id": "browser-a",
+            "active_page": "files",
+            "view_state": {"commanderJobId": "job-a"},
+        },
+    )
+    second = client.patch(
+        "/api/ui-state",
+        json={
+            "view_id": "browser-b",
+            "active_page": "disks",
+            "view_state": {"commanderJobId": "job-b"},
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    restored_a = client.get("/api/ui-state?view_id=browser-a").get_json()
+    restored_b = client.get("/api/ui-state?view_id=browser-b").get_json()
+    assert restored_a["active_page"] == "files"
+    assert restored_a["view_state"]["commanderJobId"] == "job-a"
+    assert restored_b["active_page"] == "disks"
+    assert restored_b["view_state"]["commanderJobId"] == "job-b"

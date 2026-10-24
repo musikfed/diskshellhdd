@@ -10,7 +10,10 @@ bp = Blueprint("ui_state", __name__, url_prefix="/api/ui-state")
 
 @bp.get("")
 def workspace_state():
-    return jsonify(get_workspace_state())
+    try:
+        return jsonify(get_workspace_state(request.args.get("view_id")))
+    except ValueError as exc:
+        return jsonify({"error": "workspace_state_invalid", "message": str(exc)}), 400
 
 
 @bp.patch("")
@@ -24,6 +27,9 @@ def save_workspace_state():
                 active_volume=payload.get("active_volume"),
                 scan_id=payload.get("scan_id"),
                 view_state=payload.get("view_state"),
+                view_id=payload.get("view_id"),
+                detached=bool(payload.get("detached", False)),
+                promote_default=bool(payload.get("promote_default", True)),
             )
         )
     except ValueError as exc:

@@ -31,7 +31,7 @@ from backend.streamcopy.jobs import start_streamcopy_recovery_manager
 from backend.vault.service import vault_write_state
 
 
-VERSION = "0.8.6"
+VERSION = "0.8.7"
 
 
 def create_app() -> Flask:

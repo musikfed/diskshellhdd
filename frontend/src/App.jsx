@@ -73,10 +73,29 @@ function Safety({ health }) {
   </div>
 }
 
+function createViewId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `view-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 export default function App() {
   const urlParams = new URLSearchParams(window.location.search)
   const requestedView = urlParams.get('view') || ''
   const detached = urlParams.get('detached') === '1' && NAV.some(([id]) => id === requestedView)
+  const [viewId] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    let value = params.get('view_id')
+    if (!value) {
+      value = createViewId()
+      params.set('view_id', value)
+      const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`
+      window.history.replaceState(window.history.state, '', next)
+    }
+    return value
+  })
+  const cacheKey = name => `diskshell:view:${viewId}:${name}`
   const [page, setPage] = useState(detached ? requestedView : 'dashboard')
   const [workspaceReady, setWorkspaceReady] = useState(false)
   const [restoreNotice, setRestoreNotice] = useState('')
@@ -103,7 +122,13 @@ export default function App() {
 
     const restoreWorkspace = async () => {
       try {
-        const state = await api('/api/ui-state')
+        const state = await Promise.race([
+          api(`/api/ui-state?view_id=${encodeURIComponent(viewId)}`),
+          new Promise((_, reject) => setTimeout(
+            () => reject(new Error('workspace restore timeout')),
+            4000,
+          )),
+        ])
         if (stopped) return
         const nextPage = detached
           ? requestedView
@@ -114,18 +139,26 @@ export default function App() {
         setActiveVolume(String(state.active_volume || ''))
         setScanId(String(state.scan_id || ''))
         setWorkspaceViewState(state.view_state || {})
+        sessionStorage.setItem(cacheKey('viewState'), JSON.stringify(state.view_state || {}))
         setRestoreNotice(`↩ Восстановлено: ${NAV.find(item => item[0] === nextPage)?.[2] || nextPage}`)
         timer = setTimeout(() => {
           if (!stopped) setRestoreNotice('')
         }, 5000)
       } catch {
         if (stopped) return
-        const cachedPage = localStorage.getItem('activePage')
+        const cachedPage = sessionStorage.getItem(cacheKey('activePage'))
         setPage(detached
           ? requestedView
           : NAV.some(([id]) => id === cachedPage) ? cachedPage : 'dashboard')
-        setActiveVolume(localStorage.getItem('activeVolume') || '')
-        setScanId(localStorage.getItem('scanId') || '')
+        setActiveVolume(sessionStorage.getItem(cacheKey('activeVolume')) || '')
+        setScanId(sessionStorage.getItem(cacheKey('scanId')) || '')
+        try {
+          setWorkspaceViewState(JSON.parse(
+            sessionStorage.getItem(cacheKey('viewState')) || '{}',
+          ))
+        } catch {
+          setWorkspaceViewState({})
+        }
       } finally {
         if (!stopped) setWorkspaceReady(true)
       }
@@ -136,7 +169,7 @@ export default function App() {
       stopped = true
       if (timer) clearTimeout(timer)
     }
-  }, [])
+  }, [viewId])
 
   useEffect(() => { refreshHealth() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -163,35 +196,56 @@ export default function App() {
     }
   }, [])
   useEffect(() => {
-    if (!workspaceReady || detached) return
-    localStorage.setItem('activePage', page)
+    if (!workspaceReady) return
+    sessionStorage.setItem(cacheKey('activePage'), page)
     setError('')
     api('/api/ui-state', {
       method: 'PATCH',
-      body: JSON.stringify({ active_page: page }),
+      body: JSON.stringify({
+        view_id: viewId,
+        detached,
+        promote_default: !detached,
+        active_page: page,
+      }),
     }).catch(() => {
-      // Browser storage remains only a fallback cache; backend state is authoritative.
+      // Per-tab session storage remains only a fallback cache.
     })
-  }, [page, workspaceReady, detached])
+  }, [page, workspaceReady, detached, viewId])
   const patchViewState = useCallback((patch) => {
-    setWorkspaceViewState(current => ({ ...current, ...patch }))
+    setWorkspaceViewState(current => {
+      const next = { ...current }
+      for (const [key, value] of Object.entries(patch || {})) {
+        if (value == null) delete next[key]
+        else next[key] = value
+      }
+      sessionStorage.setItem(
+        `diskshell:view:${viewId}:viewState`,
+        JSON.stringify(next),
+      )
+      return next
+    })
     if (!workspaceReady) return
     api('/api/ui-state', {
       method: 'PATCH',
-      body: JSON.stringify({ view_state: patch }),
+      body: JSON.stringify({
+        view_id: viewId,
+        detached,
+        promote_default: !detached,
+        view_state: patch,
+      }),
     }).catch(() => {})
-  }, [workspaceReady])
+  }, [workspaceReady, viewId, detached])
 
   useEffect(() => {
     const key = `pageScroll:${page}`
-    const fallback = Number(localStorage.getItem(key) || 0)
+    const fallback = Number(sessionStorage.getItem(cacheKey(key)) || 0)
     const saved = Number(workspaceViewState[key] ?? fallback)
     const restore = requestAnimationFrame(() => {
       window.scrollTo(0, Number.isFinite(saved) ? saved : 0)
     })
     const save = () => {
       const value = Math.round(window.scrollY)
-      localStorage.setItem(key, String(value))
+      sessionStorage.setItem(cacheKey(key), String(value))
       patchViewState({ [key]: value })
     }
     return () => {
@@ -201,22 +255,32 @@ export default function App() {
   }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!workspaceReady) return
-    if (activeVolume) localStorage.setItem('activeVolume', activeVolume)
-    else localStorage.removeItem('activeVolume')
+    if (activeVolume) sessionStorage.setItem(cacheKey('activeVolume'), activeVolume)
+    else sessionStorage.removeItem(cacheKey('activeVolume'))
     api('/api/ui-state', {
       method: 'PATCH',
-      body: JSON.stringify({ active_volume: activeVolume }),
+      body: JSON.stringify({
+        view_id: viewId,
+        detached,
+        promote_default: !detached,
+        active_volume: activeVolume,
+      }),
     }).catch(() => {})
-  }, [activeVolume, workspaceReady])
+  }, [activeVolume, workspaceReady, viewId, detached])
   useEffect(() => {
     if (!workspaceReady) return
-    if (scanId) localStorage.setItem('scanId', scanId)
-    else localStorage.removeItem('scanId')
+    if (scanId) sessionStorage.setItem(cacheKey('scanId'), scanId)
+    else sessionStorage.removeItem(cacheKey('scanId'))
     api('/api/ui-state', {
       method: 'PATCH',
-      body: JSON.stringify({ scan_id: scanId }),
+      body: JSON.stringify({
+        view_id: viewId,
+        detached,
+        promote_default: !detached,
+        scan_id: scanId,
+      }),
     }).catch(() => {})
-  }, [scanId, workspaceReady])
+  }, [scanId, workspaceReady, viewId, detached])
   useEffect(() => {
     if (!workspaceReady) return
     if (page === 'streamcopy') {
@@ -247,12 +311,13 @@ export default function App() {
 
     const workspaceChanged = event => {
       const payload = parse(event)
+      if (payload.view_id !== viewId) return
       if (payload.active_volume !== undefined) setActiveVolume(String(payload.active_volume || ''))
       if (payload.scan_id !== undefined) setScanId(String(payload.scan_id || ''))
       if (payload.view_state && typeof payload.view_state === 'object') {
         setWorkspaceViewState(payload.view_state)
       }
-      if (!detached && NAV.some(([id]) => id === payload.active_page)) {
+      if (NAV.some(([id]) => id === payload.active_page)) {
         setPage(payload.active_page)
       }
     }
@@ -286,7 +351,7 @@ export default function App() {
     source.addEventListener('storage.roots_changed', rootsChanged)
     source.addEventListener('storage.disks_changed', disksChanged)
     return () => source.close()
-  }, [workspaceReady, detached, page])
+  }, [workspaceReady, viewId, page])
 
   const context = useMemo(
     () => ({
@@ -300,8 +365,9 @@ export default function App() {
       setActiveVolume,
       workspaceViewState,
       patchViewState,
+      viewId,
     }),
-    [scanId, health, roots, activeVolume, workspaceViewState, patchViewState],
+    [scanId, health, roots, activeVolume, workspaceViewState, patchViewState, viewId],
   )
   const activeRoot = roots.find(item => item.path === activeVolume)
   const activeVolumeOffline = Boolean(activeVolume && (!activeRoot || activeRoot.available === false))
@@ -362,6 +428,7 @@ export default function App() {
               target.search = ''
               target.searchParams.set('view', page)
               target.searchParams.set('detached', '1')
+              target.searchParams.set('view_id', createViewId())
               window.open(target.toString(), '_blank', 'noopener,noreferrer')
             }}
             title="Открыть текущий view в отдельном окне/на другом мониторе"

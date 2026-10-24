@@ -845,7 +845,7 @@ function VaultPathBrowser({
   </div>
 }
 
-function Vault({ setError, roots, activeVolume, setActiveVolume, refreshHealth }) {
+function Vault({ setError, roots, activeVolume, setActiveVolume, refreshHealth, viewId, workspaceViewState = {}, patchViewState }) {
   const [status, setStatus] = useState(null)
   const [identity, setIdentity] = useState('')
   const [secret, setSecret] = useState('')
@@ -855,8 +855,8 @@ function Vault({ setError, roots, activeVolume, setActiveVolume, refreshHealth }
   const [items, setItems] = useState([])
   const [vaultVolume, setVaultVolume] = useState(() => activeVolume || '')
   const [vaultFolder, setVaultFolder] = useState('DiskShellVault')
-  const [source, setSource] = useState(() => localStorage.getItem('vaultSourcePath') || activeVolume || '')
-  const [destination, setDestination] = useState(() => localStorage.getItem('vaultDestinationPath') || activeVolume || '')
+  const [source, setSource] = useState(() => workspaceViewState.vaultSourcePath || sessionStorage.getItem(viewCacheKey(viewId, 'vaultSourcePath')) || activeVolume || '')
+  const [destination, setDestination] = useState(() => workspaceViewState.vaultDestinationPath || sessionStorage.getItem(viewCacheKey(viewId, 'vaultDestinationPath')) || activeVolume || '')
   const refreshStatus = () => api('/api/vault/status').then(setStatus).catch(e => setError(e.message))
 
   useEffect(refreshStatus, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -866,11 +866,15 @@ function Vault({ setError, roots, activeVolume, setActiveVolume, refreshHealth }
     }
   }, [activeVolume, roots, vaultVolume])
   useEffect(() => {
-    if (source) localStorage.setItem('vaultSourcePath', source)
-  }, [source])
+    if (source) sessionStorage.setItem(viewCacheKey(viewId, 'vaultSourcePath'), source)
+    else sessionStorage.removeItem(viewCacheKey(viewId, 'vaultSourcePath'))
+    patchViewState?.({ vaultSourcePath: source || null })
+  }, [source, viewId, patchViewState])
   useEffect(() => {
-    if (destination) localStorage.setItem('vaultDestinationPath', destination)
-  }, [destination])
+    if (destination) sessionStorage.setItem(viewCacheKey(viewId, 'vaultDestinationPath'), destination)
+    else sessionStorage.removeItem(viewCacheKey(viewId, 'vaultDestinationPath'))
+    patchViewState?.({ vaultDestinationPath: destination || null })
+  }, [destination, viewId, patchViewState])
 
   const locationEditable = status?.location_editable !== false
   const folderName = vaultFolder.trim().replace(/^[\\/]+/, '')

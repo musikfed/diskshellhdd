@@ -1,4 +1,4 @@
-# DiskShell HDD 0.8.4
+# DiskShell HDD 0.8.5
 
 [Русская версия](README.ru.md) · English
 
@@ -271,3 +271,12 @@ Photos / People now indexes local whole-image subject/object tags through an opt
 Configure `DS_IMAGE_CLASSIFIER_MODEL`, `DS_IMAGE_CLASSIFIER_LABELS`, and `DS_IMAGE_CLASSIFIER_INPUT_SIZE`. No cloud service is used. This is whole-image classification, not bounding-box detection.
 
 See [docs/RELEASE_0.8.4.md](docs/RELEASE_0.8.4.md).
+
+
+## 0.8.5 · HDD NTFS Locality Scheduler
+
+StreamCopy adds an opt-in **NTFS first-LCN locality** ordering mode for a Local HDD source. After manifest creation, DiskShell reads the first NTFS LCN through `FSCTL_GET_RETRIEVAL_POINTERS` and changes source read order without moving extents or enabling `DS_ALLOW_EXTENT_MOVES`.
+
+Unknown-LCN files remain stable at the end; SFTP/SSD/Flash use manifest order. The mode remains opt-in until comparative benchmarks justify automatic selection.
+
+See [docs/RELEASE_0.8.5.md](docs/RELEASE_0.8.5.md).

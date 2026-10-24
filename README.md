@@ -282,7 +282,7 @@ Unknown-LCN files remain stable at the end; SFTP/SSD/Flash use manifest order. T
 See [docs/RELEASE_0.8.5.md](docs/RELEASE_0.8.5.md).
 
 
-## 0.8.7 · Multi-view workspace / SQLite hotfix
+## 0.8.6 · Multi-view workspace / SQLite hotfix
 
 Fixes `sqlite3.OperationalError: database is locked` around `/api/ui-state`: workspace GET is read-only, PATCH uses one transaction, and WAL/schema initialization no longer runs on every request.
 
@@ -290,12 +290,12 @@ Each browser tab now has its own backend `view_id`, so Files/SFTP, Disks and Str
 
 SFTP directory copy now visibly reports remote-manifest preparation, and the background storage watcher no longer runs a full PowerShell disk inventory every few seconds.
 
-See [docs/RELEASE_0.8.7.md](docs/RELEASE_0.8.7.md).
+See [docs/RELEASE_0.8.6.md](docs/RELEASE_0.8.6.md).
 
 
 ## 0.8.7 · Per-view jobs and SFTP symlink safety
 
-Finishes the multi-view isolation started in 0.8.6. Scan, Storage Planner, Diagnostics, Security and StreamCopy no longer share transient job ids through browser-wide localStorage. View-owned job ids stay attached to their backend `view_id`, and a new tab no longer auto-adopts an unrelated StreamCopy job.
+Finishes the multi-view isolation started in 0.8.6. Scan, Storage Planner, Diagnostics, Security, Vault and StreamCopy no longer share transient job ids through browser-wide localStorage. View-owned job ids stay attached to their backend `view_id`, and a new tab no longer auto-adopts an unrelated StreamCopy job.
 
 SFTP tree operations now use link-safe metadata and skip symbolic links while walking manifests. Recursive delete removes the link itself instead of following a link to another directory tree.
 

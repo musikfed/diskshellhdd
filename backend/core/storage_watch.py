@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from typing import Any
@@ -9,8 +8,6 @@ from typing import Any
 from backend.core.events import emit_event
 from backend.core.logging_setup import log_error
 from backend.files.service import list_roots
-from backend.services.storage.windows_disks import list_windows_disks
-from backend.services.storage.write_authorization import annotate_disks
 
 
 _lock = threading.Lock()
@@ -25,12 +22,6 @@ def _roots_snapshot() -> dict[str, Any]:
     return list_roots()
 
 
-def _disks_snapshot() -> dict[str, Any] | None:
-    if os.name != "nt":
-        return None
-    return {"disks": annotate_disks(list_windows_disks())}
-
-
 def start_storage_event_watcher(interval_seconds: float = 3.0) -> None:
     global _started
     with _lock:
@@ -40,30 +31,25 @@ def start_storage_event_watcher(interval_seconds: float = 3.0) -> None:
 
     def worker() -> None:
         roots_signature = ""
-        disks_signature = ""
         while True:
             try:
                 roots = _roots_snapshot()
                 signature = _stable_json(roots)
                 if signature != roots_signature:
+                    had_previous_snapshot = bool(roots_signature)
                     roots_signature = signature
                     emit_event("storage.roots_changed", roots)
+                    if had_previous_snapshot:
+                        # A drive/root topology change is the useful trigger.
+                        # Ask connected disk views to refresh once instead of
+                        # running the expensive full PowerShell inventory here.
+                        emit_event(
+                            "storage.disks_changed",
+                            {"refresh": True, "reason": "roots_changed"},
+                        )
             except Exception as exc:  # noqa: BLE001
                 log_error(
                     "storage.root_watcher_failed",
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-
-            try:
-                disks = _disks_snapshot()
-                if disks is not None:
-                    signature = _stable_json(disks)
-                    if signature != disks_signature:
-                        disks_signature = signature
-                        emit_event("storage.disks_changed", disks)
-            except Exception as exc:  # noqa: BLE001
-                log_error(
-                    "storage.disk_watcher_failed",
                     error=f"{type(exc).__name__}: {exc}",
                 )
             time.sleep(max(1.0, float(interval_seconds)))

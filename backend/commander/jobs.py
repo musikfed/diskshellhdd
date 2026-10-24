@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from backend.commander import journal
+from backend.core.events import emit_event
 from backend.core.logging_setup import log_error, log_event, log_warning
 from backend.files.endpoint_availability import (
     bind_local_volume,
@@ -77,6 +78,20 @@ def _persist_snapshot(
     job.pop("_lease_lost", None)
     journal.save_job(job, transfers=transfers)
     _last_persist[job_id] = now
+    emit_event(
+        "commander.changed",
+        {
+            "job_id": job_id,
+            "status": job.get("status"),
+            "bytes": job.get("bytes"),
+            "total_bytes": job.get("total_bytes"),
+            "files": job.get("files"),
+            "total_files": job.get("total_files"),
+            "current_path": job.get("current_path"),
+            "progress_percent": job.get("progress_percent"),
+            "waiting_endpoint": job.get("waiting_endpoint"),
+        },
+    )
 
 
 def _rebind_remote_endpoint(endpoint: dict[str, Any]) -> None:

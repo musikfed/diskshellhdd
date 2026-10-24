@@ -570,7 +570,7 @@ class _StatFailureSFTP:
     def __init__(self, exc):
         self.exc = exc
 
-    def stat(self, _path):
+    def lstat(self, _path):
         raise self.exc
 
 

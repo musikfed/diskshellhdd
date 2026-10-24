@@ -35,8 +35,12 @@ const ORDERING = [
 
 const TERMINAL = new Set(['completed', 'completed_with_warnings', 'failed', 'cancelled'])
 
-function saved(key, fallback) {
-  return localStorage.getItem(`streamcopy:${key}`) || fallback
+function streamKey(viewId, key) {
+  return `diskshell:view:${viewId}:streamcopy:${key}`
+}
+
+function saved(viewId, key, fallback) {
+  return sessionStorage.getItem(streamKey(viewId, key)) || fallback
 }
 
 function Band({ role, title, children, tone = '' }) {
@@ -58,25 +62,25 @@ function SelectField({ label, value, onChange, options, disabled = false }) {
   </label>
 }
 
-export default function StreamCopy({ health, setError, refreshHealth }) {
-  const [sourcePath, setSourcePath] = useState(() => saved('sourcePath', 'H:\\'))
-  const [destinationPath, setDestinationPath] = useState(() => saved('destinationPath', 'W:\\'))
-  const [sourceKind, setSourceKind] = useState(() => saved('sourceKind', 'local'))
-  const [destinationKind, setDestinationKind] = useState(() => saved('destinationKind', 'local'))
-  const [sourceConnectionId, setSourceConnectionId] = useState(() => saved('sourceConnectionId', ''))
-  const [destinationConnectionId, setDestinationConnectionId] = useState(() => saved('destinationConnectionId', ''))
+export default function StreamCopy({ health, setError, refreshHealth, viewId, workspaceViewState = {}, patchViewState }) {
+  const [sourcePath, setSourcePath] = useState(() => workspaceViewState.streamcopySourcePath || saved(viewId, 'sourcePath', 'H:\\'))
+  const [destinationPath, setDestinationPath] = useState(() => workspaceViewState.streamcopyDestinationPath || saved(viewId, 'destinationPath', 'W:\\'))
+  const [sourceKind, setSourceKind] = useState(() => saved(viewId, 'sourceKind', 'local'))
+  const [destinationKind, setDestinationKind] = useState(() => saved(viewId, 'destinationKind', 'local'))
+  const [sourceConnectionId, setSourceConnectionId] = useState(() => saved(viewId, 'sourceConnectionId', ''))
+  const [destinationConnectionId, setDestinationConnectionId] = useState(() => saved(viewId, 'destinationConnectionId', ''))
   const [connections, setConnections] = useState([])
-  const [sourceMedia, setSourceMedia] = useState(() => saved('sourceMedia', 'hdd'))
-  const [destinationMedia, setDestinationMedia] = useState(() => saved('destinationMedia', 'hdd'))
-  const [sourceTransport, setSourceTransport] = useState(() => saved('sourceTransport', 'usb3'))
-  const [destinationTransport, setDestinationTransport] = useState(() => saved('destinationTransport', 'usb3'))
-  const [usbTopology, setUsbTopology] = useState(() => saved('usbTopology', 'unknown'))
-  const [sourceCacheMiB, setSourceCacheMiB] = useState(() => saved('sourceCacheMiB', '32'))
-  const [destinationCacheMiB, setDestinationCacheMiB] = useState(() => saved('destinationCacheMiB', '128'))
-  const [orderingMode, setOrderingMode] = useState(() => saved('orderingMode', 'manifest'))
-  const [verifyMode, setVerifyMode] = useState(() => saved('verifyMode', 'size'))
+  const [sourceMedia, setSourceMedia] = useState(() => saved(viewId, 'sourceMedia', 'hdd'))
+  const [destinationMedia, setDestinationMedia] = useState(() => saved(viewId, 'destinationMedia', 'hdd'))
+  const [sourceTransport, setSourceTransport] = useState(() => saved(viewId, 'sourceTransport', 'usb3'))
+  const [destinationTransport, setDestinationTransport] = useState(() => saved(viewId, 'destinationTransport', 'usb3'))
+  const [usbTopology, setUsbTopology] = useState(() => saved(viewId, 'usbTopology', 'unknown'))
+  const [sourceCacheMiB, setSourceCacheMiB] = useState(() => saved(viewId, 'sourceCacheMiB', '32'))
+  const [destinationCacheMiB, setDestinationCacheMiB] = useState(() => saved(viewId, 'destinationCacheMiB', '128'))
+  const [orderingMode, setOrderingMode] = useState(() => saved(viewId, 'orderingMode', 'manifest'))
+  const [verifyMode, setVerifyMode] = useState(() => saved(viewId, 'verifyMode', 'size'))
   const [deleteSourceAfterVerify, setDeleteSourceAfterVerify] = useState(
-    () => saved('deleteSourceAfterVerify', 'false') === 'true',
+    () => saved(viewId, 'deleteSourceAfterVerify', 'false') === 'true',
   )
   const [profile, setProfile] = useState(null)
   const [job, setJob] = useState(null)
@@ -109,6 +113,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     effectiveOrderingMode,
     verifyMode,
     deleteSourceAfterVerify,
+    viewId,
+    patchViewState,
   ])
 
   useEffect(() => {
@@ -138,7 +144,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
 
     const restore = async () => {
       let recovered = null
-      const activeJobId = localStorage.getItem('streamcopy:activeJobId')
+      const activeJobId = workspaceViewState.streamcopyJobId || sessionStorage.getItem(streamKey(viewId, 'activeJobId'))
 
       if (activeJobId) {
         try {
@@ -149,44 +155,15 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         }
       }
 
-      if (!recovered) {
-        try {
-          const value = await api('/api/streamcopy/jobs?active=1&limit=1')
-          recovered = Array.isArray(value.jobs) ? value.jobs[0] : null
-        } catch (e) {
-          if (!stopped) setError(e.message)
-        }
-      }
-
       if (recovered) {
-        localStorage.setItem('streamcopy:activeJobId', recovered.id)
-        localStorage.setItem('streamcopy:lastJobId', recovered.id)
+        sessionStorage.setItem(streamKey(viewId, 'activeJobId'), recovered.id)
+        sessionStorage.setItem(streamKey(viewId, 'lastJobId'), recovered.id)
         adopt(recovered)
       } else {
-        localStorage.removeItem('streamcopy:activeJobId')
-        const lastJobId = localStorage.getItem('streamcopy:lastJobId')
-        if (lastJobId) {
-          try {
-            recovered = await api(`/api/streamcopy/jobs/${lastJobId}`)
-          } catch (e) {
-            if (e.status === 404) localStorage.removeItem('streamcopy:lastJobId')
-            else if (!stopped) setError(e.message)
-          }
-        }
-
-        if (!recovered) {
-          try {
-            const value = await api('/api/streamcopy/jobs?limit=1')
-            recovered = Array.isArray(value.jobs) ? value.jobs[0] : null
-          } catch (e) {
-            if (!stopped) setError(e.message)
-          }
-        }
-
-        if (recovered) {
-          localStorage.setItem('streamcopy:lastJobId', recovered.id)
-          adopt(recovered)
-        }
+        // Do not adopt an arbitrary backend job from another browser view.
+        // A view reconnects only to the job id persisted for this view.
+        sessionStorage.removeItem(streamKey(viewId, 'activeJobId'))
+        patchViewState?.({ streamcopyJobId: null })
       }
 
       if (!stopped) setRestoringJob(false)
@@ -194,7 +171,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
 
     restore()
     return () => { stopped = true }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [viewId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshConnections = async () => {
     try {
@@ -225,15 +202,16 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
 
   useEffect(() => {
     if (!job?.id) return
-    localStorage.setItem('streamcopy:lastJobId', job.id)
+    sessionStorage.setItem(streamKey(viewId, 'lastJobId'), job.id)
     if (TERMINAL.has(job.status)) {
-      if (localStorage.getItem('streamcopy:activeJobId') === job.id) {
-        localStorage.removeItem('streamcopy:activeJobId')
+      if (sessionStorage.getItem(streamKey(viewId, 'activeJobId')) === job.id) {
+        sessionStorage.removeItem(streamKey(viewId, 'activeJobId'))
       }
     } else {
-      localStorage.setItem('streamcopy:activeJobId', job.id)
+      sessionStorage.setItem(streamKey(viewId, 'activeJobId'), job.id)
     }
-  }, [job?.id, job?.status])
+    patchViewState?.({ streamcopyJobId: TERMINAL.has(job.status) ? null : job.id })
+  }, [job?.id, job?.status, viewId, patchViewState])
 
   useEffect(() => {
     for (const [key, value] of Object.entries({
@@ -253,7 +231,11 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       orderingMode,
       verifyMode,
       deleteSourceAfterVerify,
-    })) localStorage.setItem(`streamcopy:${key}`, String(value))
+    })) sessionStorage.setItem(streamKey(viewId, key), String(value))
+    patchViewState?.({
+      streamcopySourcePath: sourcePath,
+      streamcopyDestinationPath: destinationPath,
+    })
   }, [
     sourcePath,
     destinationPath,
@@ -271,6 +253,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     orderingMode,
     verifyMode,
     deleteSourceAfterVerify,
+    viewId,
+    patchViewState,
   ])
 
   useEffect(() => {
@@ -297,9 +281,10 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         if (!stopped) setJob(nextJob)
       } catch (e) {
         if (!stopped && e.status === 404) {
-          if (localStorage.getItem('streamcopy:activeJobId') === jobId) {
-            localStorage.removeItem('streamcopy:activeJobId')
+          if (sessionStorage.getItem(streamKey(viewId, 'activeJobId')) === jobId) {
+            sessionStorage.removeItem(streamKey(viewId, 'activeJobId'))
           }
+          patchViewState?.({ streamcopyJobId: null })
           setJob(null)
           setError('StreamCopy journal не нашёл задачу. Проверь data/diskshell.db и backend log.')
         } else if (!stopped) {
@@ -330,7 +315,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       clearInterval(timer)
       source?.close()
     }
-  }, [job?.id, job?.status, setError])
+  }, [job?.id, job?.status, setError, viewId, patchViewState])
 
   async function toggleWrites() {
     try {

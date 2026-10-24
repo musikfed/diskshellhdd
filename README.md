@@ -1,4 +1,4 @@
-# DiskShell HDD 0.8.6
+# DiskShell HDD 0.8.7
 
 [Русская версия](README.ru.md) · English
 
@@ -291,3 +291,14 @@ Each browser tab now has its own backend `view_id`, so Files/SFTP, Disks and Str
 SFTP directory copy now visibly reports remote-manifest preparation, and the background storage watcher no longer runs a full PowerShell disk inventory every few seconds.
 
 See [docs/RELEASE_0.8.6.md](docs/RELEASE_0.8.6.md).
+
+
+## 0.8.7 · Per-view jobs and SFTP symlink safety
+
+Finishes the multi-view isolation started in 0.8.6. Scan, Storage Planner, Diagnostics, Security, Vault and StreamCopy no longer share transient job ids through browser-wide localStorage. View-owned job ids stay attached to their backend `view_id`, and a new tab no longer auto-adopts an unrelated StreamCopy job.
+
+SFTP tree operations now use link-safe metadata and skip symbolic links while walking manifests. Recursive delete removes the link itself instead of following a link to another directory tree.
+
+Obsolete global browser-state persistence for these admin jobs was removed; per-view session cache remains only as a fallback to backend workspace state.
+
+See [docs/RELEASE_0.8.7.md](docs/RELEASE_0.8.7.md).

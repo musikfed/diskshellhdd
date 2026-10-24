@@ -279,6 +279,10 @@ class RemoteSession(AbstractContextManager):
                 rel_dir = ""
             for item in self.listdir(current):
                 relative = posixpath.join(rel_dir, item.name) if rel_dir else item.name
+                if item.is_symlink:
+                    # Match the local manifest policy: links/junctions are not
+                    # traversed or copied as ordinary file content.
+                    continue
                 if item.is_dir:
                     directories.append(relative)
                     stack.append(item.path)
@@ -291,7 +295,7 @@ class RemoteSession(AbstractContextManager):
     def delete_tree(self, path: str) -> None:
         normalized = _normalize_remote_path(path)
         entry = self.stat(normalized)
-        if not entry.is_dir:
+        if entry.is_symlink or not entry.is_dir:
             self.remove(normalized)
             return
         directories, files = self.walk(normalized)
@@ -417,12 +421,16 @@ class SFTPSession(RemoteSession):
         assert self.sftp is not None
         normalized = _normalize_remote_path(path)
         try:
-            attr = self.sftp.stat(normalized)
+            # lstat is deliberate: following a remote symlink can make a link to
+            # a directory look like a real tree. Commander must never recurse
+            # through or recursively delete the symlink target.
+            attr = self.sftp.lstat(normalized)
         except OSError as exc:
             if getattr(exc, "errno", None) == errno.ENOENT:
                 raise RemoteNotFound(normalized) from exc
             raise RemoteConnectionError(str(exc)) from exc
         is_dir = statmod.S_ISDIR(attr.st_mode)
+        is_symlink = statmod.S_ISLNK(attr.st_mode)
         mtime = getattr(attr, "st_mtime", None)
         return RemoteEntry(
             PurePosixPath(normalized).name or "/",
@@ -430,6 +438,7 @@ class SFTPSession(RemoteSession):
             is_dir,
             0 if is_dir else int(getattr(attr, "st_size", 0) or 0),
             int(mtime * 1_000_000_000) if mtime else None,
+            is_symlink,
         )
 
     def mkdir(self, path: str) -> None:

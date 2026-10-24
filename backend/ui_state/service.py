@@ -25,6 +25,25 @@ PAGE_IDS = {
     "lab",
 }
 
+# Job ids belong to one concrete browser view. They must never be copied into
+# the promoted default workspace, otherwise a brand-new tab can attach itself
+# to work owned by another tab and start polling/cancelling the wrong job.
+TRANSIENT_VIEW_STATE_KEYS = {
+    "commanderJobId",
+    "streamcopyJobId",
+    "scanJobId",
+    "placementJobId",
+    "diagnosticJobId",
+    "securityJobId",
+}
+
+
+def _default_view_state(raw: str | None) -> str:
+    value = _decode_view_state(raw)
+    for key in TRANSIENT_VIEW_STATE_KEYS:
+        value.pop(key, None)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
 
 def _decode_view_state(raw: str | None) -> dict[str, Any]:
     try:
@@ -219,7 +238,7 @@ def update_workspace_state(
                         next_page,
                         next_volume,
                         next_scan_id,
-                        next_view_state,
+                        _default_view_state(next_view_state),
                     ),
                 )
 

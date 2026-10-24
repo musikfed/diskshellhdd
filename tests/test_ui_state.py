@@ -228,3 +228,32 @@ def test_view_state_patch_is_isolated_between_tabs(tmp_path, monkeypatch):
     assert one["view_state"]["fileLeftPath"] == "H:\\"
     assert two["view_state"]["commanderJobId"] == "job-2"
     assert two["view_state"]["fileLeftPath"] == "W:\\"
+
+
+
+def test_promoted_default_does_not_inherit_view_owned_job_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "workspace-transient.db")
+
+    update_workspace_state(
+        view_id="tab-owner",
+        active_page="streamcopy",
+        view_state={
+            "streamcopyJobId": "stream-job-owner",
+            "commanderJobId": "commander-job-owner",
+            "scanJobId": "scan-job-owner",
+            "fileLeftPath": "H:\\source",
+        },
+        promote_default=True,
+    )
+
+    owner = get_workspace_state("tab-owner")
+    inherited = get_workspace_state("brand-new-tab")
+
+    assert owner["view_state"]["streamcopyJobId"] == "stream-job-owner"
+    assert owner["view_state"]["commanderJobId"] == "commander-job-owner"
+    assert owner["view_state"]["scanJobId"] == "scan-job-owner"
+    assert inherited["active_page"] == "streamcopy"
+    assert inherited["view_state"]["fileLeftPath"] == "H:\\source"
+    assert "streamcopyJobId" not in inherited["view_state"]
+    assert "commanderJobId" not in inherited["view_state"]
+    assert "scanJobId" not in inherited["view_state"]

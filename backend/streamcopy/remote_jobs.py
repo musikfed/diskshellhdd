@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import queue
 import threading
 from pathlib import Path, PurePosixPath
@@ -708,8 +707,20 @@ def run_remote_job(job_id: str) -> None:
 
         jobs._persist_job(job_id, status="recovering", error=None)
         for item in items:
-            jobs._control_check(cancel, lease_lost)
-            _copy_item(job_id, item, cancel, lease_lost)
+            while True:
+                jobs._control_check(cancel, lease_lost)
+                try:
+                    _copy_item(job_id, item, cancel, lease_lost)
+                    break
+                except (RemoteConnectionError, OSError, KeyError):
+                    current = jobs._load_job(job_id)
+                    if any(
+                        not state["available"]
+                        for state in _endpoint_states(current)
+                    ):
+                        _wait_for_endpoints(job_id, cancel, lease_lost)
+                        continue
+                    raise
 
         job = jobs._load_job(job_id)
         _remove_empty_source_tree(job)

@@ -5,6 +5,8 @@ import threading
 import time
 from types import SimpleNamespace
 import backend.commander.jobs as commander_jobs
+import backend.commander.journal as commander_journal
+import backend.core.database as database
 import backend.files.endpoint_availability as endpoint_availability
 from backend.remote.service import (
     RemoteConnectionError,
@@ -672,3 +674,147 @@ def test_windows_path_not_found_is_treated_as_endpoint_loss():
     assert commander_jobs._looks_like_endpoint_loss(
         WindowsPathGone("device disappeared")
     ) is True
+
+
+
+def _wait_persistent_commander(job_id: str, timeout: float = 5.0):
+    deadline = time.monotonic() + timeout
+    job = commander_jobs.get_commander_job(job_id)
+    while time.monotonic() < deadline:
+        job = commander_jobs.get_commander_job(job_id)
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            return job
+        time.sleep(0.02)
+    return job
+
+
+def test_commander_restart_recovers_local_partial(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "commander-restart.db")
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    payload = b"abcdefghijkl"
+    source.write_bytes(payload)
+
+    original_launch = commander_jobs._launch_worker
+    monkeypatch.setattr(commander_jobs, "_launch_worker", lambda *_args, **_kwargs: False)
+    created = commander_jobs.start_commander_job(
+        "copy",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+    )
+    job_id = created["id"]
+
+    job, transfers = commander_journal.load_job(job_id)
+    destination.write_bytes(payload[:4])
+    job["status"] = "running"
+    transfers[0]["journal_status"] = "copying"
+    commander_journal.save_job(job, transfers)
+
+    with commander_jobs._lock:
+        commander_jobs._jobs.pop(job_id, None)
+        commander_jobs._cancel_events.pop(job_id, None)
+        commander_jobs._threads.pop(job_id, None)
+
+    monkeypatch.setattr(commander_jobs, "_launch_worker", original_launch)
+    assert commander_jobs.recover_commander_jobs_once() == 1
+
+    recovered = _wait_persistent_commander(job_id)
+    assert recovered["status"] == "completed", recovered["error"]
+    assert recovered["persistent"] is True
+    assert destination.read_bytes() == payload
+    assert source.read_bytes() == payload
+
+
+def test_commander_restart_finishes_verified_move_before_source_delete(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "commander-move.db")
+    monkeypatch.setattr(commander_jobs, "file_writes_allowed", lambda: True)
+    monkeypatch.setattr(
+        commander_jobs,
+        "_same_native_location",
+        lambda _src, _dst: False,
+    )
+
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    payload = b"verified-before-delete"
+    source.write_bytes(payload)
+
+    original_launch = commander_jobs._launch_worker
+    monkeypatch.setattr(commander_jobs, "_launch_worker", lambda *_args, **_kwargs: False)
+    created = commander_jobs.start_commander_job(
+        "move",
+        {"kind": "local", "path": str(source)},
+        {"kind": "local", "path": str(destination)},
+    )
+    job_id = created["id"]
+
+    job, transfers = commander_journal.load_job(job_id)
+    destination.write_bytes(payload)
+    job["status"] = "running"
+    transfers[0]["journal_status"] = "verified"
+    commander_journal.save_job(job, transfers)
+
+    with commander_jobs._lock:
+        commander_jobs._jobs.pop(job_id, None)
+        commander_jobs._cancel_events.pop(job_id, None)
+        commander_jobs._threads.pop(job_id, None)
+
+    monkeypatch.setattr(commander_jobs, "_launch_worker", original_launch)
+    assert commander_jobs.recover_commander_jobs_once() == 1
+
+    recovered = _wait_persistent_commander(job_id)
+    assert recovered["status"] == "completed", recovered["error"]
+    assert not source.exists()
+    assert destination.read_bytes() == payload
+    assert recovered["bytes"] == len(payload)
+    assert recovered["files"] == 1
+
+
+def test_commander_journal_lease_blocks_split_brain(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "commander-lease.db")
+    job = {
+        "id": "lease-job",
+        "status": "queued",
+        "operation": "copy",
+        "started_at": None,
+    }
+    commander_journal.create_job(job, [])
+
+    assert commander_journal.claim_job("lease-job", "worker-a", 30) is True
+    assert commander_journal.claim_job("lease-job", "worker-b", 30) is False
+    assert commander_journal.renew_lease("lease-job", "worker-a", 30) is True
+    commander_journal.release_lease("lease-job", "worker-a")
+    assert commander_journal.claim_job("lease-job", "worker-b", 30) is True
+
+
+def test_commander_remote_endpoint_rebinds_by_stable_identity(monkeypatch):
+    endpoint = {
+        "kind": "remote",
+        "path": "/data/file.bin",
+        "connection_id": "old-profile",
+        "remote_identity": "sftp|host.test|22|user|/",
+    }
+
+    def identity(profile_id):
+        if profile_id == "old-profile":
+            raise KeyError(profile_id)
+        if profile_id == "new-profile":
+            return "sftp|host.test|22|user|/"
+        raise KeyError(profile_id)
+
+    monkeypatch.setattr(commander_jobs, "profile_identity", identity)
+    monkeypatch.setattr(
+        commander_jobs,
+        "find_profile_id_by_identity",
+        lambda value: "new-profile"
+        if value == "sftp|host.test|22|user|/"
+        else None,
+    )
+
+    commander_jobs._rebind_remote_endpoint(endpoint)
+    assert endpoint["connection_id"] == "new-profile"

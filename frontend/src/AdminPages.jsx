@@ -1979,15 +1979,15 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
   useEffect(() => {
     sessionStorage.setItem(`diskshell:view:${viewId}:commanderActiveSide`, activeSide)
     patchViewState?.({ commanderActiveSide: activeSide })
-  }, [activeSide, patchViewState])
+  }, [activeSide, patchViewState, viewId])
   useEffect(() => {
     sessionStorage.setItem(`diskshell:view:${viewId}:commanderSmartFolders`, smartTransfer ? '1' : '0')
     patchViewState?.({ commanderSmartFolders: smartTransfer })
-  }, [smartTransfer, patchViewState])
+  }, [smartTransfer, patchViewState, viewId])
   useEffect(() => {
     sessionStorage.setItem(`diskshell:view:${viewId}:commanderArchiveFormat`, archiveFormat)
     patchViewState?.({ commanderArchiveFormat: archiveFormat })
-  }, [archiveFormat, patchViewState])
+  }, [archiveFormat, patchViewState, viewId])
 
   useEffect(() => {
     if (!jobId) return undefined

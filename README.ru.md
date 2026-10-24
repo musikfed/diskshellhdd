@@ -1,4 +1,4 @@
-# DiskShell HDD 0.8.5
+# DiskShell HDD 0.8.6
 
 Русский · [English](README.md)
 
@@ -367,3 +367,14 @@ StreamCopy получил ручной experimental ordering **NTFS first-LCN lo
 Unknown-LCN файлы остаются в стабильном исходном порядке; SFTP/SSD/Flash используют manifest order. Режим остаётся opt-in до сравнительных benchmark результатов.
 
 Подробнее: [docs/RELEASE_0.8.5.ru.md](docs/RELEASE_0.8.5.ru.md).
+
+
+## 0.8.6 · Multi-view workspace / SQLite hotfix
+
+Исправлен runtime `sqlite3.OperationalError: database is locked` вокруг `/api/ui-state`: workspace GET теперь read-only, PATCH выполняется одной транзакцией, WAL/schema init не повторяется на каждый запрос.
+
+Каждая вкладка получает собственный backend `view_id`. Поэтому Files/SFTP, Disks и StreamCopy можно держать в разных вкладках/мониторах без взаимного переключения страниц. Commander view больше не подхватывает чужой active job автоматически.
+
+SFTP directory F5 теперь явно показывает фазу подготовки remote manifest, а background storage watcher больше не запускает полный PowerShell disk inventory каждые несколько секунд.
+
+Подробнее: [docs/RELEASE_0.8.6.ru.md](docs/RELEASE_0.8.6.ru.md).

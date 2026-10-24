@@ -206,11 +206,34 @@ CREATE TABLE IF NOT EXISTS security_scan_results (
     completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS file_catalog (
+    path TEXT PRIMARY KEY,
+    parent_path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    extension TEXT,
+    category TEXT NOT NULL DEFAULT 'other',
+    size INTEGER NOT NULL DEFAULT 0,
+    modified_ns INTEGER,
+    accessed_ns INTEGER,
+    created_ns INTEGER,
+    last_scan_id INTEGER,
+    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS file_catalog_roots (
+    root_path TEXT PRIMARY KEY,
+    last_scan_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'unknown',
+    files_count INTEGER NOT NULL DEFAULT 0,
+    refreshed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS workspace_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     active_page TEXT NOT NULL DEFAULT 'dashboard',
     active_volume TEXT NOT NULL DEFAULT '',
     scan_id TEXT NOT NULL DEFAULT '',
+    view_state_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -302,6 +325,12 @@ CREATE INDEX IF NOT EXISTS idx_files_scan_parent ON files(scan_id, parent_path);
 CREATE INDEX IF NOT EXISTS idx_files_scan_size ON files(scan_id, size DESC);
 CREATE INDEX IF NOT EXISTS idx_files_scan_category ON files(scan_id, category);
 CREATE INDEX IF NOT EXISTS idx_files_scan_storage_class ON files(scan_id, storage_class);
+CREATE INDEX IF NOT EXISTS idx_file_catalog_name ON file_catalog(name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_file_catalog_parent ON file_catalog(parent_path);
+CREATE INDEX IF NOT EXISTS idx_file_catalog_extension ON file_catalog(extension);
+CREATE INDEX IF NOT EXISTS idx_file_catalog_category ON file_catalog(category);
+CREATE INDEX IF NOT EXISTS idx_file_catalog_size ON file_catalog(size DESC);
+CREATE INDEX IF NOT EXISTS idx_file_catalog_modified ON file_catalog(modified_ns DESC);
 CREATE INDEX IF NOT EXISTS idx_hash_digest ON file_hashes(algorithm, digest, size);
 CREATE INDEX IF NOT EXISTS idx_directories_scan_parent ON directories(scan_id, parent_path);
 CREATE INDEX IF NOT EXISTS idx_directories_scan_size ON directories(scan_id, total_size DESC);
@@ -374,6 +403,13 @@ def init_database() -> None:
             [
                 ("started_at", "TEXT"),
                 ("completed_at", "TEXT"),
+            ],
+        )
+        _ensure_columns(
+            connection,
+            "workspace_state",
+            [
+                ("view_state_json", "TEXT NOT NULL DEFAULT '{}'"),
             ],
         )
         _ensure_columns(

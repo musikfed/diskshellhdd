@@ -64,3 +64,16 @@ Cross-volume execution is chunked copy → fsync → Size/SHA-256 verification �
 ## Runtime server
 
 With `DS_DEBUG=0`, `python -m backend.app` uses Waitress. An elevated Administrator/root backend should remain loopback-only until remote authentication is complete.
+
+
+## 0.8 persistent workspace/event layer
+
+The browser is a replaceable view. Authoritative navigation/view state is backend-owned in SQLite. The SSE event fabric at `/api/events` distributes typed workspace, transfer, scan and storage-inventory changes. HTTP polling remains a fallback rather than the primary synchronization channel.
+
+Quick Index serves two purposes: immutable historical scan snapshots and a continuously refreshed current file catalog. The current catalog is optimized for interactive search and may use SQLite FTS5 when available.
+
+Detached views are explicit client views of the same backend workspace. A detached view does not claim ownership of the global active page.
+
+Partition boundary work is split by semantics:
+- end-boundary resize may use Windows `Resize-Partition` when the OS reports a supported range and the physical disk is not protected;
+- start-boundary changes are relocation/recreate/offline plans and are never disguised as an in-place resize.

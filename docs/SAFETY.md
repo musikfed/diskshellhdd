@@ -67,3 +67,16 @@ DiskShell does not claim visibility into hidden HDD physical geometry.
 ## Elevated backend
 
 Run physical/raw/NTFS storage features from an **Administrator** PowerShell/Terminal on Windows or a root shell on Linux. Keep `DS_HOST=127.0.0.1` and `DS_DEBUG=0` for elevated/root operation. See [DEPLOYMENT.md](DEPLOYMENT.md).
+
+
+## 0.8 partition boundary safety
+
+A partition boundary plan is always based on a fresh Windows Storage inventory including offsets and `Get-PartitionSupportedSize` bounds.
+
+Protected system/boot/application physical disks remain read-only for boundary execution. A start-boundary change is plan-only because Windows `Resize-Partition` does not move partition starts. End-boundary execution on a non-protected disk requires:
+- the exact identity-bound per-disk WRITE gate;
+- Administrator elevation;
+- a typed confirmation tied to disk/partition/target size;
+- a fresh inventory and identity comparison immediately before execution.
+
+The UI is not a security boundary; the backend rechecks all write authorization.

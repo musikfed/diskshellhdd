@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { api, eventStreamUrl, fmtBytes, joinPath, thumbnailUrl } from './api.js'
 import { DiagnosticsAdmin, DisksAdmin, FilesAdmin, RecoveryAdmin, ScanAdmin, SecurityAdmin, StorageBrainAdmin } from './AdminPages.jsx'
 import StreamCopy from './StreamCopy.jsx'
+import SearchPage from './SearchPage.jsx'
+import RelocationPage from './RelocationPage.jsx'
 
 const NAV = [
   ['dashboard', '🐙', 'Обзор'],
@@ -10,6 +12,8 @@ const NAV = [
   ['analytics', '🦊', 'Аналитика'],
   ['storage', '🧠', 'Storage Brain'],
   ['files', '🐻', 'Файлы'],
+  ['search', '⚡', 'Быстрый поиск'],
+  ['relocation', '🧭', 'Relocation Planner'],
   ['streamcopy', '🌊', 'StreamCopy · EXP'],
   ['people', '🦉', 'Photos / People'],
   ['vault', '🔐', 'Vault'],
@@ -70,7 +74,10 @@ function Safety({ health }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState('dashboard')
+  const urlParams = new URLSearchParams(window.location.search)
+  const requestedView = urlParams.get('view') || ''
+  const detached = urlParams.get('detached') === '1' && NAV.some(([id]) => id === requestedView)
+  const [page, setPage] = useState(detached ? requestedView : 'dashboard')
   const [workspaceReady, setWorkspaceReady] = useState(false)
   const [restoreNotice, setRestoreNotice] = useState('')
   const [activeStreamJob, setActiveStreamJob] = useState(null)
@@ -78,6 +85,7 @@ export default function App() {
   const [roots, setRoots] = useState([])
   const [activeVolume, setActiveVolume] = useState('')
   const [scanId, setScanId] = useState('')
+  const [workspaceViewState, setWorkspaceViewState] = useState({})
   const [error, setError] = useState('')
   const refreshHealth = async () => {
     try {
@@ -97,12 +105,15 @@ export default function App() {
       try {
         const state = await api('/api/ui-state')
         if (stopped) return
-        const nextPage = NAV.some(([id]) => id === state.active_page)
-          ? state.active_page
-          : 'dashboard'
+        const nextPage = detached
+          ? requestedView
+          : NAV.some(([id]) => id === state.active_page)
+            ? state.active_page
+            : 'dashboard'
         setPage(nextPage)
         setActiveVolume(String(state.active_volume || ''))
         setScanId(String(state.scan_id || ''))
+        setWorkspaceViewState(state.view_state || {})
         setRestoreNotice(`↩ Восстановлено: ${NAV.find(item => item[0] === nextPage)?.[2] || nextPage}`)
         timer = setTimeout(() => {
           if (!stopped) setRestoreNotice('')
@@ -110,7 +121,9 @@ export default function App() {
       } catch {
         if (stopped) return
         const cachedPage = localStorage.getItem('activePage')
-        setPage(NAV.some(([id]) => id === cachedPage) ? cachedPage : 'dashboard')
+        setPage(detached
+          ? requestedView
+          : NAV.some(([id]) => id === cachedPage) ? cachedPage : 'dashboard')
         setActiveVolume(localStorage.getItem('activeVolume') || '')
         setScanId(localStorage.getItem('scanId') || '')
       } finally {
@@ -143,14 +156,14 @@ export default function App() {
       }
     }
     refreshRoots()
-    const timer = setInterval(refreshRoots, 3000)
+    const timer = setInterval(refreshRoots, 30000)
     return () => {
       stopped = true
       clearInterval(timer)
     }
   }, [])
   useEffect(() => {
-    if (!workspaceReady) return
+    if (!workspaceReady || detached) return
     localStorage.setItem('activePage', page)
     setError('')
     api('/api/ui-state', {
@@ -159,20 +172,33 @@ export default function App() {
     }).catch(() => {
       // Browser storage remains only a fallback cache; backend state is authoritative.
     })
-  }, [page, workspaceReady])
+  }, [page, workspaceReady, detached])
+  const patchViewState = useCallback((patch) => {
+    setWorkspaceViewState(current => ({ ...current, ...patch }))
+    if (!workspaceReady) return
+    api('/api/ui-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ view_state: patch }),
+    }).catch(() => {})
+  }, [workspaceReady])
+
   useEffect(() => {
     const key = `pageScroll:${page}`
+    const fallback = Number(localStorage.getItem(key) || 0)
+    const saved = Number(workspaceViewState[key] ?? fallback)
     const restore = requestAnimationFrame(() => {
-      window.scrollTo(0, Number(localStorage.getItem(key) || 0))
+      window.scrollTo(0, Number.isFinite(saved) ? saved : 0)
     })
-    const save = () => localStorage.setItem(key, String(window.scrollY))
-    window.addEventListener('scroll', save, { passive: true })
+    const save = () => {
+      const value = Math.round(window.scrollY)
+      localStorage.setItem(key, String(value))
+      patchViewState({ [key]: value })
+    }
     return () => {
       cancelAnimationFrame(restore)
       save()
-      window.removeEventListener('scroll', save)
     }
-  }, [page])
+  }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!workspaceReady) return
     if (activeVolume) localStorage.setItem('activeVolume', activeVolume)
@@ -211,6 +237,57 @@ export default function App() {
     return () => { stopped = true }
   }, [page, workspaceReady])
 
+  useEffect(() => {
+    if (!workspaceReady || typeof EventSource === 'undefined') return undefined
+    const source = new EventSource(eventStreamUrl())
+
+    const parse = event => {
+      try { return JSON.parse(event.data)?.payload || {} } catch { return {} }
+    }
+
+    const workspaceChanged = event => {
+      const payload = parse(event)
+      if (payload.active_volume !== undefined) setActiveVolume(String(payload.active_volume || ''))
+      if (payload.scan_id !== undefined) setScanId(String(payload.scan_id || ''))
+      if (payload.view_state && typeof payload.view_state === 'object') {
+        setWorkspaceViewState(payload.view_state)
+      }
+      if (!detached && NAV.some(([id]) => id === payload.active_page)) {
+        setPage(payload.active_page)
+      }
+    }
+    const scanCompleted = event => {
+      const payload = parse(event)
+      if (payload.scan_id != null) setScanId(String(payload.scan_id))
+    }
+    const streamChanged = event => {
+      if (page === 'streamcopy') return
+      const payload = parse(event)
+      if (!payload.job_id) return
+      setActiveStreamJob(current => ({
+        ...(current || {}),
+        id: payload.job_id,
+        status: payload.status || current?.status || 'running',
+      }))
+    }
+
+    const rootsChanged = event => {
+      const payload = parse(event)
+      if (Array.isArray(payload.roots)) setRoots(payload.roots)
+    }
+    const disksChanged = event => {
+      const payload = parse(event)
+      window.dispatchEvent(new CustomEvent('diskshell:disks-changed', { detail: payload }))
+    }
+
+    source.addEventListener('workspace.changed', workspaceChanged)
+    source.addEventListener('scan.completed', scanCompleted)
+    source.addEventListener('streamcopy.changed', streamChanged)
+    source.addEventListener('storage.roots_changed', rootsChanged)
+    source.addEventListener('storage.disks_changed', disksChanged)
+    return () => source.close()
+  }, [workspaceReady, detached, page])
+
   const context = useMemo(
     () => ({
       scanId,
@@ -221,8 +298,10 @@ export default function App() {
       roots,
       activeVolume,
       setActiveVolume,
+      workspaceViewState,
+      patchViewState,
     }),
-    [scanId, health, roots, activeVolume],
+    [scanId, health, roots, activeVolume, workspaceViewState, patchViewState],
   )
   const activeRoot = roots.find(item => item.path === activeVolume)
   const activeVolumeOffline = Boolean(activeVolume && (!activeRoot || activeRoot.available === false))
@@ -233,6 +312,8 @@ export default function App() {
     analytics: <Analytics {...context} />,
     storage: <StorageBrainAdmin {...context} />,
     files: <FilesAdmin {...context} />,
+    search: <SearchPage {...context} />,
+    relocation: <RelocationPage {...context} />,
     streamcopy: <StreamCopy {...context} />,
     people: <People {...context} />,
     vault: <Vault {...context} />,
@@ -273,6 +354,20 @@ export default function App() {
             </select>
           </label>
           {restoreNotice && <div className="workspace-restore-chip">{restoreNotice}</div>}
+          {detached && <div className="workspace-restore-chip">DETACHED VIEW</div>}
+          <button
+            className="workspace-process-chip"
+            onClick={() => {
+              const target = new URL(window.location.href)
+              target.search = ''
+              target.searchParams.set('view', page)
+              target.searchParams.set('detached', '1')
+              window.open(target.toString(), '_blank', 'noopener,noreferrer')
+            }}
+            title="Открыть текущий view в отдельном окне/на другом мониторе"
+          >
+            ↗ Open view
+          </button>
           {activeStreamJob && <button
             className="workspace-process-chip"
             onClick={() => setPage('streamcopy')}
@@ -297,7 +392,7 @@ export default function App() {
 
 function Dashboard({ health, scanId, setPage }) {
   return <div className="stack">
-    <Card title="DiskShell 0.6 · First Working Admin Baseline"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
+    <Card title="DiskShell 0.8 · Persistent Workspace Foundation"><div className="hero"><div className="mascot huge">🐙</div><div><h2>Не оболочка команд. Storage workspace.</h2><p>DiskShell обследует накопитель, понимает типы данных, контролирует резерв, предлагает правильное размещение и только после твоего решения применяет безопасный план.</p><div className="actions"><button className="primary" onClick={() => setPage('scan')}>Обследовать диск</button><button onClick={() => setPage('storage')}>Storage Brain</button></div></div></div></Card>
     <div className="grid three">
       <Card title="Сейчас"><Metric label="Версия" value={health?.version || '...'} /><Metric label="Активный scan" value={scanId || 'нет'} /><Metric label="Режим" value="localhost / local-first" /></Card>
       <Card title="Правильный цикл"><ol><li>Обследовать</li><li>Понять Analytics</li><li>Построить placement plan</li><li>Сохранить резерв</li><li>Применить только нужное</li></ol></Card>
@@ -424,13 +519,43 @@ function People({ scanId, setError }) {
   const [selected, setSelected] = useState(null)
   const [photos, setPhotos] = useState([])
   const [mode, setMode] = useState('all')
+  const [similar, setSimilar] = useState([])
   const refresh = async () => { if (!scanId) return; const x = await api(`/api/people?scan_id=${scanId}`); setPeople(x.people || []) }
   useEffect(() => { api('/api/people/capabilities').then(setCaps).catch(e => setError(e.message)); refresh().catch(()=>{}) }, [scanId]) // eslint-disable-line react-hooks/exhaustive-deps
   async function analyze() { try { await api(`/api/people/analyze/${scanId}`, { method:'POST', body:'{}' }); await refresh() } catch (e) { setError(e.message) } }
-  async function openPerson(p, nextMode = mode) { setSelected(p); setMode(nextMode); try { const x = await api(`/api/people/${p.id}/photos?mode=${nextMode}`); setPhotos(x.photos || []) } catch (e) { setError(e.message) } }
+  async function openPerson(p, nextMode = mode) {
+    setSelected(p)
+    setMode(nextMode)
+    setSimilar([])
+    try {
+      const x = await api(`/api/people/${p.id}/photos?mode=${nextMode}`)
+      setPhotos(x.photos || [])
+    } catch (e) { setError(e.message) }
+  }
+  async function findSimilar() {
+    if (!selected?.cover_face_id) return
+    try {
+      const x = await api(`/api/people/faces/${selected.cover_face_id}/similar?limit=80&min_score=0.35`)
+      setSimilar(x.matches || [])
+    } catch (e) { setError(e.message) }
+  }
   return <div className="stack"><Card title="Local Face Engine"><div className="hero"><div className="mascot">🦉</div><div><p>OpenCV YuNet + SFace, только локально. Облако: <b>нет</b>.</p><p>Detector: {caps?.detector_ready ? 'ready' : 'model not configured'} · Recognizer: {caps?.recognizer_ready ? 'ready' : 'model not configured'}</p><button className="primary" disabled={!scanId || !caps?.ready} onClick={analyze}>Проанализировать фото из scan {scanId || '—'}</button></div></div></Card>
     <div className="people-grid">{people.map(p => <button key={p.id} className="person" onClick={() => openPerson(p)}>{p.cover_face_id ? <img src={`/api/people/faces/${p.cover_face_id}/thumbnail`} /> : <div className="face-placeholder">👤</div>}<b>{p.name}</b><small>{p.photos} photos · {p.faces} faces</small></button>)}</div>
-    {selected && <Card title={selected.name}><div className="tabs">{['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}</div><div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div></Card>}</div>
+    {selected && <Card title={selected.name}>
+      <div className="tabs">
+        {['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}
+        <button disabled={!selected.cover_face_id || !caps?.recognizer_ready} onClick={findSimilar}>≈ похожие лица</button>
+      </div>
+      {similar.length > 0 && <div className="face-similarity-grid">
+        {similar.map(item => <div key={item.face_id}>
+          <img src={`/api/people/faces/${item.face_id}/thumbnail`} alt="" />
+          <b>{item.person_name || `face #${item.face_id}`}</b>
+          <small>similarity {(Number(item.score) * 100).toFixed(1)}%</small>
+          <span title={item.path}>{item.path}</span>
+        </div>)}
+      </div>}
+      <div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div>
+    </Card>}</div>
 }
 
 

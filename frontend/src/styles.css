@@ -1033,3 +1033,114 @@ textarea{
   white-space:nowrap;
 }
 .workspace-process-chip:hover{background:rgba(35,126,88,.34)}
+
+
+/* 0.8.0 disk descriptor map + boundary planner */
+.disk-descriptor-map{
+  display:grid;
+  margin-top:10px;
+  border:1px solid rgba(112,151,209,.2);
+  border-radius:12px;
+  overflow:hidden;
+  background:rgba(6,16,28,.5);
+}
+.disk-descriptor-map>div{
+  display:grid;
+  grid-template-columns:minmax(120px,.9fr) minmax(90px,.7fr) minmax(90px,.7fr) minmax(90px,.7fr) minmax(180px,1.6fr);
+  gap:10px;
+  align-items:center;
+  padding:8px 10px;
+  border-top:1px solid rgba(112,151,209,.12);
+  font-size:12px;
+}
+.disk-descriptor-map>div:first-child{border-top:0}
+.disk-descriptor-map .descriptor-head{
+  background:rgba(11,27,47,.85);
+  color:#7892b7;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  font-size:10px;
+  font-weight:850;
+}
+.disk-descriptor-map .free{color:#94a6be}
+.disk-descriptor-map .partition b{color:#cfe0ff}
+.partition-row-actions{display:flex;gap:6px;justify-content:flex-end}
+.partition-row-actions button{padding:6px 9px;font-size:11px}
+@media(max-width:1100px){
+  .disk-descriptor-map{overflow-x:auto}
+  .disk-descriptor-map>div{min-width:760px}
+}
+
+
+/* 0.8.0 fast search, relocation advisor, face similarity */
+.search-controls{
+  display:grid;
+  grid-template-columns:minmax(260px,2fr) minmax(180px,1fr) 160px 130px;
+  gap:10px;
+  align-items:end;
+}
+.search-controls label>span{display:block;color:#93a9ca;font-size:12px;font-weight:750}
+.search-status{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px 16px;
+  color:#8fa6c8;
+  font-size:12px;
+}
+.search-results{display:grid}
+.search-results>div{
+  display:grid;
+  grid-template-columns:minmax(280px,1fr) 110px 90px 110px;
+  gap:12px;
+  align-items:center;
+  padding:10px 4px;
+  border-top:1px solid rgba(100,137,192,.14);
+}
+.search-results>div:first-child{border-top:0}
+.search-file-main{display:grid;min-width:0}
+.search-file-main b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-file-main span{color:#8197b8;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.relocation-list{display:grid;gap:7px}
+.relocation-list>div{
+  display:grid;
+  grid-template-columns:minmax(280px,1fr) 150px 120px minmax(260px,1.2fr);
+  gap:12px;
+  align-items:center;
+  padding:12px;
+  border:1px solid rgba(100,137,192,.14);
+  border-radius:12px;
+  background:rgba(7,16,29,.46);
+}
+.relocation-list>div>div{display:grid;min-width:0}
+.relocation-list>div>div b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.relocation-list small{color:#7890b2}
+.relocation-list p{margin:0;color:#9db0cc;font-size:12px}
+.relocation-native_relocate{border-color:rgba(82,216,156,.28)!important}
+.relocation-junction_candidate{border-color:rgba(255,190,103,.3)!important}
+.relocation-archive_candidate{border-color:rgba(119,167,255,.28)!important}
+.face-similarity-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+  gap:10px;
+  margin:12px 0 18px;
+}
+.face-similarity-grid>div{
+  display:grid;
+  gap:5px;
+  padding:9px;
+  border:1px solid rgba(100,137,192,.18);
+  border-radius:12px;
+  background:rgba(8,18,32,.62);
+}
+.face-similarity-grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:9px}
+.face-similarity-grid small{color:#77d9c2}
+.face-similarity-grid span{color:#758aa9;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:1100px){
+  .search-controls{grid-template-columns:1fr 1fr}
+  .search-results>div{grid-template-columns:minmax(220px,1fr) 90px 80px 100px}
+  .relocation-list>div{grid-template-columns:1fr 130px 100px}
+  .relocation-list p{grid-column:1/-1}
+}
+@media(max-width:760px){
+  .search-controls,.search-results>div,.relocation-list>div{grid-template-columns:1fr}
+}

@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request
 
 from backend.storage_brain.executor import PlanExecutionBlocked, apply_plan, rollback_plan
 from backend.storage_brain.jobs import cancel_plan_job, get_plan_job, start_plan_job
+from backend.storage_brain.relocation import relocation_plan
 from backend.storage_brain.service import (
     capacity_policy,
     create_placement_plan,
@@ -193,3 +194,22 @@ def selection(plan_id: int):
         return jsonify({"error": "plan_not_found"}), 404
     except (TypeError, ValueError) as exc:
         return jsonify({"error": "selection_failed", "message": str(exc)}), 400
+
+
+
+@bp.get("/relocation-plan")
+def relocation():
+    raw_scan_id = request.args.get("scan_id")
+    if not raw_scan_id:
+        return jsonify({"error": "missing_scan_id"}), 400
+    try:
+        return jsonify(
+            relocation_plan(
+                int(raw_scan_id),
+                limit=int(request.args.get("limit", "80")),
+            )
+        )
+    except KeyError:
+        return jsonify({"error": "scan_not_found"}), 404
+    except ValueError as exc:
+        return jsonify({"error": "invalid_relocation_plan", "message": str(exc)}), 400

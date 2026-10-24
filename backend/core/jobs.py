@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from backend.core.events import emit_event
 from backend.scanner.quick_scan import ScanCancelled, scan
 
 
@@ -48,6 +49,7 @@ def start_scan_job(path: str) -> dict[str, Any]:
         _jobs[job_id] = job
         _cancel_events[job_id] = event
 
+    emit_event("scan.started", {"job_id": job_id, "root": str(root)})
     threading.Thread(
         target=_run_scan,
         args=(job_id, root, event),
@@ -68,6 +70,18 @@ def _run_scan(job_id: str, root: Path, cancel_event: threading.Event) -> None:
             for key in ("scan_id", "current_path", "files", "directories", "bytes", "errors"):
                 if key in data:
                     job[key] = data[key]
+        emit_event(
+            "scan.progress",
+            {
+                "job_id": job_id,
+                "scan_id": data.get("scan_id"),
+                "current_path": data.get("current_path"),
+                "files": data.get("files"),
+                "directories": data.get("directories"),
+                "bytes": data.get("bytes"),
+                "errors": data.get("errors"),
+            },
+        )
 
     try:
         scan_id = scan(
@@ -80,6 +94,7 @@ def _run_scan(job_id: str, root: Path, cancel_event: threading.Event) -> None:
             job = _jobs[job_id]
             job["status"] = "cancelled"
             job["finished_at"] = _now()
+        emit_event("scan.cancelled", {"job_id": job_id})
         return
     except Exception as exc:  # noqa: BLE001
         logger.exception("Background scan job %s failed", job_id)
@@ -88,6 +103,10 @@ def _run_scan(job_id: str, root: Path, cancel_event: threading.Event) -> None:
             job["status"] = "failed"
             job["error"] = f"{type(exc).__name__}: {exc}"
             job["finished_at"] = _now()
+        emit_event(
+            "scan.failed",
+            {"job_id": job_id, "error": f"{type(exc).__name__}: {exc}"},
+        )
         return
     finally:
         with _lock:
@@ -98,6 +117,7 @@ def _run_scan(job_id: str, root: Path, cancel_event: threading.Event) -> None:
         job["scan_id"] = scan_id
         job["status"] = "completed"
         job["finished_at"] = _now()
+    emit_event("scan.completed", {"job_id": job_id, "scan_id": scan_id})
 
 
 def cancel_job(job_id: str) -> dict[str, Any]:

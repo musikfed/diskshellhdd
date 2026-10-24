@@ -7,11 +7,13 @@ from backend.api.analytics import bp as analytics_bp
 from backend.api.commander import bp as commander_bp
 from backend.api.content import bp as content_bp
 from backend.api.diagnostics import bp as diagnostics_bp
+from backend.api.events import bp as events_bp
 from backend.api.disks import bp as disks_bp
 from backend.api.files import bp as files_bp
 from backend.api.people import bp as people_bp
 from backend.api.recovery import bp as recovery_bp
 from backend.api.scans import bp as scans_bp
+from backend.api.search import bp as search_bp
 from backend.api.security import bp as security_bp
 from backend.api.storage import bp as storage_bp
 from backend.api.storage_lab import bp as storage_lab_bp
@@ -21,13 +23,14 @@ from backend.api.vault import bp as vault_bp
 from backend.config import settings
 from backend.core.database import init_database
 from backend.core.logging_setup import configure_logging, get_logger, log_event
+from backend.core.storage_watch import start_storage_event_watcher
 from backend.files.write_authorization import file_write_state
 from backend.storage_brain.service import ensure_defaults
 from backend.streamcopy.jobs import start_streamcopy_recovery_manager
 from backend.vault.service import vault_write_state
 
 
-VERSION = "0.7.5"
+VERSION = "0.8.0"
 
 
 def create_app() -> Flask:
@@ -68,6 +71,7 @@ def create_app() -> Flask:
         disks_bp,
         diagnostics_bp,
         scans_bp,
+        search_bp,
         analytics_bp,
         commander_bp,
         storage_bp,
@@ -80,6 +84,7 @@ def create_app() -> Flask:
         storage_lab_bp,
         streamcopy_bp,
         ui_state_bp,
+        events_bp,
     ):
         app.register_blueprint(blueprint)
 
@@ -143,6 +148,7 @@ def main() -> None:
     init_database()
     ensure_defaults()
     start_streamcopy_recovery_manager()
+    start_storage_event_watcher()
     log_event(
         "backend.started",
         version=VERSION,

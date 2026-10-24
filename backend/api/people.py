@@ -12,6 +12,7 @@ from backend.people.service import (
     list_people,
     person_photos,
     rename_person,
+    similar_faces,
 )
 
 
@@ -70,3 +71,23 @@ def thumbnail(face_id: int):
     except (KeyError, FileNotFoundError, OSError, ValueError):
         return jsonify({"error": "face_not_found"}), 404
     return send_file(io.BytesIO(data), mimetype="image/jpeg", max_age=60)
+
+
+
+@bp.get("/faces/<int:face_id>/similar")
+def similar(face_id: int):
+    try:
+        return jsonify(
+            {
+                "face_id": face_id,
+                "matches": similar_faces(
+                    face_id,
+                    limit=int(request.args.get("limit", "50")),
+                    min_score=float(request.args.get("min_score", "0.35")),
+                ),
+            }
+        )
+    except KeyError:
+        return jsonify({"error": "face_not_found"}), 404
+    except (PeopleEngineUnavailable, TypeError, ValueError) as exc:
+        return jsonify({"error": "face_similarity_failed", "message": str(exc)}), 400

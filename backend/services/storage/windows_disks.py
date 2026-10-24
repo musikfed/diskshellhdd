@@ -31,7 +31,9 @@ $items = @(
       Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue | ForEach-Object {
         $partition = $_
         $volume = $null
+        $supportedSize = $null
         try { $volume = $partition | Get-Volume -ErrorAction Stop } catch { $volume = $null }
+        try { $supportedSize = Get-PartitionSupportedSize -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -ErrorAction Stop } catch { $supportedSize = $null }
         [PSCustomObject]@{
           PartitionNumber = [int]$partition.PartitionNumber
           DriveLetter = if ($partition.DriveLetter) { [string]$partition.DriveLetter } else { $null }
@@ -46,6 +48,8 @@ $items = @(
           VolumeHealthStatus = if ($volume) { [string]$volume.HealthStatus } else { $null }
           VolumeSize = if ($volume) { [int64]$volume.Size } else { $null }
           SizeRemaining = if ($volume) { [int64]$volume.SizeRemaining } else { $null }
+          SupportedSizeMin = if ($supportedSize) { [int64]$supportedSize.SizeMin } else { $null }
+          SupportedSizeMax = if ($supportedSize) { [int64]$supportedSize.SizeMax } else { $null }
         }
       }
     )
@@ -98,6 +102,8 @@ def _partition_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "health_status": raw.get("VolumeHealthStatus"),
         "volume_size": raw.get("VolumeSize"),
         "size_remaining": raw.get("SizeRemaining"),
+        "supported_size_min": raw.get("SupportedSizeMin"),
+        "supported_size_max": raw.get("SupportedSizeMax"),
     }
 
 

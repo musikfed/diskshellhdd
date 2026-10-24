@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request
 
 from backend.services.storage.filesystem_profiles import capabilities
 from backend.services.storage.partition_magic import execute_format, format_plan
+from backend.services.storage.partition_resize import boundary_plan, execute_end_resize
 from backend.services.storage.volume_manager import (
     assign_drive_letter,
     create_partition,
@@ -237,3 +238,41 @@ def set_partition_drive_letter(disk_number: int, partition_number: int):
         return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403
     except (ValueError, RuntimeError, DiskDetectionError) as exc:
         return jsonify({"error": "drive_letter_failed", "message": str(exc)}), 400
+
+
+
+@bp.post("/<int:disk_number>/partitions/<int:partition_number>/boundary-plan")
+def get_partition_boundary_plan(disk_number: int, partition_number: int):
+    payload = request.get_json(silent=True) or {}
+    try:
+        raw_size = payload.get("target_size_bytes")
+        raw_start = payload.get("target_start_offset")
+        return jsonify(
+            boundary_plan(
+                disk_number,
+                partition_number,
+                boundary=str(payload.get("boundary") or "end"),
+                target_size_bytes=None if raw_size in {None, ""} else int(raw_size),
+                target_start_offset=None if raw_start in {None, ""} else int(raw_start),
+            )
+        )
+    except (ValueError, DiskDetectionError) as exc:
+        return jsonify({"error": "boundary_plan_failed", "message": str(exc)}), 400
+
+
+@bp.post("/<int:disk_number>/partitions/<int:partition_number>/resize-end")
+def resize_partition_end(disk_number: int, partition_number: int):
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(
+            execute_end_resize(
+                disk_number,
+                partition_number,
+                target_size_bytes=int(payload["target_size_bytes"]),
+                confirmation=str(payload.get("confirmation") or ""),
+            )
+        )
+    except (DiskWriteBlocked, WindowsElevationRequired) as exc:
+        return jsonify({"error": "disk_write_blocked", "message": str(exc)}), 403
+    except (KeyError, TypeError, ValueError, RuntimeError, DiskDetectionError) as exc:
+        return jsonify({"error": "partition_resize_failed", "message": str(exc)}), 400

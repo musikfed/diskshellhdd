@@ -1,4 +1,4 @@
-# DiskShell HDD 0.8.0
+# DiskShell HDD 0.8.4
 
 Русский · [English](README.md)
 
@@ -349,3 +349,12 @@ Browser/UI считается control surface. Успешные HTTP polling-з�
 Release guides 0.7.5: [RU](docs/RELEASE_0.7.5.ru.md) · [EN](docs/RELEASE_0.7.5.md) · [FR](docs/RELEASE_0.7.5.fr.md) · [DE](docs/RELEASE_0.7.5.de.md) · [ET](docs/RELEASE_0.7.5.et.md).
 
 Roadmap: [RU](docs/ROADMAP_0.8.ru.md) · [EN](docs/ROADMAP_0.8.md). Failure validation: [RU](docs/FAILURE_TESTING.ru.md) · [EN](docs/FAILURE_TESTING.md). Safe update: [RU](docs/UPDATE_SAFE.ru.md) · [EN](docs/UPDATE_SAFE.md).
+
+
+## 0.8.4 · Local Subject / Object Search
+
+Photos / People теперь индексирует не только лица, но и локальные whole-image subject/object tags через optional ONNX classifier. После анализа теги и confidence сохраняются в SQLite, а поиск по `car / dog / keyboard / beach` выполняется без повторного inference на каждый запрос.
+
+Настройка: `DS_IMAGE_CLASSIFIER_MODEL`, `DS_IMAGE_CLASSIFIER_LABELS`, `DS_IMAGE_CLASSIFIER_INPUT_SIZE`. Облако не используется. Это классификация всего изображения, не bounding-box detector.
+
+Подробнее: [docs/RELEASE_0.8.4.ru.md](docs/RELEASE_0.8.4.ru.md).

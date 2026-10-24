@@ -95,3 +95,55 @@ def test_workspace_accepts_relocation_page(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "workspace-relocation.db")
     state = update_workspace_state(active_page="relocation")
     assert state["active_page"] == "relocation"
+
+
+
+def test_workspace_read_remains_available_while_writer_transaction_is_open(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "workspace-wal.db")
+    initial = get_workspace_state()
+    assert initial["active_page"] == "dashboard"
+
+    blocker = database.connect()
+    try:
+        blocker.execute("BEGIN IMMEDIATE")
+        blocker.execute(
+            "UPDATE workspace_state SET active_page='files' WHERE id=1"
+        )
+
+        # WAL readers must still see the last committed workspace state.
+        # This specifically protects GET /api/ui-state from becoming a write.
+        visible = get_workspace_state()
+        assert visible["active_page"] == "dashboard"
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+
+def test_workspace_update_uses_single_connection_for_view_state(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "workspace-single.db")
+    get_workspace_state()
+
+    real_connect = database.connect
+    calls = 0
+
+    def counted_connect():
+        nonlocal calls
+        calls += 1
+        return real_connect()
+
+    monkeypatch.setattr("backend.ui_state.service.connect", counted_connect)
+
+    state = update_workspace_state(
+        active_page="files",
+        view_state={"fileLeftPath": "H:\\"},
+    )
+
+    assert state["active_page"] == "files"
+    assert state["view_state"]["fileLeftPath"] == "H:\\"
+    assert calls == 1

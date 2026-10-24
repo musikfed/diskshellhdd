@@ -1,6 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, fmtBytes, joinPath, thumbnailUrl } from './api.js'
 
+function viewSessionKey(viewId, name) {
+  return `diskshell:view:${viewId}:${name}`
+}
+
+function viewSessionGet(viewId, name, fallback = '') {
+  return sessionStorage.getItem(viewSessionKey(viewId, name)) || fallback
+}
+
+function viewSessionSet(viewId, name, value) {
+  sessionStorage.setItem(viewSessionKey(viewId, name), String(value))
+}
+
+function viewSessionRemove(viewId, name) {
+  sessionStorage.removeItem(viewSessionKey(viewId, name))
+}
+
 function Panel({ title, children, className = '' }) {
   return <section className={`card admin-panel ${className}`}><h3>{title}</h3>{children}</section>
 }
@@ -744,22 +760,23 @@ export function DisksAdmin({ setError }) {
   </div>
 }
 
-export function ScanAdmin({ scanId, setScanId, setError, workspaceViewState = {}, patchViewState }) {
-  const [path, setPath] = useState(workspaceViewState.scanPath || localStorage.getItem('scanPath') || 'F:\\')
+export function ScanAdmin({ scanId, setScanId, setError, workspaceViewState = {}, patchViewState, viewId }) {
+  const [path, setPath] = useState(workspaceViewState.scanPath || viewSessionGet(viewId, 'scanPath', 'F:\\'))
   const [roots, setRoots] = useState([])
-  const [jobId, setJobId] = useState(localStorage.getItem('scanJobId') || '')
+  const [jobId, setJobId] = useState(workspaceViewState.scanJobId || viewSessionGet(viewId, 'scanJobId'))
   const [job, setJob] = useState(null)
 
   useEffect(() => {
-    localStorage.setItem('scanPath', path)
+    viewSessionSet(viewId, 'scanPath', path)
     patchViewState?.({ scanPath: path })
-  }, [path, patchViewState])
+  }, [path, patchViewState, viewId])
   useEffect(() => {
     api('/api/files/roots').then(x => setRoots(x.roots || [])).catch(() => {})
   }, [])
   useEffect(() => {
     if (!jobId) return undefined
-    localStorage.setItem('scanJobId', jobId)
+    viewSessionSet(viewId, 'scanJobId', jobId)
+    patchViewState?.({ scanJobId: jobId })
     let stopped = false
     const poll = async () => {
       try {
@@ -768,12 +785,14 @@ export function ScanAdmin({ scanId, setScanId, setError, workspaceViewState = {}
         setJob(next)
         if (TERMINAL_SCAN.has(next.status)) {
           if (next.scan_id) setScanId(String(next.scan_id))
-          localStorage.removeItem('scanJobId')
+          viewSessionRemove(viewId, 'scanJobId')
+          patchViewState?.({ scanJobId: null })
           setJobId('')
         }
       } catch (e) {
         if (!stopped) {
-          localStorage.removeItem('scanJobId')
+          viewSessionRemove(viewId, 'scanJobId')
+          patchViewState?.({ scanJobId: null })
           setJobId('')
           setError(e.message)
         }
@@ -782,7 +801,7 @@ export function ScanAdmin({ scanId, setScanId, setError, workspaceViewState = {}
     poll()
     const timer = setInterval(poll, 700)
     return () => { stopped = true; clearInterval(timer) }
-  }, [jobId, setError, setScanId])
+  }, [jobId, setError, setScanId, patchViewState, viewId])
 
   async function start() {
     try {
@@ -833,35 +852,35 @@ export function ScanAdmin({ scanId, setScanId, setError, workspaceViewState = {}
   </div>
 }
 
-export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceViewState = {}, patchViewState }) {
-  const [root, setRoot] = useState(workspaceViewState.storageRoot || localStorage.getItem('storageRoot') || 'F:\\Storage')
+export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceViewState = {}, patchViewState, viewId }) {
+  const [root, setRoot] = useState(workspaceViewState.storageRoot || viewSessionGet(viewId, 'storageRoot', 'F:\\Storage'))
   const [roots, setRoots] = useState([])
   const [classes, setClasses] = useState([])
   const [plan, setPlan] = useState(null)
-  const [planId, setPlanId] = useState(workspaceViewState.placementPlanId || localStorage.getItem('placementPlanId') || '')
+  const [planId, setPlanId] = useState(workspaceViewState.placementPlanId || viewSessionGet(viewId, 'placementPlanId'))
   const [confirmation, setConfirmation] = useState('')
   const [verify, setVerify] = useState('size')
-  const [jobId, setJobId] = useState(localStorage.getItem('placementJobId') || '')
+  const [jobId, setJobId] = useState(workspaceViewState.placementJobId || viewSessionGet(viewId, 'placementJobId'))
   const [job, setJob] = useState(null)
-  const [sourceScope, setSourceScope] = useState(workspaceViewState.storageSourceScope || localStorage.getItem('storageSourceScope') || '')
-  const [excludeScope, setExcludeScope] = useState(workspaceViewState.storageExcludeScope || localStorage.getItem('storageExcludeScope') || '')
+  const [sourceScope, setSourceScope] = useState(workspaceViewState.storageSourceScope || viewSessionGet(viewId, 'storageSourceScope'))
+  const [excludeScope, setExcludeScope] = useState(workspaceViewState.storageExcludeScope || viewSessionGet(viewId, 'storageExcludeScope'))
   const [fileWrite, setFileWrite] = useState(null)
   const [planQuery, setPlanQuery] = useState('')
   const [pageOffset, setPageOffset] = useState(0)
   const pageLimit = 250
 
   useEffect(() => {
-    localStorage.setItem('storageRoot', root)
+    viewSessionSet(viewId, 'storageRoot', root)
     patchViewState?.({ storageRoot: root })
-  }, [root, patchViewState])
+  }, [root, patchViewState, viewId])
   useEffect(() => {
-    localStorage.setItem('storageSourceScope', sourceScope)
+    viewSessionSet(viewId, 'storageSourceScope', sourceScope)
     patchViewState?.({ storageSourceScope: sourceScope })
-  }, [sourceScope, patchViewState])
+  }, [sourceScope, patchViewState, viewId])
   useEffect(() => {
-    localStorage.setItem('storageExcludeScope', excludeScope)
+    viewSessionSet(viewId, 'storageExcludeScope', excludeScope)
     patchViewState?.({ storageExcludeScope: excludeScope })
-  }, [excludeScope, patchViewState])
+  }, [excludeScope, patchViewState, viewId])
   useEffect(() => {
     if (planId) patchViewState?.({ placementPlanId: planId })
   }, [planId, patchViewState])
@@ -908,11 +927,11 @@ export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceVi
         setPlan(value)
         setPlanId(String(value.id))
         setPageOffset(0)
-        localStorage.setItem('placementPlanId', String(value.id))
+        viewSessionSet(viewId, 'placementPlanId', String(value.id))
       } catch {
         if (active && planId) {
           setPlanId('')
-          localStorage.removeItem('placementPlanId')
+          viewSessionRemove(viewId, 'placementPlanId')
         }
       }
     }
@@ -922,7 +941,8 @@ export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceVi
 
   useEffect(() => {
     if (!jobId) return undefined
-    localStorage.setItem('placementJobId', jobId)
+    viewSessionSet(viewId, 'placementJobId', jobId)
+    patchViewState?.({ placementJobId: jobId })
     let stopped = false
     const poll = async () => {
       try {
@@ -930,13 +950,15 @@ export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceVi
         if (stopped) return
         setJob(next)
         if (TERMINAL_PLAN.has(next.status)) {
-          localStorage.removeItem('placementJobId')
+          viewSessionRemove(viewId, 'placementJobId')
+          patchViewState?.({ placementJobId: null })
           setJobId('')
           if (planId) await reloadPlan()
         }
       } catch (e) {
         if (!stopped) {
-          localStorage.removeItem('placementJobId')
+          viewSessionRemove(viewId, 'placementJobId')
+          patchViewState?.({ placementJobId: null })
           setJobId('')
           setError(e.message)
         }
@@ -945,7 +967,7 @@ export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceVi
     poll()
     const timer = setInterval(poll, 700)
     return () => { stopped = true; clearInterval(timer) }
-  }, [jobId, planId, setError]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [jobId, planId, setError, patchViewState, viewId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function build() {
     const splitPaths = value => value
@@ -966,7 +988,7 @@ export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceVi
       setPlanId(String(value.id))
       setPageOffset(0)
       setPlanQuery('')
-      localStorage.setItem('placementPlanId', String(value.id))
+      viewSessionSet(viewId, 'placementPlanId', String(value.id))
       setConfirmation('')
     } catch (e) { setError(e.message) }
   }
@@ -1192,12 +1214,12 @@ export function StorageBrainAdmin({ scanId, setError, refreshHealth, workspaceVi
 }
 
 
-export function DiagnosticsAdmin({ setError, workspaceViewState = {}, patchViewState }) {
+export function DiagnosticsAdmin({ setError, workspaceViewState = {}, patchViewState, viewId }) {
   const [disks, setDisks] = useState([])
   const [elevated, setElevated] = useState(null)
-  const [diskNumber, setDiskNumber] = useState(workspaceViewState.diagnosticDisk || localStorage.getItem('diagnosticDisk') || '')
-  const [mode, setMode] = useState(workspaceViewState.diagnosticMode || localStorage.getItem('diagnosticMode') || 'quick')
-  const [jobId, setJobId] = useState(localStorage.getItem('diagnosticJobId') || '')
+  const [diskNumber, setDiskNumber] = useState(workspaceViewState.diagnosticDisk || viewSessionGet(viewId, 'diagnosticDisk'))
+  const [mode, setMode] = useState(workspaceViewState.diagnosticMode || viewSessionGet(viewId, 'diagnosticMode', 'quick'))
+  const [jobId, setJobId] = useState(workspaceViewState.diagnosticJobId || viewSessionGet(viewId, 'diagnosticJobId'))
   const [job, setJob] = useState(null)
   const [history, setHistory] = useState([])
 
@@ -1231,18 +1253,19 @@ export function DiagnosticsAdmin({ setError, workspaceViewState = {}, patchViewS
   useEffect(() => { refreshBase().catch(e => setError(e.message)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (diskNumber !== '') {
-      localStorage.setItem('diagnosticDisk', diskNumber)
+      viewSessionSet(viewId, 'diagnosticDisk', diskNumber)
       patchViewState?.({ diagnosticDisk: diskNumber })
     }
-  }, [diskNumber, patchViewState])
+  }, [diskNumber, patchViewState, viewId])
   useEffect(() => {
-    localStorage.setItem('diagnosticMode', mode)
+    viewSessionSet(viewId, 'diagnosticMode', mode)
     patchViewState?.({ diagnosticMode: mode })
-  }, [mode, patchViewState])
+  }, [mode, patchViewState, viewId])
 
   useEffect(() => {
     if (!jobId) return undefined
-    localStorage.setItem('diagnosticJobId', jobId)
+    viewSessionSet(viewId, 'diagnosticJobId', jobId)
+    patchViewState?.({ diagnosticJobId: jobId })
     let stopped = false
     const poll = async () => {
       try {
@@ -1250,13 +1273,15 @@ export function DiagnosticsAdmin({ setError, workspaceViewState = {}, patchViewS
         if (stopped) return
         setJob(next)
         if (terminal.has(next.status)) {
-          localStorage.removeItem('diagnosticJobId')
+          viewSessionRemove(viewId, 'diagnosticJobId')
+          patchViewState?.({ diagnosticJobId: null })
           setJobId('')
           api('/api/diagnostics/history?limit=8').then(x => setHistory(x.runs || [])).catch(() => {})
         }
       } catch (e) {
         if (!stopped) {
-          localStorage.removeItem('diagnosticJobId')
+          viewSessionRemove(viewId, 'diagnosticJobId')
+          patchViewState?.({ diagnosticJobId: null })
           setJobId('')
           setError(e.message)
         }
@@ -1265,7 +1290,7 @@ export function DiagnosticsAdmin({ setError, workspaceViewState = {}, patchViewS
     poll()
     const timer = setInterval(poll, 600)
     return () => { stopped = true; clearInterval(timer) }
-  }, [jobId, setError, terminal])
+  }, [jobId, setError, terminal, patchViewState, viewId])
 
   async function start() {
     try {
@@ -1424,12 +1449,12 @@ export function RecoveryAdmin({ setError }) {
   </div>
 }
 
-export function SecurityAdmin({ setError, workspaceViewState = {}, patchViewState }) {
+export function SecurityAdmin({ setError, workspaceViewState = {}, patchViewState, viewId }) {
   const [engines, setEngines] = useState([])
   const [engine, setEngine] = useState('auto')
-  const [path, setPath] = useState(workspaceViewState.securityPath || localStorage.getItem('securityPath') || 'F:\\')
+  const [path, setPath] = useState(workspaceViewState.securityPath || viewSessionGet(viewId, 'securityPath', 'F:\\'))
   const [roots, setRoots] = useState([])
-  const [jobId, setJobId] = useState(localStorage.getItem('securityJobId') || '')
+  const [jobId, setJobId] = useState(workspaceViewState.securityJobId || viewSessionGet(viewId, 'securityJobId'))
   const [job, setJob] = useState(null)
   const [results, setResults] = useState([])
 
@@ -1448,13 +1473,14 @@ export function SecurityAdmin({ setError, workspaceViewState = {}, patchViewStat
 
   useEffect(() => { refresh().catch(e => setError(e.message)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    localStorage.setItem('securityPath', path)
+    viewSessionSet(viewId, 'securityPath', path)
     patchViewState?.({ securityPath: path })
-  }, [path, patchViewState])
+  }, [path, patchViewState, viewId])
 
   useEffect(() => {
     if (!jobId) return undefined
-    localStorage.setItem('securityJobId', jobId)
+    viewSessionSet(viewId, 'securityJobId', jobId)
+    patchViewState?.({ securityJobId: jobId })
     let stopped = false
     const poll = async () => {
       try {
@@ -1462,13 +1488,15 @@ export function SecurityAdmin({ setError, workspaceViewState = {}, patchViewStat
         if (stopped) return
         setJob(next)
         if (terminal.has(next.status)) {
-          localStorage.removeItem('securityJobId')
+          viewSessionRemove(viewId, 'securityJobId')
+          patchViewState?.({ securityJobId: null })
           setJobId('')
           refresh().catch(() => {})
         }
       } catch (e) {
         if (!stopped) {
-          localStorage.removeItem('securityJobId')
+          viewSessionRemove(viewId, 'securityJobId')
+          patchViewState?.({ securityJobId: null })
           setJobId('')
           setError(e.message)
         }
@@ -1477,7 +1505,7 @@ export function SecurityAdmin({ setError, workspaceViewState = {}, patchViewStat
     poll()
     const timer = setInterval(poll, 800)
     return () => { stopped = true; clearInterval(timer) }
-  }, [jobId, setError, terminal])
+  }, [jobId, setError, terminal, patchViewState, viewId])
 
   async function start() {
     try {

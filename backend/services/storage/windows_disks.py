@@ -33,7 +33,9 @@ $items = @(
         $volume = $null
         $supportedSize = $null
         try { $volume = $partition | Get-Volume -ErrorAction Stop } catch { $volume = $null }
-        try { $supportedSize = Get-PartitionSupportedSize -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -ErrorAction Stop } catch { $supportedSize = $null }
+        if ($volume -and $volume.FileSystem) {
+          try { $supportedSize = Get-PartitionSupportedSize -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -ErrorAction Stop } catch { $supportedSize = $null }
+        }
         [PSCustomObject]@{
           PartitionNumber = [int]$partition.PartitionNumber
           DriveLetter = if ($partition.DriveLetter) { [string]$partition.DriveLetter } else { $null }
@@ -157,19 +159,24 @@ def _disk_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
 
 def list_windows_disks() -> list[dict[str, Any]]:
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    result = subprocess.run(
-        [
-            "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
-            "-ExecutionPolicy", "Bypass", "-Command", POWERSHELL_SCRIPT,
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8-sig",
-        errors="replace",
-        timeout=30,
-        creationflags=creation_flags,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-Command", POWERSHELL_SCRIPT,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8-sig",
+            errors="replace",
+            timeout=45,
+            creationflags=creation_flags,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DiskDetectionError(
+            "Windows Storage inventory timed out; retry the disk view"
+        ) from exc
     if result.returncode != 0:
         raise DiskDetectionError(result.stderr.strip() or "Windows Storage API returned an error")
     output = result.stdout.strip()

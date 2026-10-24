@@ -1,4 +1,4 @@
-# DiskShell HDD 0.8.4
+# DiskShell HDD 0.8.5
 
 Русский · [English](README.md)
 
@@ -358,3 +358,12 @@ Photos / People теперь индексирует не только лица, 
 Настройка: `DS_IMAGE_CLASSIFIER_MODEL`, `DS_IMAGE_CLASSIFIER_LABELS`, `DS_IMAGE_CLASSIFIER_INPUT_SIZE`. Облако не используется. Это классификация всего изображения, не bounding-box detector.
 
 Подробнее: [docs/RELEASE_0.8.4.ru.md](docs/RELEASE_0.8.4.ru.md).
+
+
+## 0.8.5 · HDD NTFS Locality Scheduler
+
+StreamCopy получил ручной experimental ordering **NTFS first-LCN locality** для Local HDD source. После manifest scan DiskShell read-only получает первый NTFS LCN через `FSCTL_GET_RETRIEVAL_POINTERS` и сортирует порядок чтения файлов, не двигая extents и не включая `DS_ALLOW_EXTENT_MOVES`.
+
+Unknown-LCN файлы остаются в стабильном исходном порядке; SFTP/SSD/Flash используют manifest order. Режим остаётся opt-in до сравнительных benchmark результатов.
+
+Подробнее: [docs/RELEASE_0.8.5.ru.md](docs/RELEASE_0.8.5.ru.md).

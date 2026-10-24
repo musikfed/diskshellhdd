@@ -16,11 +16,13 @@ from backend.files.endpoint_availability import bind_local_volume, local_endpoin
 from backend.files.service import FileWriteBlocked
 from backend.files.write_authorization import file_writes_allowed
 from backend.streamcopy import journal
+from backend.streamcopy.locality import order_manifest_by_ntfs_locality
 
 
 MEDIA_TYPES = {"hdd", "ssd", "flash"}
 TRANSPORT_TYPES = {"internal", "usb2", "usb3", "usb4", "network", "unknown"}
 USB_TOPOLOGIES = {"unknown", "shared", "separate"}
+ORDERING_MODES = {"manifest", "ntfs_locality"}
 TERMINAL_STATES = journal.TERMINAL_STATES
 
 CHECKPOINT_BYTES = 128 * 1024 * 1024
@@ -64,12 +66,14 @@ def stream_profile(
     usb_topology: str = "unknown",
     source_cache_mib: int | float | str | None = None,
     destination_cache_mib: int | float | str | None = None,
+    ordering_mode: str = "manifest",
 ) -> dict[str, Any]:
     src = str(source_media).casefold()
     dst = str(destination_media).casefold()
     src_transport = str(source_transport).casefold()
     dst_transport = str(destination_transport).casefold()
     topology = str(usb_topology).casefold()
+    requested_ordering = str(ordering_mode or "manifest").casefold()
     source_cache = max(0, min(1024, int(float(source_cache_mib or 0))))
     destination_cache = max(0, min(1024, int(float(destination_cache_mib or 0))))
     if src not in MEDIA_TYPES or dst not in MEDIA_TYPES:
@@ -80,6 +84,8 @@ def stream_profile(
         )
     if topology not in USB_TOPOLOGIES:
         raise ValueError("usb_topology must be unknown, shared or separate")
+    if requested_ordering not in ORDERING_MODES:
+        raise ValueError("ordering_mode must be manifest or ntfs_locality")
 
     if "flash" in {src, dst}:
         chunk_mib, depth = 4, 4
@@ -134,12 +140,14 @@ def stream_profile(
     else:
         transport_note = "Media type controls scheduling; transport is a secondary constraint."
 
+    effective_ordering = "manifest" if network_path else requested_ordering
     ordering = (
         "persistent manifest / SFTP River Keeper checkpoints / sequential items"
         if network_path
         else (
-            "persistent manifest / microfile frames in manifest order / "
-            "large files sequential"
+            "NTFS first-LCN locality order / microfile frames / large files sequential"
+            if effective_ordering == "ntfs_locality"
+            else "persistent manifest / microfile frames in manifest order / large files sequential"
         )
     )
     remote_note = (
@@ -169,6 +177,15 @@ def stream_profile(
         ),
         "transport_note": transport_note,
         "ordering": ordering,
+        "ordering_mode": effective_ordering,
+        "ordering_requested": requested_ordering,
+        "locality_scheduler": {
+            "enabled": bool(effective_ordering == "ntfs_locality"),
+            "read_only": True,
+            "source_media_required": "hdd",
+            "platform": "Windows/NTFS",
+            "automatic": False,
+        },
         "microfile_batching": not network_path,
         "microfile_max_bytes": MICRO_FILE_MAX_BYTES,
         "microfile_max_mib": MICRO_FILE_MAX_BYTES / (1024 * 1024),
@@ -411,6 +428,31 @@ def _build_manifest(job_id: str, source: Path, destination_root: Path) -> None:
         directory_count = len(directories)
         for directory in sorted(directories, key=lambda value: len(Path(value).parts)):
             Path(directory).mkdir(parents=True, exist_ok=True)
+
+        job = _load_job(job_id)
+        profile = dict(job.get("profile") or {})
+        if (
+            profile.get("ordering_mode") == "ntfs_locality"
+            and profile.get("source_media") == "hdd"
+            and len(items) > 1
+        ):
+            started = time.monotonic()
+            items, locality = order_manifest_by_ntfs_locality(items)
+            log_event(
+                "streamcopy.locality_manifest",
+                job_id=job_id,
+                files=locality["files"],
+                known_lcn=locality["known_lcn"],
+                unknown_lcn=locality["unknown_lcn"],
+                coverage_percent=locality["coverage_percent"],
+                planning_seconds=round(time.monotonic() - started, 3),
+            )
+            if locality["known_lcn"] == 0:
+                _append_warning(
+                    job_id,
+                    str(source),
+                    "NTFS locality scheduler could not read any LCN values; stable manifest fallback used",
+                )
 
     journal.replace_manifest(
         job_id,
@@ -1259,6 +1301,7 @@ def start_streamcopy_job(
     usb_topology: str = "unknown",
     source_cache_mib: int | float | str | None = None,
     destination_cache_mib: int | float | str | None = None,
+    ordering_mode: str = "manifest",
     verify_mode: str = "size",
     delete_source_after_verify: bool = False,
     *,
@@ -1289,6 +1332,7 @@ def start_streamcopy_job(
             usb_topology=usb_topology,
             source_cache_mib=source_cache_mib,
             destination_cache_mib=destination_cache_mib,
+            ordering_mode=ordering_mode,
             verify_mode=verify_mode,
             delete_source_after_verify=delete_source_after_verify,
         )
@@ -1336,6 +1380,7 @@ def start_streamcopy_job(
         usb_topology,
         source_cache_mib,
         destination_cache_mib,
+        ordering_mode,
     )
 
     destination.mkdir(parents=True, exist_ok=True)

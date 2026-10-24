@@ -29,6 +29,7 @@ def profile():
                 str(payload.get("usb_topology") or "unknown"),
                 payload.get("source_cache_mib"),
                 payload.get("destination_cache_mib"),
+                str(payload.get("ordering_mode") or "manifest"),
             )
         )
     except ValueError as exc:
@@ -79,6 +80,7 @@ def start_job():
             usb_topology=str(payload.get("usb_topology") or "unknown"),
             source_cache_mib=payload.get("source_cache_mib"),
             destination_cache_mib=payload.get("destination_cache_mib"),
+            ordering_mode=str(payload.get("ordering_mode") or "manifest"),
             verify_mode=str(payload.get("verify_mode") or "size"),
             delete_source_after_verify=bool(payload.get("delete_source_after_verify", False)),
         )

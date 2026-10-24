@@ -297,11 +297,12 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   return <div className="streamcopy-page">
     <div className="streamcopy-hero">
       <div>
-        <span className="streamcopy-kicker">EXPERIMENTAL · LOCAL COPY ENGINE</span>
-        <h2>StreamCopy</h2>
+        <span className="streamcopy-kicker">V2 EXPERIMENTAL · LOCAL RIVER ENGINE</span>
+        <h2>StreamCopy v2</h2>
         <p>
-          Папка рассматривается как один логический поток: один manifest, один producer,
-          один consumer и ограниченный RAM ring buffer. Обычный Commander не изменяется.
+          Папка рассматривается как один логический поток. Маленькие файлы объединяются
+          producer’ом в RAM frames, а крупные идут последовательным River Keeper path.
+          На destination всё равно создаются обычные отдельные файлы.
         </p>
       </div>
       <div className="streamcopy-lock">
@@ -334,6 +335,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           <div><small>Chunk</small><b>{profile ? `${profile.chunk_mib} MiB` : '…'}</b></div>
           <div><small>Queue</small><b>{profile ? `${profile.queue_depth} buffers` : '…'}</b></div>
           <div><small>RAM ring</small><b>{profile ? `${profile.max_buffer_mib} MiB max` : '…'}</b></div>
+          <div><small>Microfiles</small><b>{profile ? `≤ ${profile.microfile_max_mib} MiB` : '…'}</b></div>
+          <div><small>Micro frame</small><b>{profile ? `${profile.micro_frame_mib} MiB` : '…'}</b></div>
           <div><small>River keeper</small><b>{profile ? `${profile.checkpoint_mib} MiB checkpoint` : '…'}</b></div>
           <div className="grow"><small>Ordering</small><b>{profile?.ordering || '…'}</b></div>
         </div>

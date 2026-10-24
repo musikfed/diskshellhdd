@@ -47,6 +47,7 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "accept_unknown_host": profile.get("accept_unknown_host", False),
         "root": profile.get("root") or "/",
         "connected_at": profile.get("connected_at"),
+        "identity": _identity_from_profile(profile),
     }
 
 
@@ -257,6 +258,9 @@ class RemoteSession(AbstractContextManager):
     def open_write(self, path: str, offset: int = 0) -> BinaryIO:
         raise NotImplementedError
 
+    def truncate(self, path: str, size: int) -> None:
+        raise NotImplementedError
+
     def walk(self, path: str) -> tuple[list[str], list[tuple[str, int]]]:
         normalized = _normalize_remote_path(path)
         entry = self.stat(normalized)
@@ -455,6 +459,13 @@ class SFTPSession(RemoteSession):
             stream.seek(int(offset))
         return stream
 
+    def truncate(self, path: str, size: int) -> None:
+        assert self.sftp is not None
+        try:
+            self.sftp.truncate(_normalize_remote_path(path), int(size))
+        except OSError as exc:
+            raise RemoteConnectionError(str(exc)) from exc
+
 
 class _FTPStream(io.BufferedIOBase):
     def __init__(self, ftp, data_socket, mode: str):
@@ -607,6 +618,12 @@ class FTPSession(RemoteSession):
             rest=int(offset) if offset else None,
         )
         return _FTPStream(self.ftp, data_socket, "wb")
+
+    def truncate(self, path: str, size: int) -> None:
+        del path, size
+        raise RemoteConnectionError(
+            "Persistent Remote River truncation is supported only for SFTP"
+        )
 
 
 def open_session_from_profile(profile: dict[str, Any]) -> RemoteSession:

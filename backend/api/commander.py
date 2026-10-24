@@ -6,6 +6,7 @@ from backend.commander.jobs import (
     CommanderConflict,
     cancel_commander_job,
     get_commander_job,
+    list_commander_jobs,
     start_commander_batch_job,
     start_commander_job,
 )
@@ -193,6 +194,16 @@ def start_job():
         OSError,
     ) as exc:
         return jsonify({"error": "commander_job_failed", "message": str(exc)}), 400
+
+
+@bp.get("/jobs")
+def jobs():
+    active = str(request.args.get("active") or "").casefold() in {"1", "true", "yes"}
+    try:
+        limit = int(request.args.get("limit", "20"))
+    except ValueError:
+        return jsonify({"error": "invalid_limit"}), 400
+    return jsonify({"jobs": list_commander_jobs(active_only=active, limit=limit)})
 
 
 @bp.get("/jobs/<job_id>")

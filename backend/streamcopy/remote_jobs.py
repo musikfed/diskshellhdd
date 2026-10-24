@@ -803,6 +803,7 @@ def start_remote_streamcopy_job(
     usb_topology: str,
     source_cache_mib: int | float | str | None,
     destination_cache_mib: int | float | str | None,
+    ordering_mode: str,
     verify_mode: str,
     delete_source_after_verify: bool,
 ) -> dict[str, Any]:
@@ -875,9 +876,11 @@ def start_remote_streamcopy_job(
         usb_topology,
         source_cache_mib,
         destination_cache_mib,
+        ordering_mode,
     )
     profile["remote_river"] = True
     profile["microfile_batching"] = False
+    profile["ordering_mode"] = "manifest"
     profile["ordering"] = (
         "persistent manifest / SFTP River Keeper checkpoints / sequential items"
     )

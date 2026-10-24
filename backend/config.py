@@ -47,6 +47,9 @@ class Settings:
 
     face_detector_model: str = os.getenv("DS_FACE_DETECTOR_MODEL", "")
     face_recognizer_model: str = os.getenv("DS_FACE_RECOGNIZER_MODEL", "")
+    image_classifier_model: str = os.getenv("DS_IMAGE_CLASSIFIER_MODEL", "")
+    image_classifier_labels: str = os.getenv("DS_IMAGE_CLASSIFIER_LABELS", "")
+    image_classifier_input_size: int = int(os.getenv("DS_IMAGE_CLASSIFIER_INPUT_SIZE", "224"))
 
     @property
     def project_root(self) -> Path:

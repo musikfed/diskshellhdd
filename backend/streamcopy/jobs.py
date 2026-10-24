@@ -166,6 +166,7 @@ def _public_job(job: dict[str, Any]) -> dict[str, Any]:
     value["checkpoint_mib"] = CHECKPOINT_BYTES // (1024 * 1024)
     value["recovery_mode"] = "rollback_to_verified_checkpoint"
     value["operation"] = "copy_then_delete" if value.get("delete_source_after_verify") else "copy"
+    value["average_scope"] = "current transfer session; manifest scan excluded"
     return value
 
 
@@ -468,7 +469,11 @@ def _progress_ram(job_id: str, base_bytes: int, offset: int, current_path: str) 
         job["current_path"] = current_path
         total = int(job.get("total_bytes") or 0)
         job["progress_percent"] = round(job["bytes"] * 100 / total, 2) if total else 100.0
-        elapsed = max(0.001, time.monotonic() - float(job["_started_monotonic"]))
+        transfer_started = float(
+            job.get("_transfer_started_monotonic")
+            or job["_started_monotonic"]
+        )
+        elapsed = max(0.001, time.monotonic() - transfer_started)
         session_bytes = max(0, job["bytes"] - int(job.get("_session_start_bytes") or 0))
         job["average_mib_s"] = round(session_bytes / (1024 * 1024) / elapsed, 2)
         job["updated_at"] = _now()
@@ -1036,6 +1041,11 @@ def _run_job(job_id: str) -> None:
                         continue
                     raise
 
+        with _lock:
+            cached = _jobs.get(job_id)
+            if cached is not None:
+                cached["_transfer_started_monotonic"] = time.monotonic()
+                cached["_session_start_bytes"] = int(cached.get("bytes") or 0)
         _persist_job(job_id, status="recovering", error=None)
         index = 0
         threshold = int(

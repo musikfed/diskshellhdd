@@ -59,3 +59,29 @@ def test_remote_walk_skips_symlinks():
 
     assert directories == ["", "real"]
     assert files == [("file.bin", 10), ("real/inside.bin", 20)]
+
+
+
+class _DeleteLinkSession:
+    def __init__(self):
+        self.removed = []
+        self.walk_called = False
+
+    def stat(self, path):
+        return RemoteEntry("link", "/link", False, 0, None, True)
+
+    def remove(self, path):
+        self.removed.append(path)
+
+    def walk(self, path):
+        self.walk_called = True
+        raise AssertionError("symlink target must never be walked")
+
+
+def test_remote_delete_tree_removes_symlink_without_traversal():
+    session = _DeleteLinkSession()
+
+    SFTPSession.delete_tree(session, "/link")
+
+    assert session.removed == ["/link"]
+    assert session.walk_called is False

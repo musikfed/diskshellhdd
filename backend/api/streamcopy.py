@@ -61,6 +61,18 @@ def start_job():
             destination_path=str(payload["destination_path"]),
             source_media=str(payload.get("source_media") or "hdd"),
             destination_media=str(payload.get("destination_media") or "hdd"),
+            source_kind=str(payload.get("source_kind") or "local"),
+            destination_kind=str(payload.get("destination_kind") or "local"),
+            source_connection_id=(
+                str(payload.get("source_connection_id"))
+                if payload.get("source_connection_id")
+                else None
+            ),
+            destination_connection_id=(
+                str(payload.get("destination_connection_id"))
+                if payload.get("destination_connection_id")
+                else None
+            ),
             source_transport=str(payload.get("source_transport") or "unknown"),
             destination_transport=str(payload.get("destination_transport") or "unknown"),
             usb_topology=str(payload.get("usb_topology") or "unknown"),

@@ -63,8 +63,7 @@ def list_profiles() -> list[dict[str, Any]]:
         return [_public_profile(profile) for profile in _profiles.values()]
 
 
-def profile_identity(profile_id: str) -> str:
-    profile = _profile(profile_id)
+def _identity_from_profile(profile: dict[str, Any]) -> str:
     return "|".join(
         [
             str(profile["protocol"]),
@@ -74,6 +73,21 @@ def profile_identity(profile_id: str) -> str:
             str(profile.get("root") or "/"),
         ]
     )
+
+
+def profile_identity(profile_id: str) -> str:
+    return _identity_from_profile(_profile(profile_id))
+
+
+def find_profile_id_by_identity(identity: str) -> str | None:
+    expected = str(identity or "")
+    if not expected:
+        return None
+    with _profiles_lock:
+        for profile_id, profile in _profiles.items():
+            if _identity_from_profile(profile) == expected:
+                return str(profile_id)
+    return None
 
 
 def remote_endpoint_state(profile_id: str) -> dict[str, Any]:

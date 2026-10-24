@@ -28,6 +28,11 @@ const TOPOLOGY = [
   ['shared', 'Общий hub / controller'],
 ]
 
+const ORDERING = [
+  ['manifest', 'Manifest / directory order'],
+  ['ntfs_locality', 'NTFS first-LCN locality · EXP'],
+]
+
 const TERMINAL = new Set(['completed', 'completed_with_warnings', 'failed', 'cancelled'])
 
 function saved(key, fallback) {
@@ -68,6 +73,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   const [usbTopology, setUsbTopology] = useState(() => saved('usbTopology', 'unknown'))
   const [sourceCacheMiB, setSourceCacheMiB] = useState(() => saved('sourceCacheMiB', '32'))
   const [destinationCacheMiB, setDestinationCacheMiB] = useState(() => saved('destinationCacheMiB', '128'))
+  const [orderingMode, setOrderingMode] = useState(() => saved('orderingMode', 'manifest'))
   const [verifyMode, setVerifyMode] = useState(() => saved('verifyMode', 'size'))
   const [deleteSourceAfterVerify, setDeleteSourceAfterVerify] = useState(
     () => saved('deleteSourceAfterVerify', 'false') === 'true',
@@ -80,6 +86,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
 
   const effectiveSourceTransport = sourceKind === 'remote' ? 'network' : sourceTransport
   const effectiveDestinationTransport = destinationKind === 'remote' ? 'network' : destinationTransport
+  const localityEligible = sourceKind === 'local' && sourceMedia === 'hdd'
+  const effectiveOrderingMode = localityEligible ? orderingMode : 'manifest'
 
   const payload = useMemo(() => ({
     source_media: sourceMedia,
@@ -89,6 +97,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     usb_topology: usbTopology,
     source_cache_mib: Number(sourceCacheMiB || 0),
     destination_cache_mib: Number(destinationCacheMiB || 0),
+    ordering_mode: effectiveOrderingMode,
   }), [
     sourceMedia,
     destinationMedia,
@@ -97,6 +106,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     usbTopology,
     sourceCacheMiB,
     destinationCacheMiB,
+    effectiveOrderingMode,
     verifyMode,
     deleteSourceAfterVerify,
   ])
@@ -119,6 +129,9 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       if (nextProfile.usb_topology) setUsbTopology(nextProfile.usb_topology)
       if (nextProfile.source_cache_mib != null) setSourceCacheMiB(String(nextProfile.source_cache_mib))
       if (nextProfile.destination_cache_mib != null) setDestinationCacheMiB(String(nextProfile.destination_cache_mib))
+      if (nextProfile.ordering_requested || nextProfile.ordering_mode) {
+        setOrderingMode(nextProfile.ordering_requested || nextProfile.ordering_mode)
+      }
       if (next.verify_mode) setVerifyMode(next.verify_mode)
       setDeleteSourceAfterVerify(Boolean(next.delete_source_after_verify))
     }
@@ -237,6 +250,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       usbTopology,
       sourceCacheMiB,
       destinationCacheMiB,
+      orderingMode,
       verifyMode,
       deleteSourceAfterVerify,
     })) localStorage.setItem(`streamcopy:${key}`, String(value))
@@ -254,6 +268,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     usbTopology,
     sourceCacheMiB,
     destinationCacheMiB,
+    orderingMode,
     verifyMode,
     deleteSourceAfterVerify,
   ])
@@ -441,9 +456,24 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         </div>
         <div className="streamcopy-row topology-row">
           <SelectField label="Если оба через USB: topology" value={usbTopology} onChange={setUsbTopology} options={TOPOLOGY} disabled={running} />
+          <SelectField
+            label="Source ordering"
+            value={effectiveOrderingMode}
+            onChange={setOrderingMode}
+            options={ORDERING}
+            disabled={running || !localityEligible}
+          />
           <p>{profile?.transport_note}</p>
           <p>{profile?.cache_note}</p>
           <button onClick={refreshConnections} disabled={running}>↻ SFTP profiles</button>
+        </div>
+        {orderingMode === 'ntfs_locality' && !localityEligible && <div className="streamcopy-note">
+          NTFS locality доступен только для Local HDD source. Для SSD/Flash/SFTP применяется стабильный manifest order.
+        </div>}
+        {profile?.locality_scheduler?.enabled && <div className="streamcopy-note">
+          NTFS first-LCN locality · EXP: scheduler только читает allocation map и меняет порядок manifest.
+          Он не двигает extents и не включает DS_ALLOW_EXTENT_MOVES. Unknown LCN остаются в исходном порядке в конце.
+          Режим opt-in — сравни итоговое время с обычным manifest order на том же наборе.
         </div>
         {profile?.remote_note && <div className="streamcopy-note">{profile.remote_note}</div>}
         <div className="streamcopy-row topology-row">

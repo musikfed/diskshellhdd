@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Iterable
 
 from backend.config import settings
 
 
 DATABASE_PATH = settings.data_dir / "diskshell.db"
+
+_INIT_LOCK = threading.Lock()
+_INITIALIZED_PATHS: set[str] = set()
 
 
 SCHEMA = """
@@ -251,6 +255,10 @@ CREATE TABLE IF NOT EXISTS workspace_state (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+INSERT OR IGNORE INTO workspace_state
+    (id, active_page, active_volume, scan_id, view_state_json)
+VALUES (1, 'dashboard', '', '', '{}');
+
 CREATE TABLE IF NOT EXISTS streamcopy_jobs (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -387,9 +395,8 @@ def connect() -> sqlite3.Connection:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=30, check_same_thread=False)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA synchronous=NORMAL")
     connection.execute("PRAGMA foreign_keys=ON")
+    connection.execute("PRAGMA busy_timeout=30000")
     return connection
 
 
@@ -409,56 +416,70 @@ def _ensure_columns(
 
 
 def init_database() -> None:
-    with connect() as connection:
-        connection.executescript(SCHEMA)
-        # Lightweight migrations from 0.2/0.3. Runtime state is kept intact.
-        _ensure_columns(
-            connection,
-            "files",
-            [
-                ("category", "TEXT NOT NULL DEFAULT 'other'"),
-                ("storage_class", "TEXT"),
-                ("accessed_ns", "INTEGER"),
-                ("created_ns", "INTEGER"),
-            ],
-        )
-        _ensure_columns(
-            connection,
-            "directories",
-            [
-                ("category", "TEXT NOT NULL DEFAULT 'directory'"),
-                ("storage_class", "TEXT"),
-            ],
-        )
-        _ensure_columns(
-            connection,
-            "placement_plans",
-            [
-                ("started_at", "TEXT"),
-                ("completed_at", "TEXT"),
-            ],
-        )
-        _ensure_columns(
-            connection,
-            "workspace_state",
-            [
-                ("view_state_json", "TEXT NOT NULL DEFAULT '{}'"),
-            ],
-        )
-        _ensure_columns(
-            connection,
-            "placement_plan_items",
-            [
-                ("status", "TEXT NOT NULL DEFAULT 'pending'"),
-                ("verification", "TEXT"),
-                ("error", "TEXT"),
-                ("layout_lane", "TEXT"),
-                ("target_band_bytes", "INTEGER"),
-                ("selected", "INTEGER NOT NULL DEFAULT 0"),
-                ("layout_verification", "TEXT"),
-            ],
-        )
-        # Indexes that reference migrated columns must be created only after
-        # legacy 0.2/0.3 tables have received those columns.
-        connection.executescript(INDEX_SCHEMA)
-        connection.commit()
+    database_key = str(DATABASE_PATH.resolve())
+    if database_key in _INITIALIZED_PATHS:
+        return
+
+    with _INIT_LOCK:
+        if database_key in _INITIALIZED_PATHS:
+            return
+
+        with connect() as connection:
+            # WAL is a database-level setting and can require an exclusive lock.
+            # Configure it once during schema initialization, never on every request.
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.executescript(SCHEMA)
+            # Lightweight migrations from 0.2/0.3. Runtime state is kept intact.
+            _ensure_columns(
+                connection,
+                "files",
+                [
+                    ("category", "TEXT NOT NULL DEFAULT 'other'"),
+                    ("storage_class", "TEXT"),
+                    ("accessed_ns", "INTEGER"),
+                    ("created_ns", "INTEGER"),
+                ],
+            )
+            _ensure_columns(
+                connection,
+                "directories",
+                [
+                    ("category", "TEXT NOT NULL DEFAULT 'directory'"),
+                    ("storage_class", "TEXT"),
+                ],
+            )
+            _ensure_columns(
+                connection,
+                "placement_plans",
+                [
+                    ("started_at", "TEXT"),
+                    ("completed_at", "TEXT"),
+                ],
+            )
+            _ensure_columns(
+                connection,
+                "workspace_state",
+                [
+                    ("view_state_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ],
+            )
+            _ensure_columns(
+                connection,
+                "placement_plan_items",
+                [
+                    ("status", "TEXT NOT NULL DEFAULT 'pending'"),
+                    ("verification", "TEXT"),
+                    ("error", "TEXT"),
+                    ("layout_lane", "TEXT"),
+                    ("target_band_bytes", "INTEGER"),
+                    ("selected", "INTEGER NOT NULL DEFAULT 0"),
+                    ("layout_verification", "TEXT"),
+                ],
+            )
+            # Indexes that reference migrated columns must be created only after
+            # legacy 0.2/0.3 tables have received those columns.
+            connection.executescript(INDEX_SCHEMA)
+            connection.commit()
+
+        _INITIALIZED_PATHS.add(database_key)

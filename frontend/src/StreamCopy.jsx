@@ -186,9 +186,10 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   const refreshConnections = async () => {
     try {
       const value = await api('/api/commander/connections')
-      setConnections(
-        (value.connections || []).filter(item => item.protocol === 'sftp'),
-      )
+      const next = (value.connections || []).filter(item => item.protocol === 'sftp')
+      setConnections(next)
+      setSourceConnectionId(current => next.some(item => item.id === current) ? current : '')
+      setDestinationConnectionId(current => next.some(item => item.id === current) ? current : '')
     } catch {
       setConnections([])
     }
@@ -427,8 +428,14 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           <div><small>Chunk</small><b>{profile ? `${profile.chunk_mib} MiB` : '…'}</b></div>
           <div><small>Queue</small><b>{profile ? `${profile.queue_depth} buffers` : '…'}</b></div>
           <div><small>RAM ring</small><b>{profile ? `${profile.max_buffer_mib} MiB max` : '…'}</b></div>
-          <div><small>Microfiles</small><b>{profile ? `≤ ${profile.microfile_max_mib} MiB` : '…'}</b></div>
-          <div><small>Micro frame</small><b>{profile ? `${profile.micro_frame_mib} MiB` : '…'}</b></div>
+          <div>
+            <small>Microfiles</small>
+            <b>{profile ? (profile.microfile_batching ? `≤ ${profile.microfile_max_mib} MiB` : 'off for SFTP') : '…'}</b>
+          </div>
+          <div>
+            <small>Micro frame</small>
+            <b>{profile ? (profile.microfile_batching ? `${profile.micro_frame_mib} MiB` : 'local only') : '…'}</b>
+          </div>
           <div><small>River keeper</small><b>{profile ? `${profile.checkpoint_mib} MiB checkpoint` : '…'}</b></div>
           <div className="grow"><small>Ordering</small><b>{profile?.ordering || '…'}</b></div>
         </div>

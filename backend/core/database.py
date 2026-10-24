@@ -301,6 +301,19 @@ CREATE TABLE IF NOT EXISTS streamcopy_checkpoints (
         ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS commander_jobs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    job_json TEXT NOT NULL DEFAULT '{}',
+    transfers_json TEXT NOT NULL DEFAULT '[]',
+    lease_owner TEXT,
+    lease_expires_at REAL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS diagnostic_runs (
     id TEXT PRIMARY KEY,
     disk_number INTEGER NOT NULL,
@@ -345,6 +358,8 @@ CREATE INDEX IF NOT EXISTS idx_streamcopy_items_job_status
 ON streamcopy_items(job_id, status, item_index);
 CREATE INDEX IF NOT EXISTS idx_streamcopy_checkpoints_item
 ON streamcopy_checkpoints(job_id, item_index, offset DESC);
+CREATE INDEX IF NOT EXISTS idx_commander_jobs_status
+ON commander_jobs(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_diagnostic_runs_disk
 ON diagnostic_runs(disk_number, started_at DESC);
 """

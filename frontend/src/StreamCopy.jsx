@@ -474,7 +474,7 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           NTFS first-LCN locality · EXP: scheduler только читает allocation map и меняет порядок manifest.
           Он не двигает extents и не включает DS_ALLOW_EXTENT_MOVES. Unknown LCN остаются в исходном порядке в конце.
           Режим opt-in — сравни итоговое время с обычным manifest order на том же наборе.
-        </div>
+        </div>}
         {profile?.remote_note && <div className="streamcopy-note">{profile.remote_note}</div>}
         <div className="streamcopy-row topology-row">
           <SelectField

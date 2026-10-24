@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import threading
+import time
 import uuid
 from contextlib import ExitStack
 from copy import deepcopy
@@ -10,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from backend.commander import journal
 from backend.core.logging_setup import log_error, log_event, log_warning
 from backend.files.endpoint_availability import (
     bind_local_volume,
@@ -20,6 +22,7 @@ from backend.files.write_authorization import file_writes_allowed
 from backend.remote.service import (
     RemoteConnectionError,
     RemoteNotFound,
+    find_profile_id_by_identity,
     open_session,
     profile_identity,
 )
@@ -30,6 +33,9 @@ TRANSFER_RETRY_LIMIT = 4
 TRANSFER_RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
 ENDPOINT_RECHECK_SECONDS = 3.0
 WINDOWS_ENDPOINT_LOSS_ERRORS = {3, 21, 53, 64, 1117, 1167}
+LEASE_SECONDS = 15.0
+LEASE_HEARTBEAT_SECONDS = 3.0
+RECOVERY_POLL_SECONDS = 3.0
 
 
 class CommanderCancelled(RuntimeError):
@@ -45,10 +51,49 @@ class CommanderConflict(RuntimeError):
 _lock = threading.Lock()
 _jobs: dict[str, dict[str, Any]] = {}
 _cancel_events: dict[str, threading.Event] = {}
+_threads: dict[str, threading.Thread] = {}
+_last_persist: dict[str, float] = {}
+_recovery_started = False
+_INSTANCE_ID = uuid.uuid4().hex
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _persist_snapshot(
+    job_id: str,
+    transfers: list[dict[str, Any]] | None = None,
+    *,
+    force: bool = False,
+) -> None:
+    now = time.monotonic()
+    if not force and now - _last_persist.get(job_id, 0.0) < 0.5:
+        return
+    with _lock:
+        job = deepcopy(_jobs.get(job_id))
+    if job is None:
+        return
+    job.pop("_lease_lost", None)
+    journal.save_job(job, transfers=transfers)
+    _last_persist[job_id] = now
+
+
+def _rebind_remote_endpoint(endpoint: dict[str, Any]) -> None:
+    if endpoint.get("kind") != "remote":
+        return
+    expected = str(endpoint.get("remote_identity") or "")
+    if not expected:
+        return
+    current_id = str(endpoint.get("connection_id") or "")
+    try:
+        if current_id and profile_identity(current_id) == expected:
+            return
+    except KeyError:
+        pass
+    rebound = find_profile_id_by_identity(expected)
+    if rebound:
+        endpoint["connection_id"] = rebound
 
 
 def _check_cancel(event: threading.Event) -> None:
@@ -72,6 +117,8 @@ def _public_endpoint(endpoint: dict[str, Any]) -> dict[str, Any]:
     result = {"kind": endpoint["kind"], "path": str(endpoint["path"])}
     if endpoint["kind"] == "remote":
         result["connection_id"] = endpoint["connection_id"]
+        if endpoint.get("remote_identity"):
+            result["remote_identity"] = endpoint["remote_identity"]
     return result
 
 
@@ -345,6 +392,7 @@ def _endpoint_state(
     if endpoint["kind"] == "local":
         return local_endpoint_state(endpoint)
 
+    _rebind_remote_endpoint(endpoint)
     expected = endpoint.get("remote_identity")
     current = None
     if expected:
@@ -771,6 +819,7 @@ def _prepare_transfer(raw: dict[str, Any]) -> dict[str, Any]:
         "replace_existing": False,
         "resume_existing": False,
         "conflict_resolution": None,
+        "journal_status": "pending",
     }
 
 
@@ -941,6 +990,8 @@ def start_commander_batch_job(
         _jobs[job_id] = job
         _cancel_events[job_id] = event
 
+    journal.create_job(job, prepared)
+
     log_event(
         "commander.started",
         job_id=job_id,
@@ -952,12 +1003,7 @@ def start_commander_batch_job(
         destination_kind=first["destination"]["kind"],
     )
 
-    threading.Thread(
-        target=_run_batch_job,
-        args=(job_id, op, prepared, event),
-        daemon=True,
-        name=f"commander-{job_id[:8]}",
-    ).start()
+    _launch_worker(job_id, op, prepared, event)
     return get_commander_job(job_id)
 
 
@@ -983,7 +1029,10 @@ def _run_batch_job(
 ) -> None:
     with _lock:
         _jobs[job_id]["status"] = "running"
-        _jobs[job_id]["started_at"] = _now()
+        if not _jobs[job_id].get("started_at"):
+            _jobs[job_id]["started_at"] = _now()
+        _jobs[job_id]["cancel_requested"] = False
+    _persist_snapshot(job_id, transfers, force=True)
 
     def progress(count: int, current_path: str) -> None:
         with _lock:
@@ -996,6 +1045,7 @@ def _run_batch_job(
                 if total
                 else None
             )
+        _persist_snapshot(job_id)
 
     def retry_status(
         attempt: int,
@@ -1013,6 +1063,7 @@ def _run_batch_job(
             job["resume_offset"] = int(resume_offset)
             job["last_retry_error"] = error
             job["current_path"] = current_path
+        _persist_snapshot(job_id)
 
     def wait_status(
         waiting: bool,
@@ -1044,6 +1095,7 @@ def _run_batch_job(
                 job["waiting_for"] = []
                 job["status"] = "running"
 
+        _persist_snapshot(job_id, force=True)
         if became_waiting:
             log_warning(
                 "commander.endpoint_waiting",
@@ -1061,8 +1113,12 @@ def _run_batch_job(
     try:
         for index, transfer in enumerate(transfers, start=1):
             _check_cancel(event)
+            if transfer.get("journal_status") in {"completed", "skipped", "missing"}:
+                continue
             source = transfer["source"]
             destination = transfer["destination"]
+            _rebind_remote_endpoint(source)
+            _rebind_remote_endpoint(destination)
             is_dir = bool(transfer["is_dir"])
             directories = transfer["directories"]
             files = transfer["files"]
@@ -1073,6 +1129,10 @@ def _run_batch_job(
                 job["current_item"] = index
                 job["current_path"] = source["path"]
 
+            if transfer.get("journal_status") != "verified":
+                transfer["journal_status"] = "copying"
+                _persist_snapshot(job_id, transfers, force=True)
+
             if transfer["missing_source"]:
                 with _lock:
                     job = _jobs[job_id]
@@ -1082,6 +1142,8 @@ def _run_batch_job(
                     job["warnings"].append(
                         f"Source missing before transfer: {source['path']}"
                     )
+                transfer["journal_status"] = "missing"
+                _persist_snapshot(job_id, transfers, force=True)
                 continue
 
             if transfer["skip_before_run"]:
@@ -1092,6 +1154,8 @@ def _run_batch_job(
                     job["warnings"].append(
                         f"Destination conflict skipped: {destination['path']}"
                     )
+                transfer["journal_status"] = "skipped"
+                _persist_snapshot(job_id, transfers, force=True)
                 continue
 
             try:
@@ -1120,6 +1184,8 @@ def _run_batch_job(
                         job["warnings"].append(
                             f"Source disappeared before transfer: {source['path']}"
                         )
+                    transfer["journal_status"] = "missing"
+                    _persist_snapshot(job_id, transfers, force=True)
                     continue
 
                 if transfer["replace_existing"]:
@@ -1255,6 +1321,8 @@ def _run_batch_job(
 
                     _check_cancel(event)
                     if operation == "move":
+                        transfer["journal_status"] = "verified"
+                        _persist_snapshot(job_id, transfers, force=True)
                         _run_endpoint_operation(
                             lambda: _remove_source_after_move(source),
                             source,
@@ -1273,6 +1341,8 @@ def _run_batch_job(
                             100.0,
                             job["bytes"] * 100.0 / total,
                         )
+                transfer["journal_status"] = "completed"
+                _persist_snapshot(job_id, transfers, force=True)
             except Exception as exc:
                 preserve_partial = isinstance(exc, CommanderCancelled) or (
                     _retryable_transfer_error(exc)
@@ -1304,6 +1374,7 @@ def _run_batch_job(
             job = _jobs[job_id]
             job["status"] = "cancelled"
             job["finished_at"] = _now()
+        _persist_snapshot(job_id, transfers, force=True)
         log_event("commander.cancelled", job_id=job_id)
         return
     except Exception as exc:  # noqa: BLE001
@@ -1312,6 +1383,7 @@ def _run_batch_job(
             job["status"] = "failed"
             job["error"] = f"{type(exc).__name__}: {exc}"
             job["finished_at"] = _now()
+        _persist_snapshot(job_id, transfers, force=True)
         log_error(
             "commander.failed",
             job_id=job_id,
@@ -1324,7 +1396,7 @@ def _run_batch_job(
 
     with _lock:
         job = _jobs[job_id]
-        job["status"] = "completed"
+        job["status"] = "completed_with_warnings" if job["warnings"] else "completed"
         job["progress_percent"] = 100.0
         job["finished_at"] = _now()
         completed_bytes = int(job["bytes"])
@@ -1332,6 +1404,7 @@ def _run_batch_job(
         skipped = int(job["skipped"])
         missing = int(job["missing"])
         warnings_count = len(job["warnings"])
+    _persist_snapshot(job_id, transfers, force=True)
 
     completion_logger = log_warning if warnings_count else log_event
     completion_logger(
@@ -1345,12 +1418,163 @@ def _run_batch_job(
     )
 
 
+
+def _heartbeat(job_id: str, event: threading.Event, stop: threading.Event) -> None:
+    while not stop.wait(LEASE_HEARTBEAT_SECONDS):
+        try:
+            if journal.renew_lease(job_id, _INSTANCE_ID, LEASE_SECONDS):
+                continue
+        except Exception:  # noqa: BLE001
+            pass
+        with _lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job["_lease_lost"] = True
+        event.set()
+        return
+
+
+def _worker(
+    job_id: str,
+    operation: str,
+    transfers: list[dict[str, Any]],
+    event: threading.Event,
+) -> None:
+    heartbeat_stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=_heartbeat,
+        args=(job_id, event, heartbeat_stop),
+        daemon=True,
+        name=f"commander-heartbeat-{job_id[:8]}",
+    )
+    heartbeat.start()
+    try:
+        _run_batch_job(job_id, operation, transfers, event)
+    finally:
+        heartbeat_stop.set()
+        heartbeat.join(timeout=2)
+        journal.release_lease(job_id, _INSTANCE_ID)
+        with _lock:
+            _threads.pop(job_id, None)
+            _cancel_events.pop(job_id, None)
+            _last_persist.pop(job_id, None)
+
+
+def _launch_worker(
+    job_id: str,
+    operation: str,
+    transfers: list[dict[str, Any]],
+    event: threading.Event | None = None,
+) -> bool:
+    if not journal.claim_job(job_id, _INSTANCE_ID, LEASE_SECONDS):
+        return False
+    worker_event = event or threading.Event()
+    with _lock:
+        if job_id in _threads and _threads[job_id].is_alive():
+            return False
+        _cancel_events[job_id] = worker_event
+        thread = threading.Thread(
+            target=_worker,
+            args=(job_id, operation, transfers, worker_event),
+            daemon=True,
+            name=f"commander-{job_id[:8]}",
+        )
+        _threads[job_id] = thread
+    thread.start()
+    return True
+
+
+def _seed_recovered_progress(
+    job: dict[str, Any],
+    transfers: list[dict[str, Any]],
+) -> None:
+    completed = [
+        item for item in transfers
+        if item.get("journal_status") == "completed"
+    ]
+    skipped = [
+        item for item in transfers
+        if item.get("journal_status") in {"skipped", "missing"}
+    ]
+    job["items"] = len(completed) + len(skipped)
+    job["files"] = sum(int(item.get("total_files") or 0) for item in completed)
+    job["bytes"] = sum(int(item.get("total_bytes") or 0) for item in completed)
+    job["skipped"] = len(skipped)
+    job["missing"] = sum(
+        1 for item in transfers if item.get("journal_status") == "missing"
+    )
+    total = int(job.get("total_bytes") or 0)
+    job["progress_percent"] = (
+        min(100.0, int(job["bytes"]) * 100.0 / total)
+        if total
+        else None
+    )
+
+
+def recover_commander_jobs_once() -> int:
+    recovered = 0
+    for persisted in journal.list_jobs(active_only=True, limit=100):
+        job_id = str(persisted["id"])
+        with _lock:
+            if job_id in _threads and _threads[job_id].is_alive():
+                continue
+        try:
+            job, transfers = journal.load_job(job_id)
+        except KeyError:
+            continue
+        job["status"] = "recovering"
+        job["cancel_requested"] = False
+        job["error"] = None
+        _seed_recovered_progress(job, transfers)
+        with _lock:
+            _jobs[job_id] = job
+        journal.save_job(job, transfers)
+        if _launch_worker(job_id, str(job["operation"]), transfers):
+            recovered += 1
+            log_event("commander.recovered", job_id=job_id)
+    return recovered
+
+
+def start_commander_recovery_manager() -> None:
+    global _recovery_started
+    with _lock:
+        if _recovery_started:
+            return
+        _recovery_started = True
+
+    def manager() -> None:
+        while True:
+            try:
+                recover_commander_jobs_once()
+            except Exception as exc:  # noqa: BLE001
+                log_error(
+                    "commander.recovery_manager_failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            time.sleep(RECOVERY_POLL_SECONDS)
+
+    threading.Thread(
+        target=manager,
+        daemon=True,
+        name="commander-recovery-manager",
+    ).start()
+
+
+def list_commander_jobs(*, active_only: bool = False, limit: int = 20) -> list[dict[str, Any]]:
+    return journal.list_jobs(active_only=active_only, limit=limit)
+
+
 def get_commander_job(job_id: str) -> dict[str, Any]:
     with _lock:
         job = _jobs.get(job_id)
-        if job is None:
-            raise KeyError(job_id)
-        return deepcopy(job)
+        if job is not None:
+            result = deepcopy(job)
+            result.pop("_lease_lost", None)
+            result["persistent"] = True
+            return result
+    job, _transfers = journal.load_job(job_id)
+    job["persistent"] = True
+    return job
 
 
 def cancel_commander_job(job_id: str) -> dict[str, Any]:
@@ -1358,11 +1582,13 @@ def cancel_commander_job(job_id: str) -> dict[str, Any]:
         job = _jobs.get(job_id)
         if job is None:
             raise KeyError(job_id)
-        if job["status"] in {"completed", "failed", "cancelled"}:
+        if job["status"] in {"completed", "completed_with_warnings", "failed", "cancelled"}:
             return deepcopy(job)
         event = _cancel_events.get(job_id)
         if event is not None:
             event.set()
         job["cancel_requested"] = True
         job["status"] = "cancelling"
-        return deepcopy(job)
+        result = deepcopy(job)
+    _persist_snapshot(job_id, force=True)
+    return result

@@ -1441,6 +1441,14 @@ def _run_batch_job(
                             100.0,
                             job["bytes"] * 100.0 / total,
                         )
+                with _lock:
+                    current_job = _jobs[job_id]
+                    transfer["accounted_files"] = max(
+                        0, int(current_job["files"]) - transfer_base_files
+                    )
+                    transfer["accounted_bytes"] = max(
+                        0, int(current_job["bytes"]) - transfer_base_bytes
+                    )
                 transfer["journal_status"] = "completed"
                 _persist_snapshot(job_id, transfers, force=True)
             except Exception as exc:
@@ -1694,9 +1702,18 @@ def get_commander_job(job_id: str) -> dict[str, Any]:
 def cancel_commander_job(job_id: str) -> dict[str, Any]:
     with _lock:
         job = _jobs.get(job_id)
-        if job is None:
-            raise KeyError(job_id)
-        if job["status"] in {"completed", "completed_with_warnings", "failed", "cancelled"}:
+    if job is None:
+        job, transfers = journal.load_job(job_id)
+        if job["status"] in journal.TERMINAL:
+            return job
+        job["cancel_requested"] = True
+        job["status"] = "cancelled"
+        job["finished_at"] = _now()
+        journal.save_job(job, transfers)
+        return job
+
+    with _lock:
+        if job["status"] in {"completed", "failed", "cancelled"}:
             return deepcopy(job)
         event = _cancel_events.get(job_id)
         if event is not None:

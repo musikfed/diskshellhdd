@@ -1,6 +1,6 @@
 [project]
 name = "diskshellhdd"
-version = "0.8.4"
+version = "0.8.5"
 description = "Local-first storage management, analysis and safe disk tooling for Windows"
 requires-python = ">=3.12,<3.13"
 dependencies = [

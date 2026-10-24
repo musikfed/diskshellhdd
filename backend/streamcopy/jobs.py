@@ -19,7 +19,7 @@ from backend.streamcopy import journal
 
 
 MEDIA_TYPES = {"hdd", "ssd", "flash"}
-TRANSPORT_TYPES = {"internal", "usb2", "usb3", "usb4", "unknown"}
+TRANSPORT_TYPES = {"internal", "usb2", "usb3", "usb4", "network", "unknown"}
 USB_TOPOLOGIES = {"unknown", "shared", "separate"}
 TERMINAL_STATES = journal.TERMINAL_STATES
 
@@ -75,7 +75,9 @@ def stream_profile(
     if src not in MEDIA_TYPES or dst not in MEDIA_TYPES:
         raise ValueError("media type must be hdd, ssd or flash")
     if src_transport not in TRANSPORT_TYPES or dst_transport not in TRANSPORT_TYPES:
-        raise ValueError("transport must be internal, usb2, usb3, usb4 or unknown")
+        raise ValueError(
+            "transport must be internal, usb2, usb3, usb4, network or unknown"
+        )
     if topology not in USB_TOPOLOGIES:
         raise ValueError("usb_topology must be unknown, shared or separate")
 
@@ -103,8 +105,17 @@ def stream_profile(
         chunk_mib, depth = 8, 10
         strategy = "ssd-ssd-buffered-stream"
 
+    network_path = "network" in {src_transport, dst_transport}
+    if network_path:
+        depth = min(depth, 4)
+
     both_usb3 = src_transport == "usb3" and dst_transport == "usb3"
-    if both_usb3 and src == "hdd" and dst == "hdd":
+    if network_path:
+        transport_note = (
+            "SFTP Remote River is active. Media type still controls the base profile; "
+            "network queue depth is capped conservatively."
+        )
+    elif both_usb3 and src == "hdd" and dst == "hdd":
         if topology == "shared":
             transport_note = (
                 "Both endpoints are HDD over USB 3.x on a shared hub/controller. "
@@ -122,6 +133,21 @@ def stream_profile(
             )
     else:
         transport_note = "Media type controls scheduling; transport is a secondary constraint."
+
+    ordering = (
+        "persistent manifest / SFTP River Keeper checkpoints / sequential items"
+        if network_path
+        else (
+            "persistent manifest / microfile frames in manifest order / "
+            "large files sequential"
+        )
+    )
+    remote_note = (
+        "Remote River uses SFTP only. Credentials remain RAM-only and are rebound "
+        "after restart by stable endpoint identity."
+        if network_path
+        else None
+    )
 
     return {
         "strategy": strategy,
@@ -142,16 +168,14 @@ def stream_profile(
             else "Drive cache sizes were not provided."
         ),
         "transport_note": transport_note,
-        "ordering": (
-            "persistent manifest / microfile frames in manifest order / "
-            "large files sequential"
-        ),
-        "microfile_batching": True,
+        "ordering": ordering,
+        "microfile_batching": not network_path,
         "microfile_max_bytes": MICRO_FILE_MAX_BYTES,
         "microfile_max_mib": MICRO_FILE_MAX_BYTES / (1024 * 1024),
         "micro_frame_bytes": chunk_mib * 1024 * 1024,
         "micro_frame_mib": chunk_mib,
         "micro_batch_max_files": MICRO_BATCH_MAX_FILES,
+        "remote_note": remote_note,
         "checkpoint_mib": CHECKPOINT_BYTES // (1024 * 1024),
         "experimental": True,
     }
@@ -159,6 +183,15 @@ def stream_profile(
 
 def _public_job(job: dict[str, Any]) -> dict[str, Any]:
     value = dict(job)
+    source_endpoint = dict(value.get("source_endpoint") or {})
+    destination_endpoint = dict(value.get("destination_endpoint") or {})
+    value["source_kind"] = str(source_endpoint.get("kind") or "local")
+    value["destination_kind"] = str(destination_endpoint.get("kind") or "local")
+    value["source_remote_identity"] = source_endpoint.get("remote_identity")
+    value["destination_remote_identity"] = destination_endpoint.get("remote_identity")
+    value["remote_river"] = bool(
+        value["source_kind"] == "remote" or value["destination_kind"] == "remote"
+    )
     value.pop("lease_owner", None)
     value.pop("lease_expires_at", None)
     value.pop("source_endpoint", None)
@@ -1153,11 +1186,22 @@ def _spawn_claimed_job(job_id: str) -> bool:
         _cancel_events[job_id] = event
         job = journal.get_job(job_id)
         _cache_job(job)
+        source_kind = str((job.get("source_endpoint") or {}).get("kind") or "local")
+        destination_kind = str(
+            (job.get("destination_endpoint") or {}).get("kind") or "local"
+        )
+        target = _run_job
+        thread_name = f"streamcopy-{job_id[:8]}"
+        if "remote" in {source_kind, destination_kind}:
+            from backend.streamcopy.remote_jobs import run_remote_job
+
+            target = run_remote_job
+            thread_name = f"remote-river-{job_id[:8]}"
         thread = threading.Thread(
-            target=_run_job,
+            target=target,
             args=(job_id,),
             daemon=True,
-            name=f"streamcopy-{job_id[:8]}",
+            name=thread_name,
         )
         _threads[job_id] = thread
         thread.start()
@@ -1217,9 +1261,39 @@ def start_streamcopy_job(
     destination_cache_mib: int | float | str | None = None,
     verify_mode: str = "size",
     delete_source_after_verify: bool = False,
+    *,
+    source_kind: str = "local",
+    destination_kind: str = "local",
+    source_connection_id: str | None = None,
+    destination_connection_id: str | None = None,
 ) -> dict[str, Any]:
     if not file_writes_allowed():
         raise FileWriteBlocked("File writes are locked")
+
+    src_kind = str(source_kind or "local").casefold()
+    dst_kind = str(destination_kind or "local").casefold()
+    if "remote" in {src_kind, dst_kind}:
+        from backend.streamcopy.remote_jobs import start_remote_streamcopy_job
+
+        return start_remote_streamcopy_job(
+            source_path=source_path,
+            destination_path=destination_path,
+            source_kind=src_kind,
+            destination_kind=dst_kind,
+            source_connection_id=source_connection_id,
+            destination_connection_id=destination_connection_id,
+            source_media=source_media,
+            destination_media=destination_media,
+            source_transport=source_transport,
+            destination_transport=destination_transport,
+            usb_topology=usb_topology,
+            source_cache_mib=source_cache_mib,
+            destination_cache_mib=destination_cache_mib,
+            verify_mode=verify_mode,
+            delete_source_after_verify=delete_source_after_verify,
+        )
+    if src_kind != "local" or dst_kind != "local":
+        raise ValueError("StreamCopy endpoint kind must be local or remote")
 
     source = Path(str(source_path)).expanduser()
     destination = Path(str(destination_path)).expanduser()

@@ -47,6 +47,7 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "accept_unknown_host": profile.get("accept_unknown_host", False),
         "root": profile.get("root") or "/",
         "connected_at": profile.get("connected_at"),
+        "identity": _identity_from_profile(profile),
     }
 
 
@@ -197,6 +198,7 @@ class RemoteEntry:
     is_dir: bool
     size: int
     modified_ns: int | None = None
+    is_symlink: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -205,6 +207,7 @@ class RemoteEntry:
             "is_dir": self.is_dir,
             "size": self.size,
             "modified_ns": self.modified_ns,
+            "is_symlink": self.is_symlink,
         }
 
 
@@ -255,6 +258,9 @@ class RemoteSession(AbstractContextManager):
         raise NotImplementedError
 
     def open_write(self, path: str, offset: int = 0) -> BinaryIO:
+        raise NotImplementedError
+
+    def truncate(self, path: str, size: int) -> None:
         raise NotImplementedError
 
     def walk(self, path: str) -> tuple[list[str], list[tuple[str, int]]]:
@@ -392,6 +398,7 @@ class SFTPSession(RemoteSession):
         for attr in attributes:
             child = posixpath.join(normalized, attr.filename)
             is_dir = statmod.S_ISDIR(attr.st_mode)
+            is_symlink = statmod.S_ISLNK(attr.st_mode)
             mtime = getattr(attr, "st_mtime", None)
             items.append(
                 RemoteEntry(
@@ -400,6 +407,7 @@ class SFTPSession(RemoteSession):
                     is_dir,
                     0 if is_dir else int(getattr(attr, "st_size", 0) or 0),
                     int(mtime * 1_000_000_000) if mtime else None,
+                    is_symlink,
                 )
             )
         items.sort(key=lambda row: (not row.is_dir, row.name.casefold()))
@@ -454,6 +462,13 @@ class SFTPSession(RemoteSession):
         if offset:
             stream.seek(int(offset))
         return stream
+
+    def truncate(self, path: str, size: int) -> None:
+        assert self.sftp is not None
+        try:
+            self.sftp.truncate(_normalize_remote_path(path), int(size))
+        except OSError as exc:
+            raise RemoteConnectionError(str(exc)) from exc
 
 
 class _FTPStream(io.BufferedIOBase):
@@ -607,6 +622,12 @@ class FTPSession(RemoteSession):
             rest=int(offset) if offset else None,
         )
         return _FTPStream(self.ftp, data_socket, "wb")
+
+    def truncate(self, path: str, size: int) -> None:
+        del path, size
+        raise RemoteConnectionError(
+            "Persistent Remote River truncation is supported only for SFTP"
+        )
 
 
 def open_session_from_profile(profile: dict[str, Any]) -> RemoteSession:

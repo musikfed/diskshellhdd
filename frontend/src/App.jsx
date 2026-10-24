@@ -326,7 +326,10 @@ export default function App() {
     }
     const scanCompleted = event => {
       const payload = parse(event)
-      if (payload.scan_id != null) setScanId(String(payload.scan_id))
+      if (payload.scan_id == null) return
+      // A completed scan is globally visible, but it must not steal an
+      // already-selected scan context from another browser view.
+      if (page === 'scan' || !scanId) setScanId(String(payload.scan_id))
     }
     const streamChanged = event => {
       if (page === 'streamcopy') return
@@ -354,7 +357,7 @@ export default function App() {
     source.addEventListener('storage.roots_changed', rootsChanged)
     source.addEventListener('storage.disks_changed', disksChanged)
     return () => source.close()
-  }, [workspaceReady, viewId, page])
+  }, [workspaceReady, viewId, page, scanId])
 
   const context = useMemo(
     () => ({

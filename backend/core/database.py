@@ -155,6 +155,20 @@ CREATE TABLE IF NOT EXISTS photos (
     UNIQUE(scan_id, file_id)
 );
 
+CREATE TABLE IF NOT EXISTS image_subject_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    label TEXT NOT NULL,
+    score REAL NOT NULL,
+    model_key TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (scan_id) REFERENCES scan_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
+    UNIQUE(scan_id, file_id, label, model_key)
+);
+
 CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scan_id INTEGER NOT NULL,
@@ -349,6 +363,10 @@ CREATE INDEX IF NOT EXISTS idx_directories_scan_parent ON directories(scan_id, p
 CREATE INDEX IF NOT EXISTS idx_directories_scan_size ON directories(scan_id, total_size DESC);
 CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON placement_plan_items(plan_id, status);
 CREATE INDEX IF NOT EXISTS idx_photos_scan ON photos(scan_id);
+CREATE INDEX IF NOT EXISTS idx_subject_tags_scan_label
+ON image_subject_tags(scan_id, label, score DESC);
+CREATE INDEX IF NOT EXISTS idx_subject_tags_file
+ON image_subject_tags(file_id, score DESC);
 CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);

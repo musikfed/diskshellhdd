@@ -14,6 +14,13 @@ from backend.people.service import (
     rename_person,
     similar_faces,
 )
+from backend.vision.subjects import (
+    SubjectEngineUnavailable,
+    analyze_subjects,
+    capabilities as subject_capabilities,
+    search_subjects,
+    top_subjects,
+)
 
 
 bp = Blueprint("people", __name__, url_prefix="/api/people")
@@ -91,3 +98,64 @@ def similar(face_id: int):
         return jsonify({"error": "face_not_found"}), 404
     except (PeopleEngineUnavailable, TypeError, ValueError) as exc:
         return jsonify({"error": "face_similarity_failed", "message": str(exc)}), 400
+
+
+
+@bp.get("/subjects/capabilities")
+def get_subject_capabilities():
+    return jsonify(subject_capabilities())
+
+
+@bp.post("/subjects/analyze/<int:scan_id>")
+def analyze_subject_index(scan_id: int):
+    payload = request.get_json(silent=True) or {}
+    try:
+        raw_limit = payload.get("limit")
+        return jsonify(
+            analyze_subjects(
+                scan_id,
+                limit=None if raw_limit in {None, ""} else min(max(1, int(raw_limit)), 100_000),
+                top_k=min(max(1, int(payload.get("top_k", 8))), 50),
+                min_score=max(0.0, min(1.0, float(payload.get("min_score", 0.03)))),
+            )
+        )
+    except (SubjectEngineUnavailable, TypeError, ValueError, OSError) as exc:
+        return jsonify({"error": "subject_analysis_failed", "message": str(exc)}), 400
+
+
+@bp.get("/subjects/search")
+def subject_search():
+    try:
+        scan_id = int(request.args["scan_id"])
+        query = str(request.args.get("q") or "")
+        return jsonify(
+            {
+                "scan_id": scan_id,
+                "query": query,
+                "photos": search_subjects(
+                    scan_id,
+                    query,
+                    min_score=float(request.args.get("min_score", "0.05")),
+                    limit=int(request.args.get("limit", "200")),
+                ),
+            }
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": "invalid_subject_search", "message": str(exc)}), 400
+
+
+@bp.get("/subjects/top")
+def subject_top():
+    try:
+        scan_id = int(request.args["scan_id"])
+        return jsonify(
+            {
+                "scan_id": scan_id,
+                "subjects": top_subjects(
+                    scan_id,
+                    limit=int(request.args.get("limit", "50")),
+                ),
+            }
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": "invalid_subject_query", "message": str(exc)}), 400

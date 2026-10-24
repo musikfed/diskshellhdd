@@ -1,4 +1,4 @@
-# DiskShell HDD 0.8.0
+# DiskShell HDD 0.8.4
 
 [Русская версия](README.ru.md) · English
 
@@ -262,3 +262,12 @@ Meaningful events are written to the rotating `data/logs/diskshell.log` journal:
 0.7.5 release guides: [RU](docs/RELEASE_0.7.5.ru.md) · [EN](docs/RELEASE_0.7.5.md) · [FR](docs/RELEASE_0.7.5.fr.md) · [DE](docs/RELEASE_0.7.5.de.md) · [ET](docs/RELEASE_0.7.5.et.md).
 
 Roadmap: [RU](docs/ROADMAP_0.8.ru.md) · [EN](docs/ROADMAP_0.8.md). Failure validation: [RU](docs/FAILURE_TESTING.ru.md) · [EN](docs/FAILURE_TESTING.md). Safe update: [RU](docs/UPDATE_SAFE.ru.md) · [EN](docs/UPDATE_SAFE.md).
+
+
+## 0.8.4 · Local Subject / Object Search
+
+Photos / People now indexes local whole-image subject/object tags through an optional ONNX classifier. Derived tags and confidence scores are stored in SQLite, so searches such as `car / dog / keyboard / beach` do not rerun inference on every query.
+
+Configure `DS_IMAGE_CLASSIFIER_MODEL`, `DS_IMAGE_CLASSIFIER_LABELS`, and `DS_IMAGE_CLASSIFIER_INPUT_SIZE`. No cloud service is used. This is whole-image classification, not bounding-box detection.
+
+See [docs/RELEASE_0.8.4.md](docs/RELEASE_0.8.4.md).

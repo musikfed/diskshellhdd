@@ -1,7 +1,7 @@
 {
   "name": "diskshell-workspace",
   "private": true,
-  "version": "0.8.3",
+  "version": "0.8.4",
   "scripts": {
     "ui:install": "npm --prefix frontend install",
     "dev": "npm --prefix frontend run dev",

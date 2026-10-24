@@ -56,6 +56,9 @@ def test_hdd_usb3_profile_uses_manual_media_and_cache_hints():
     assert profile["source_cache_mib"] == 32
     assert profile["destination_cache_mib"] == 128
     assert profile["checkpoint_mib"] == 128
+    assert profile["microfile_batching"] is True
+    assert profile["microfile_max_bytes"] == 1024 * 1024
+    assert profile["micro_frame_mib"] == 8
 
 
 def test_hdd_usb3_shared_path_reduces_queue_depth():
@@ -276,3 +279,89 @@ def test_copy_then_delete_forces_sha256_and_removes_source_after_publish(tmp_pat
     assert job["status"] == "completed"
     assert not source.exists()
     assert (destination / "source.bin").read_bytes() == payload
+
+
+
+def test_streamcopy_microfiles_use_shared_frames(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+
+    source = tmp_path / "micro-source"
+    source.mkdir()
+    expected = {}
+    for index in range(24):
+        payload = (f"file-{index:02d}-".encode("utf-8") * 128)
+        path = source / f"small-{index:02d}.bin"
+        path.write_bytes(payload)
+        expected[path.name] = payload
+
+    destination = tmp_path / "destination"
+    calls = []
+    original = streamcopy_jobs._copy_micro_batch
+
+    def wrapped(job_id, batch, cancel, lease_lost):
+        calls.append(len(batch))
+        return original(job_id, batch, cancel, lease_lost)
+
+    monkeypatch.setattr(streamcopy_jobs, "_copy_micro_batch", wrapped)
+
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        str(destination),
+        "hdd",
+        "hdd",
+        "usb3",
+        "usb3",
+        "unknown",
+        32,
+        128,
+    )
+    job = _wait(job["id"])
+
+    assert job["status"] == "completed", job["error"]
+    assert calls
+    assert max(calls) >= 2
+    assert job["files"] == len(expected)
+    assert job["bytes"] == job["total_bytes"]
+    assert job["average_scope"] == "current transfer session; manifest scan excluded"
+    for name, payload in expected.items():
+        assert (destination / source.name / name).read_bytes() == payload
+
+
+def test_microbatch_skips_recovery_item_with_existing_partial(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+
+    source = tmp_path / "source"
+    source.mkdir()
+    first = source / "a.bin"
+    second = source / "b.bin"
+    first.write_bytes(b"A" * 1024)
+    second.write_bytes(b"B" * 1024)
+    destination = tmp_path / "destination"
+
+    real_spawn = streamcopy_jobs._spawn_claimed_job
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", lambda _job_id: False)
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        str(destination),
+        "hdd",
+        "hdd",
+    )
+    streamcopy_jobs._build_manifest(job["id"], source, destination)
+    items = journal.list_items(job["id"])
+
+    partial = items[0]["partial_path"]
+    from pathlib import Path
+    partial_path = Path(partial)
+    partial_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_path.write_bytes(b"A" * 512)
+
+    candidates = streamcopy_jobs._micro_batch_candidates(
+        job["id"],
+        items,
+        0,
+        streamcopy_jobs.MICRO_FILE_MAX_BYTES,
+    )
+    assert candidates == []
+
+    journal.release_lease(job["id"], streamcopy_jobs._INSTANCE_ID)
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", real_spawn)

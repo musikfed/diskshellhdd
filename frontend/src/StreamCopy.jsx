@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, fmtBytes } from './api.js'
+import { api, eventStreamUrl, fmtBytes } from './api.js'
 import './StreamCopy.css'
 
 const MEDIA = [
@@ -223,13 +223,15 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   useEffect(() => {
     if (!job?.id || TERMINAL.has(job.status)) return undefined
     let stopped = false
-    const poll = async () => {
+    const jobId = job.id
+
+    const reconcile = async () => {
       try {
-        const next = await api(`/api/streamcopy/jobs/${job.id}`)
-        if (!stopped) setJob(next)
+        const nextJob = await api(`/api/streamcopy/jobs/${jobId}`)
+        if (!stopped) setJob(nextJob)
       } catch (e) {
         if (!stopped && e.status === 404) {
-          if (localStorage.getItem('streamcopy:activeJobId') === job.id) {
+          if (localStorage.getItem('streamcopy:activeJobId') === jobId) {
             localStorage.removeItem('streamcopy:activeJobId')
           }
           setJob(null)
@@ -239,11 +241,28 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         }
       }
     }
-    const timer = setInterval(poll, 400)
-    poll()
+
+    const source = typeof EventSource === 'undefined'
+      ? null
+      : new EventSource(eventStreamUrl())
+
+    const applyEvent = event => {
+      let payload
+      try { payload = JSON.parse(event.data)?.payload || {} } catch { return }
+      if (payload.job_id !== jobId || stopped) return
+      setJob(current => current ? { ...current, ...payload } : current)
+      if (payload.status && TERMINAL.has(payload.status)) reconcile()
+    }
+
+    source?.addEventListener('streamcopy.changed', applyEvent)
+    source?.addEventListener('streamcopy.progress', applyEvent)
+    reconcile()
+    const timer = setInterval(reconcile, 10000)
+
     return () => {
       stopped = true
       clearInterval(timer)
+      source?.close()
     }
   }, [job?.id, job?.status, setError])
 

@@ -134,6 +134,21 @@ def stream_profile(
     else:
         transport_note = "Media type controls scheduling; transport is a secondary constraint."
 
+    ordering = (
+        "persistent manifest / SFTP River Keeper checkpoints / sequential items"
+        if network_path
+        else (
+            "persistent manifest / microfile frames in manifest order / "
+            "large files sequential"
+        )
+    )
+    remote_note = (
+        "Remote River uses SFTP only. Credentials remain RAM-only and are rebound "
+        "after restart by stable endpoint identity."
+        if network_path
+        else None
+    )
+
     return {
         "strategy": strategy,
         "chunk_bytes": chunk_mib * 1024 * 1024,
@@ -153,16 +168,14 @@ def stream_profile(
             else "Drive cache sizes were not provided."
         ),
         "transport_note": transport_note,
-        "ordering": (
-            "persistent manifest / microfile frames in manifest order / "
-            "large files sequential"
-        ),
-        "microfile_batching": True,
+        "ordering": ordering,
+        "microfile_batching": not network_path,
         "microfile_max_bytes": MICRO_FILE_MAX_BYTES,
         "microfile_max_mib": MICRO_FILE_MAX_BYTES / (1024 * 1024),
         "micro_frame_bytes": chunk_mib * 1024 * 1024,
         "micro_frame_mib": chunk_mib,
         "micro_batch_max_files": MICRO_BATCH_MAX_FILES,
+        "remote_note": remote_note,
         "checkpoint_mib": CHECKPOINT_BYTES // (1024 * 1024),
         "experimental": True,
     }
@@ -1241,10 +1254,6 @@ def start_streamcopy_job(
     destination_path: str,
     source_media: str,
     destination_media: str,
-    source_kind: str = "local",
-    destination_kind: str = "local",
-    source_connection_id: str | None = None,
-    destination_connection_id: str | None = None,
     source_transport: str = "unknown",
     destination_transport: str = "unknown",
     usb_topology: str = "unknown",
@@ -1252,6 +1261,11 @@ def start_streamcopy_job(
     destination_cache_mib: int | float | str | None = None,
     verify_mode: str = "size",
     delete_source_after_verify: bool = False,
+    *,
+    source_kind: str = "local",
+    destination_kind: str = "local",
+    source_connection_id: str | None = None,
+    destination_connection_id: str | None = None,
 ) -> dict[str, Any]:
     if not file_writes_allowed():
         raise FileWriteBlocked("File writes are locked")

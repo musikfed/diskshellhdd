@@ -754,6 +754,19 @@ def _verify_size(endpoint: dict[str, Any], expected: int) -> None:
         raise OSError(f"Size verification failed: expected {expected}, got {actual}")
 
 
+def _verify_transfer_destination(
+    destination: dict[str, Any],
+    files: list[list[Any]] | list[tuple[str, int]],
+    skipped_files: list[str] | None = None,
+) -> None:
+    skipped = set(skipped_files or [])
+    for relative, expected_size in files:
+        if str(relative) in skipped:
+            continue
+        endpoint = _join_endpoint(destination, str(relative))
+        _verify_size(endpoint, int(expected_size))
+
+
 def _remove_source_after_move(endpoint: dict[str, Any]) -> None:
     _delete_endpoint(endpoint)
 
@@ -820,6 +833,9 @@ def _prepare_transfer(raw: dict[str, Any]) -> dict[str, Any]:
         "resume_existing": False,
         "conflict_resolution": None,
         "journal_status": "pending",
+        "skipped_files": [],
+        "accounted_files": 0,
+        "accounted_bytes": 0,
     }
 
 
@@ -1128,6 +1144,58 @@ def _run_batch_job(
                 job = _jobs[job_id]
                 job["current_item"] = index
                 job["current_path"] = source["path"]
+                transfer_base_files = int(job["files"])
+                transfer_base_bytes = int(job["bytes"])
+
+            if transfer.get("journal_status") == "verified":
+                _wait_for_endpoints(
+                    source,
+                    destination,
+                    event,
+                    wait_status,
+                    destination["path"],
+                    "recovering verified move",
+                )
+                _verify_transfer_destination(
+                    destination,
+                    files,
+                    transfer.get("skipped_files") or [],
+                )
+                if _source_exists(source):
+                    _run_endpoint_operation(
+                        lambda: _remove_source_after_move(source),
+                        source,
+                        destination,
+                        event,
+                        wait_status,
+                        source["path"],
+                    )
+                accounted_files = sum(
+                    1 for relative, _size in files
+                    if str(relative) not in set(transfer.get("skipped_files") or [])
+                )
+                accounted_bytes = sum(
+                    int(size) for relative, size in files
+                    if str(relative) not in set(transfer.get("skipped_files") or [])
+                )
+                with _lock:
+                    job = _jobs[job_id]
+                    job["files"] += accounted_files
+                    job["bytes"] += accounted_bytes
+                    job["items"] += 1
+                transfer["accounted_files"] = accounted_files
+                transfer["accounted_bytes"] = accounted_bytes
+                with _lock:
+                    current_job = _jobs[job_id]
+                    transfer["accounted_files"] = max(
+                        0, int(current_job["files"]) - transfer_base_files
+                    )
+                    transfer["accounted_bytes"] = max(
+                        0, int(current_job["bytes"]) - transfer_base_bytes
+                    )
+                transfer["journal_status"] = "completed"
+                _persist_snapshot(job_id, transfers, force=True)
+                continue
 
             if transfer.get("journal_status") != "verified":
                 transfer["journal_status"] = "copying"
@@ -1168,6 +1236,35 @@ def _run_batch_job(
                     "endpoint unavailable",
                 )
                 if not _source_exists(source):
+                    if operation == "move":
+                        try:
+                            _verify_transfer_destination(
+                                destination,
+                                files,
+                                transfer.get("skipped_files") or [],
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                        else:
+                            accounted_files = sum(
+                                1 for relative, _size in files
+                                if str(relative) not in set(transfer.get("skipped_files") or [])
+                            )
+                            accounted_bytes = sum(
+                                int(size) for relative, size in files
+                                if str(relative) not in set(transfer.get("skipped_files") or [])
+                            )
+                            with _lock:
+                                job = _jobs[job_id]
+                                job["files"] += accounted_files
+                                job["bytes"] += accounted_bytes
+                                job["items"] += 1
+                                job["current_path"] = destination["path"]
+                            transfer["accounted_files"] = accounted_files
+                            transfer["accounted_bytes"] = accounted_bytes
+                            transfer["journal_status"] = "completed"
+                            _persist_snapshot(job_id, transfers, force=True)
+                            continue
                     with _lock:
                         job = _jobs[job_id]
                         job["missing"] += 1
@@ -1308,6 +1405,9 @@ def _run_batch_job(
                                     job["warnings"].append(
                                         f"Source file disappeared; skipped: {source_file['path']}"
                                     )
+                                skipped_files = transfer.setdefault("skipped_files", [])
+                                if str(relative) not in skipped_files:
+                                    skipped_files.append(str(relative))
                                 continue
                             raise
                         with _lock:
@@ -1372,8 +1472,16 @@ def _run_batch_job(
     except CommanderCancelled:
         with _lock:
             job = _jobs[job_id]
-            job["status"] = "cancelled"
-            job["finished_at"] = _now()
+            lease_lost = bool(job.get("_lease_lost"))
+            if lease_lost:
+                job["status"] = "recovering"
+                job["finished_at"] = None
+            else:
+                job["status"] = "cancelled"
+                job["finished_at"] = _now()
+        if lease_lost:
+            log_warning("commander.lease_lost", job_id=job_id)
+            return
         _persist_snapshot(job_id, transfers, force=True)
         log_event("commander.cancelled", job_id=job_id)
         return
@@ -1396,7 +1504,7 @@ def _run_batch_job(
 
     with _lock:
         job = _jobs[job_id]
-        job["status"] = "completed_with_warnings" if job["warnings"] else "completed"
+        job["status"] = "completed"
         job["progress_percent"] = 100.0
         job["finished_at"] = _now()
         completed_bytes = int(job["bytes"])
@@ -1497,8 +1605,14 @@ def _seed_recovered_progress(
         if item.get("journal_status") in {"skipped", "missing"}
     ]
     job["items"] = len(completed) + len(skipped)
-    job["files"] = sum(int(item.get("total_files") or 0) for item in completed)
-    job["bytes"] = sum(int(item.get("total_bytes") or 0) for item in completed)
+    job["files"] = sum(
+        int(item.get("accounted_files") or item.get("total_files") or 0)
+        for item in completed
+    )
+    job["bytes"] = sum(
+        int(item.get("accounted_bytes") or item.get("total_bytes") or 0)
+        for item in completed
+    )
     job["skipped"] = len(skipped)
     job["missing"] = sum(
         1 for item in transfers if item.get("journal_status") == "missing"

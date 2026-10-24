@@ -515,14 +515,81 @@ function PreviewCard({ preview }) {
 
 function People({ scanId, setError }) {
   const [caps, setCaps] = useState(null)
+  const [subjectCaps, setSubjectCaps] = useState(null)
   const [people, setPeople] = useState([])
   const [selected, setSelected] = useState(null)
   const [photos, setPhotos] = useState([])
   const [mode, setMode] = useState('all')
   const [similar, setSimilar] = useState([])
-  const refresh = async () => { if (!scanId) return; const x = await api(`/api/people?scan_id=${scanId}`); setPeople(x.people || []) }
-  useEffect(() => { api('/api/people/capabilities').then(setCaps).catch(e => setError(e.message)); refresh().catch(()=>{}) }, [scanId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function analyze() { try { await api(`/api/people/analyze/${scanId}`, { method:'POST', body:'{}' }); await refresh() } catch (e) { setError(e.message) } }
+  const [subjectQuery, setSubjectQuery] = useState('')
+  const [subjectPhotos, setSubjectPhotos] = useState([])
+  const [topSubjects, setTopSubjects] = useState([])
+  const [subjectBusy, setSubjectBusy] = useState(false)
+
+  const refresh = async () => {
+    if (!scanId) return
+    const x = await api(`/api/people?scan_id=${scanId}`)
+    setPeople(x.people || [])
+  }
+
+  async function refreshSubjectMeta() {
+    if (!scanId) return
+    try {
+      const [capabilities, top] = await Promise.all([
+        api('/api/people/subjects/capabilities'),
+        api(`/api/people/subjects/top?scan_id=${scanId}&limit=30`),
+      ])
+      setSubjectCaps(capabilities)
+      setTopSubjects(top.subjects || [])
+    } catch {
+      api('/api/people/subjects/capabilities').then(setSubjectCaps).catch(() => {})
+    }
+  }
+
+  useEffect(() => {
+    api('/api/people/capabilities').then(setCaps).catch(e => setError(e.message))
+    refresh().catch(()=>{})
+    refreshSubjectMeta()
+  }, [scanId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function analyze() {
+    try {
+      await api(`/api/people/analyze/${scanId}`, { method:'POST', body:'{}' })
+      await refresh()
+    } catch (e) { setError(e.message) }
+  }
+
+  async function analyzeSubjects() {
+    setSubjectBusy(true)
+    try {
+      await api(`/api/people/subjects/analyze/${scanId}`, {
+        method: 'POST',
+        body: JSON.stringify({ top_k: 8, min_score: 0.03 }),
+      })
+      await refreshSubjectMeta()
+      if (subjectQuery.trim()) await searchSubjects(subjectQuery)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSubjectBusy(false)
+    }
+  }
+
+  async function searchSubjects(value = subjectQuery) {
+    const query = String(value || '').trim()
+    setSubjectQuery(query)
+    if (!scanId || !query) {
+      setSubjectPhotos([])
+      return
+    }
+    try {
+      const x = await api(
+        `/api/people/subjects/search?scan_id=${scanId}&q=${encodeURIComponent(query)}&limit=200&min_score=0.05`,
+      )
+      setSubjectPhotos(x.photos || [])
+    } catch (e) { setError(e.message) }
+  }
+
   async function openPerson(p, nextMode = mode) {
     setSelected(p)
     setMode(nextMode)
@@ -532,6 +599,7 @@ function People({ scanId, setError }) {
       setPhotos(x.photos || [])
     } catch (e) { setError(e.message) }
   }
+
   async function findSimilar() {
     if (!selected?.cover_face_id) return
     try {
@@ -539,8 +607,68 @@ function People({ scanId, setError }) {
       setSimilar(x.matches || [])
     } catch (e) { setError(e.message) }
   }
-  return <div className="stack"><Card title="Local Face Engine"><div className="hero"><div className="mascot">🦉</div><div><p>OpenCV YuNet + SFace, только локально. Облако: <b>нет</b>.</p><p>Detector: {caps?.detector_ready ? 'ready' : 'model not configured'} · Recognizer: {caps?.recognizer_ready ? 'ready' : 'model not configured'}</p><button className="primary" disabled={!scanId || !caps?.ready} onClick={analyze}>Проанализировать фото из scan {scanId || '—'}</button></div></div></Card>
+
+  return <div className="stack">
+    <Card title="Local Face Engine">
+      <div className="hero">
+        <div className="mascot">🦉</div>
+        <div>
+          <p>OpenCV YuNet + SFace, только локально. Облако: <b>нет</b>.</p>
+          <p>Detector: {caps?.detector_ready ? 'ready' : 'model not configured'} · Recognizer: {caps?.recognizer_ready ? 'ready' : 'model not configured'}</p>
+          <button className="primary" disabled={!scanId || !caps?.ready} onClick={analyze}>
+            Проанализировать лица из scan {scanId || '—'}
+          </button>
+        </div>
+      </div>
+    </Card>
+
+    <Card title="Local Subject / Object Search">
+      <p>
+        Whole-image ONNX classifier: фото получает top-K локальных тегов вроде car, dog,
+        keyboard, beach. Теги сохраняются в SQLite; поиск после индексации не прогоняет модель заново.
+      </p>
+      <p className={subjectCaps?.ready ? 'success' : 'muted'}>
+        Runtime: {subjectCaps?.runtime_installed ? 'ready' : 'missing'} · model: {subjectCaps?.model_ready ? 'ready' : 'not configured'} · labels: {subjectCaps?.labels_ready ? 'ready' : 'not configured'} · cloud: no
+      </p>
+      <div className="actions">
+        <button
+          className="primary"
+          disabled={!scanId || !subjectCaps?.ready || subjectBusy}
+          onClick={analyzeSubjects}
+        >
+          {subjectBusy ? 'Индексирую предметы…' : `Индексировать предметы / сюжеты из scan ${scanId || '—'}`}
+        </button>
+      </div>
+      <div className="subject-search-row">
+        <input
+          value={subjectQuery}
+          onChange={e => setSubjectQuery(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && searchSubjects()}
+          placeholder="car, dog, keyboard, beach…"
+        />
+        <button onClick={() => searchSubjects()} disabled={!scanId || !subjectQuery.trim()}>Найти</button>
+      </div>
+      {topSubjects.length > 0 && <div className="subject-chips">
+        {topSubjects.map(item => <button
+          key={item.label}
+          onClick={() => searchSubjects(item.label)}
+          title={`${item.photos} photos · max ${(Number(item.max_score) * 100).toFixed(1)}%`}
+        >
+          {item.label} · {item.photos}
+        </button>)}
+      </div>}
+      {subjectPhotos.length > 0 && <div className="subject-photo-grid">
+        {subjectPhotos.map(item => <div key={item.file_id}>
+          <img src={thumbnailUrl(item.path, 320)} alt="" />
+          <b>{item.matched_labels}</b>
+          <small>{(Number(item.score) * 100).toFixed(1)}%</small>
+          <span title={item.path}>{item.path}</span>
+        </div>)}
+      </div>}
+    </Card>
+
     <div className="people-grid">{people.map(p => <button key={p.id} className="person" onClick={() => openPerson(p)}>{p.cover_face_id ? <img src={`/api/people/faces/${p.cover_face_id}/thumbnail`} /> : <div className="face-placeholder">👤</div>}<b>{p.name}</b><small>{p.photos} photos · {p.faces} faces</small></button>)}</div>
+
     {selected && <Card title={selected.name}>
       <div className="tabs">
         {['all','alone','with_others'].map(x => <button className={mode===x?'active':''} key={x} onClick={() => openPerson(selected,x)}>{x}</button>)}
@@ -555,9 +683,9 @@ function People({ scanId, setError }) {
         </div>)}
       </div>}
       <div className="photo-grid">{photos.map(p => <div key={p.id}><img src={thumbnailUrl(p.path,320)} /><small>{p.faces_count === 1 ? 'alone' : `${p.faces_count} faces`}</small></div>)}</div>
-    </Card>}</div>
+    </Card>}
+  </div>
 }
-
 
 function VaultPathBrowser({
   title,

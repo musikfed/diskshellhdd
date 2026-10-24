@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 import backend.core.database as database
 import backend.streamcopy.jobs as streamcopy_jobs
-from backend.streamcopy import journal
+import backend.streamcopy.remote_jobs as remote_jobs
+from backend.remote.service import RemoteEntry, RemoteNotFound
+from backend.streamcopy import endpoints, journal
 
 
 @pytest.fixture(autouse=True)
@@ -365,3 +369,265 @@ def test_microbatch_skips_recovery_item_with_existing_partial(tmp_path, monkeypa
 
     journal.release_lease(job["id"], streamcopy_jobs._INSTANCE_ID)
     monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", real_spawn)
+
+
+
+class _FakeSFTPSession:
+    def __init__(self, root: Path):
+        self.root = root
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        del exc_type, exc, tb
+        return False
+
+    def _path(self, remote_path: str) -> Path:
+        relative = str(remote_path).replace("\\", "/").lstrip("/")
+        return self.root / relative
+
+    def stat(self, remote_path: str):
+        path = self._path(remote_path)
+        if not path.exists():
+            raise RemoteNotFound(remote_path)
+        info = path.stat()
+        return RemoteEntry(
+            path.name or "/",
+            "/" + str(path.relative_to(self.root)).replace("\\", "/")
+            if path != self.root
+            else "/",
+            path.is_dir(),
+            0 if path.is_dir() else int(info.st_size),
+            int(info.st_mtime_ns),
+            path.is_symlink(),
+        )
+
+    def listdir(self, remote_path: str):
+        path = self._path(remote_path)
+        if not path.exists():
+            raise RemoteNotFound(remote_path)
+        result = []
+        for child in path.iterdir():
+            info = child.stat()
+            result.append(
+                RemoteEntry(
+                    child.name,
+                    "/" + str(child.relative_to(self.root)).replace("\\", "/"),
+                    child.is_dir(),
+                    0 if child.is_dir() else int(info.st_size),
+                    int(info.st_mtime_ns),
+                    child.is_symlink(),
+                )
+            )
+        return result
+
+    def makedirs(self, remote_path: str):
+        self._path(remote_path).mkdir(parents=True, exist_ok=True)
+
+    def open_read(self, remote_path: str, offset: int = 0):
+        stream = self._path(remote_path).open("rb")
+        if offset:
+            stream.seek(int(offset))
+        return stream
+
+    def open_write(self, remote_path: str, offset: int = 0):
+        path = self._path(remote_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "r+b" if offset and path.exists() else "wb"
+        stream = path.open(mode)
+        if offset:
+            stream.seek(int(offset))
+        return stream
+
+    def truncate(self, remote_path: str, size: int):
+        path = self._path(remote_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "r+b" if path.exists() else "w+b"
+        with path.open(mode) as stream:
+            stream.truncate(int(size))
+
+    def rename(self, source: str, destination: str):
+        src = self._path(source)
+        dst = self._path(destination)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dst)
+
+    def remove(self, remote_path: str):
+        path = self._path(remote_path)
+        if not path.exists():
+            raise RemoteNotFound(remote_path)
+        path.unlink()
+
+    def rmdir(self, remote_path: str):
+        self._path(remote_path).rmdir()
+
+
+def _fake_sftp(tmp_path, monkeypatch):
+    remote_root = tmp_path / "fake-sftp"
+    remote_root.mkdir()
+    profiles = {
+        "sftp-a": {
+            "id": "sftp-a",
+            "protocol": "sftp",
+            "host": "example.test",
+            "port": 22,
+            "username": "user",
+            "root": "/",
+            "identity": "sftp|example.test|22|user|/",
+        }
+    }
+
+    monkeypatch.setattr(endpoints, "list_profiles", lambda: list(profiles.values()))
+    monkeypatch.setattr(
+        endpoints,
+        "profile_identity",
+        lambda profile_id: profiles[profile_id]["identity"],
+    )
+    monkeypatch.setattr(
+        endpoints,
+        "find_profile_id_by_identity",
+        lambda identity: next(
+            (
+                profile_id
+                for profile_id, profile in profiles.items()
+                if profile["identity"] == identity
+            ),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        endpoints,
+        "open_session",
+        lambda profile_id: _FakeSFTPSession(remote_root)
+        if profile_id in profiles
+        else (_ for _ in ()).throw(KeyError(profile_id)),
+    )
+    return remote_root, profiles
+
+
+def test_remote_river_local_to_sftp(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+    remote_root, _profiles = _fake_sftp(tmp_path, monkeypatch)
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a.txt").write_bytes(b"A" * 4096)
+    nested = source / "nested"
+    nested.mkdir()
+    (nested / "b.bin").write_bytes(b"B" * 8192)
+
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        "/backup",
+        "hdd",
+        "ssd",
+        source_kind="local",
+        destination_kind="remote",
+        destination_connection_id="sftp-a",
+        source_transport="usb3",
+        destination_transport="network",
+        verify_mode="sha256",
+    )
+    job = _wait(job["id"])
+
+    assert job["status"] == "completed", job["error"]
+    assert job["remote_river"] is True
+    assert job["source_kind"] == "local"
+    assert job["destination_kind"] == "remote"
+    assert (remote_root / "backup" / "source" / "a.txt").read_bytes() == b"A" * 4096
+    assert (remote_root / "backup" / "source" / "nested" / "b.bin").read_bytes() == b"B" * 8192
+
+
+def test_remote_river_sftp_to_local(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+    remote_root, _profiles = _fake_sftp(tmp_path, monkeypatch)
+    incoming = remote_root / "incoming"
+    incoming.mkdir()
+    (incoming / "remote.bin").write_bytes(b"remote-river" * 2048)
+
+    destination = tmp_path / "destination"
+    job = streamcopy_jobs.start_streamcopy_job(
+        "/incoming/remote.bin",
+        str(destination),
+        "ssd",
+        "hdd",
+        source_kind="remote",
+        destination_kind="local",
+        source_connection_id="sftp-a",
+        source_transport="network",
+        destination_transport="internal",
+        verify_mode="sha256",
+    )
+    job = _wait(job["id"])
+
+    assert job["status"] == "completed", job["error"]
+    assert (destination / "remote.bin").read_bytes() == b"remote-river" * 2048
+
+
+def test_remote_river_rolls_remote_partial_back_to_checkpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(streamcopy_jobs, "file_writes_allowed", lambda: True)
+    remote_root, _profiles = _fake_sftp(tmp_path, monkeypatch)
+
+    source = tmp_path / "source.bin"
+    block = b"A" * (1024 * 1024)
+    source.write_bytes(block + b"B" * 1024)
+    destination = "/backup"
+
+    real_spawn = streamcopy_jobs._spawn_claimed_job
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", lambda _job_id: False)
+    job = streamcopy_jobs.start_streamcopy_job(
+        str(source),
+        destination,
+        "hdd",
+        "ssd",
+        source_kind="local",
+        destination_kind="remote",
+        destination_connection_id="sftp-a",
+        destination_transport="network",
+    )
+    remote_jobs._build_manifest(job["id"])
+    item = journal.list_items(job["id"])[0]
+
+    partial = remote_root / str(item["partial_path"]).lstrip("/")
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.write_bytes(block + b"CORRUPT")
+
+    journal.add_checkpoint(
+        job["id"],
+        int(item["item_index"]),
+        offset=len(block),
+        block_start=0,
+        block_size=len(block),
+        digest=hashlib.sha256(block).hexdigest(),
+    )
+
+    offset = remote_jobs._safe_resume_offset(
+        job["id"],
+        item,
+        dict(journal.get_job(job["id"])["source_endpoint"]),
+        dict(journal.get_job(job["id"])["destination_endpoint"]),
+        threading.Event(),
+        threading.Event(),
+    )
+    assert offset == len(block)
+    assert partial.stat().st_size == len(block)
+    assert partial.read_bytes() == block
+
+    journal.release_lease(job["id"], streamcopy_jobs._INSTANCE_ID)
+    monkeypatch.setattr(streamcopy_jobs, "_spawn_claimed_job", real_spawn)
+
+
+def test_sftp_endpoint_rebinds_after_connection_id_changes(tmp_path, monkeypatch):
+    _remote_root, profiles = _fake_sftp(tmp_path, monkeypatch)
+    endpoint = endpoints.make_endpoint("remote", "/data", "sftp-a")
+    identity = endpoint["remote_identity"]
+
+    profiles["sftp-b"] = {
+        **profiles.pop("sftp-a"),
+        "id": "sftp-b",
+    }
+
+    rebound = endpoints.rebind(endpoint)
+    assert rebound["connection_id"] == "sftp-b"
+    assert rebound["remote_identity"] == identity

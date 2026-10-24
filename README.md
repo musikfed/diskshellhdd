@@ -1,4 +1,4 @@
-# DiskShell HDD 0.8.5
+# DiskShell HDD 0.8.6
 
 [Русская версия](README.ru.md) · English
 
@@ -280,3 +280,14 @@ StreamCopy adds an opt-in **NTFS first-LCN locality** ordering mode for a Local 
 Unknown-LCN files remain stable at the end; SFTP/SSD/Flash use manifest order. The mode remains opt-in until comparative benchmarks justify automatic selection.
 
 See [docs/RELEASE_0.8.5.md](docs/RELEASE_0.8.5.md).
+
+
+## 0.8.6 · Multi-view workspace / SQLite hotfix
+
+Fixes `sqlite3.OperationalError: database is locked` around `/api/ui-state`: workspace GET is read-only, PATCH uses one transaction, and WAL/schema initialization no longer runs on every request.
+
+Each browser tab now has its own backend `view_id`, so Files/SFTP, Disks and StreamCopy can remain open on separate tabs/monitors without navigation fights. A Commander view no longer auto-adopts an unrelated active job.
+
+SFTP directory copy now visibly reports remote-manifest preparation, and the background storage watcher no longer runs a full PowerShell disk inventory every few seconds.
+
+See [docs/RELEASE_0.8.6.md](docs/RELEASE_0.8.6.md).

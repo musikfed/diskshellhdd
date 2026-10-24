@@ -8,7 +8,13 @@ const MEDIA = [
   ['flash', 'USB flash / карта'],
 ]
 
+const ENDPOINT = [
+  ['local', 'Local volume'],
+  ['remote', 'SFTP'],
+]
+
 const TRANSPORT = [
+  ['network', 'Network / SFTP'],
   ['usb3', 'USB 3.x'],
   ['usb2', 'USB 2.0'],
   ['usb4', 'USB4 / Thunderbolt'],
@@ -50,6 +56,11 @@ function SelectField({ label, value, onChange, options, disabled = false }) {
 export default function StreamCopy({ health, setError, refreshHealth }) {
   const [sourcePath, setSourcePath] = useState(() => saved('sourcePath', 'H:\\'))
   const [destinationPath, setDestinationPath] = useState(() => saved('destinationPath', 'W:\\'))
+  const [sourceKind, setSourceKind] = useState(() => saved('sourceKind', 'local'))
+  const [destinationKind, setDestinationKind] = useState(() => saved('destinationKind', 'local'))
+  const [sourceConnectionId, setSourceConnectionId] = useState(() => saved('sourceConnectionId', ''))
+  const [destinationConnectionId, setDestinationConnectionId] = useState(() => saved('destinationConnectionId', ''))
+  const [connections, setConnections] = useState([])
   const [sourceMedia, setSourceMedia] = useState(() => saved('sourceMedia', 'hdd'))
   const [destinationMedia, setDestinationMedia] = useState(() => saved('destinationMedia', 'hdd'))
   const [sourceTransport, setSourceTransport] = useState(() => saved('sourceTransport', 'usb3'))
@@ -67,19 +78,22 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   const [restoringJob, setRestoringJob] = useState(true)
   const running = job && !TERMINAL.has(job.status)
 
+  const effectiveSourceTransport = sourceKind === 'remote' ? 'network' : sourceTransport
+  const effectiveDestinationTransport = destinationKind === 'remote' ? 'network' : destinationTransport
+
   const payload = useMemo(() => ({
     source_media: sourceMedia,
     destination_media: destinationMedia,
-    source_transport: sourceTransport,
-    destination_transport: destinationTransport,
+    source_transport: effectiveSourceTransport,
+    destination_transport: effectiveDestinationTransport,
     usb_topology: usbTopology,
     source_cache_mib: Number(sourceCacheMiB || 0),
     destination_cache_mib: Number(destinationCacheMiB || 0),
   }), [
     sourceMedia,
     destinationMedia,
-    sourceTransport,
-    destinationTransport,
+    effectiveSourceTransport,
+    effectiveDestinationTransport,
     usbTopology,
     sourceCacheMiB,
     destinationCacheMiB,
@@ -95,6 +109,8 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
       setJob(next)
       setSourcePath(next.source_path || sourcePath)
       setDestinationPath(next.destination_path || destinationPath)
+      setSourceKind(next.source_kind || 'local')
+      setDestinationKind(next.destination_kind || 'local')
       const nextProfile = next.profile || {}
       if (nextProfile.source_media) setSourceMedia(nextProfile.source_media)
       if (nextProfile.destination_media) setDestinationMedia(nextProfile.destination_media)
@@ -167,6 +183,32 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     return () => { stopped = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const refreshConnections = async () => {
+    try {
+      const value = await api('/api/commander/connections')
+      setConnections(
+        (value.connections || []).filter(item => item.protocol === 'sftp'),
+      )
+    } catch {
+      setConnections([])
+    }
+  }
+
+  useEffect(() => {
+    refreshConnections()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (job?.source_remote_identity) {
+      const match = connections.find(item => item.identity === job.source_remote_identity)
+      if (match) setSourceConnectionId(match.id)
+    }
+    if (job?.destination_remote_identity) {
+      const match = connections.find(item => item.identity === job.destination_remote_identity)
+      if (match) setDestinationConnectionId(match.id)
+    }
+  }, [connections, job?.source_remote_identity, job?.destination_remote_identity])
+
   useEffect(() => {
     if (!job?.id) return
     localStorage.setItem('streamcopy:lastJobId', job.id)
@@ -183,6 +225,10 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     for (const [key, value] of Object.entries({
       sourcePath,
       destinationPath,
+      sourceKind,
+      destinationKind,
+      sourceConnectionId,
+      destinationConnectionId,
       sourceMedia,
       destinationMedia,
       sourceTransport,
@@ -196,6 +242,10 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   }, [
     sourcePath,
     destinationPath,
+    sourceKind,
+    destinationKind,
+    sourceConnectionId,
+    destinationConnectionId,
     sourceMedia,
     destinationMedia,
     sourceTransport,
@@ -284,6 +334,10 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         body: JSON.stringify({
           source_path: sourcePath,
           destination_path: destinationPath,
+          source_kind: sourceKind,
+          destination_kind: destinationKind,
+          source_connection_id: sourceKind === 'remote' ? sourceConnectionId : null,
+          destination_connection_id: destinationKind === 'remote' ? destinationConnectionId : null,
           ...payload,
           verify_mode: deleteSourceAfterVerify ? 'sha256' : verifyMode,
           delete_source_after_verify: deleteSourceAfterVerify,
@@ -308,7 +362,9 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   }
 
   const percent = Number(job?.progress_percent || 0)
-  const bothUsbHdd = sourceMedia === 'hdd'
+  const bothUsbHdd = sourceKind === 'local'
+    && destinationKind === 'local'
+    && sourceMedia === 'hdd'
     && destinationMedia === 'hdd'
     && sourceTransport === 'usb3'
     && destinationTransport === 'usb3'
@@ -316,12 +372,13 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
   return <div className="streamcopy-page">
     <div className="streamcopy-hero">
       <div>
-        <span className="streamcopy-kicker">V2 EXPERIMENTAL · LOCAL RIVER ENGINE</span>
-        <h2>StreamCopy v2</h2>
+        <span className="streamcopy-kicker">V3 EXPERIMENTAL · LOCAL + SFTP RIVER</span>
+        <h2>StreamCopy Remote River</h2>
         <p>
           Папка рассматривается как один логический поток. Маленькие файлы объединяются
-          producer’ом в RAM frames, а крупные идут последовательным River Keeper path.
-          На destination всё равно создаются обычные отдельные файлы.
+          producer’ом в RAM frames локально, а крупные идут River Keeper path.
+          Для SFTP используется тот же persistent journal и SHA-256 checkpoints; credentials
+          остаются только в RAM connection profile.
         </p>
       </div>
       <div className="streamcopy-lock">
@@ -335,12 +392,28 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
     <div className="streamcopy-bands">
       <Band role="01 · SOURCE" title="Диск 1 / источник" tone="source">
         <div className="streamcopy-row path-row">
+          <SelectField label="Endpoint" value={sourceKind} onChange={setSourceKind} options={ENDPOINT} disabled={running} />
+          {sourceKind === 'remote' && <label>
+            <span>SFTP profile</span>
+            <select value={sourceConnectionId} onChange={e => setSourceConnectionId(e.target.value)} disabled={running}>
+              <option value="">Выбрать SFTP…</option>
+              {connections.map(item => <option key={item.id} value={item.id}>
+                {item.username}@{item.host}:{item.port} · {item.root}
+              </option>)}
+            </select>
+          </label>}
           <label className="grow">
-            <span>Главная папка или файл</span>
+            <span>{sourceKind === 'remote' ? 'Remote file / directory' : 'Главная папка или файл'}</span>
             <input value={sourcePath} onChange={e => setSourcePath(e.target.value)} disabled={running} />
           </label>
           <SelectField label="Тип носителя" value={sourceMedia} onChange={setSourceMedia} options={MEDIA} disabled={running} />
-          <SelectField label="Подключение" value={sourceTransport} onChange={setSourceTransport} options={TRANSPORT} disabled={running} />
+          <SelectField
+            label="Подключение"
+            value={effectiveSourceTransport}
+            onChange={setSourceTransport}
+            options={TRANSPORT}
+            disabled={running || sourceKind === 'remote'}
+          />
           <label>
             <span>Drive cache, MiB</span>
             <input type="number" min="0" max="1024" value={sourceCacheMiB} onChange={e => setSourceCacheMiB(e.target.value)} disabled={running} />
@@ -363,7 +436,9 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
           <SelectField label="Если оба через USB: topology" value={usbTopology} onChange={setUsbTopology} options={TOPOLOGY} disabled={running} />
           <p>{profile?.transport_note}</p>
           <p>{profile?.cache_note}</p>
+          <button onClick={refreshConnections} disabled={running}>↻ SFTP profiles</button>
         </div>
+        {profile?.remote_note && <div className="streamcopy-note">{profile.remote_note}</div>}
         <div className="streamcopy-row topology-row">
           <SelectField
             label="Проверка"
@@ -397,12 +472,28 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
 
       <Band role="03 · DESTINATION" title="Диск 2 / приёмник" tone="destination">
         <div className="streamcopy-row path-row">
+          <SelectField label="Endpoint" value={destinationKind} onChange={setDestinationKind} options={ENDPOINT} disabled={running} />
+          {destinationKind === 'remote' && <label>
+            <span>SFTP profile</span>
+            <select value={destinationConnectionId} onChange={e => setDestinationConnectionId(e.target.value)} disabled={running}>
+              <option value="">Выбрать SFTP…</option>
+              {connections.map(item => <option key={item.id} value={item.id}>
+                {item.username}@{item.host}:{item.port} · {item.root}
+              </option>)}
+            </select>
+          </label>}
           <label className="grow">
-            <span>Папка-приёмник</span>
+            <span>{destinationKind === 'remote' ? 'Remote destination directory' : 'Папка-приёмник'}</span>
             <input value={destinationPath} onChange={e => setDestinationPath(e.target.value)} disabled={running} />
           </label>
           <SelectField label="Тип носителя" value={destinationMedia} onChange={setDestinationMedia} options={MEDIA} disabled={running} />
-          <SelectField label="Подключение" value={destinationTransport} onChange={setDestinationTransport} options={TRANSPORT} disabled={running} />
+          <SelectField
+            label="Подключение"
+            value={effectiveDestinationTransport}
+            onChange={setDestinationTransport}
+            options={TRANSPORT}
+            disabled={running || destinationKind === 'remote'}
+          />
           <label>
             <span>Drive cache, MiB</span>
             <input type="number" min="0" max="1024" value={destinationCacheMiB} onChange={e => setDestinationCacheMiB(e.target.value)} disabled={running} />
@@ -441,7 +532,16 @@ export default function StreamCopy({ health, setError, refreshHealth }) {
         <div className="stream-actions">
           <button
             className="primary"
-            disabled={busy || restoringJob || running || !health?.safety?.file_writes || !sourcePath || !destinationPath}
+            disabled={
+              busy
+              || restoringJob
+              || running
+              || !health?.safety?.file_writes
+              || !sourcePath
+              || !destinationPath
+              || (sourceKind === 'remote' && !sourceConnectionId)
+              || (destinationKind === 'remote' && !destinationConnectionId)
+            }
             onClick={start}
           >
             🌊 Start StreamCopy

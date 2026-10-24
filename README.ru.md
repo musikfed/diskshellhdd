@@ -369,7 +369,7 @@ Unknown-LCN файлы остаются в стабильном исходном
 Подробнее: [docs/RELEASE_0.8.5.ru.md](docs/RELEASE_0.8.5.ru.md).
 
 
-## 0.8.7 · Multi-view workspace / SQLite hotfix
+## 0.8.6 · Multi-view workspace / SQLite hotfix
 
 Исправлен runtime `sqlite3.OperationalError: database is locked` вокруг `/api/ui-state`: workspace GET теперь read-only, PATCH выполняется одной транзакцией, WAL/schema init не повторяется на каждый запрос.
 
@@ -377,12 +377,12 @@ Unknown-LCN файлы остаются в стабильном исходном
 
 SFTP directory F5 теперь явно показывает фазу подготовки remote manifest, а background storage watcher больше не запускает полный PowerShell disk inventory каждые несколько секунд.
 
-Подробнее: [docs/RELEASE_0.8.7.ru.md](docs/RELEASE_0.8.7.ru.md).
+Подробнее: [docs/RELEASE_0.8.6.ru.md](docs/RELEASE_0.8.6.ru.md).
 
 
 ## 0.8.7 · Изоляция jobs по вкладкам и безопасные SFTP symlink
 
-Завершена изоляция нескольких вкладок, начатая в 0.8.6. Scan, Storage Planner, Diagnostics, Security и StreamCopy больше не делят transient job id через общий browser localStorage. Job id остаётся привязан к backend `view_id`, а новая вкладка больше не подхватывает чужую активную StreamCopy-задачу.
+Завершена изоляция нескольких вкладок, начатая в 0.8.6. Scan, Storage Planner, Diagnostics, Security, Vault и StreamCopy больше не делят transient job id через общий browser localStorage. Job id остаётся привязан к backend `view_id`, а новая вкладка больше не подхватывает чужую активную StreamCopy-задачу.
 
 SFTP tree operations теперь используют link-safe metadata и пропускают symbolic links при построении manifest. Recursive delete удаляет саму ссылку, а не проходит по ней в чужое дерево каталогов.
 

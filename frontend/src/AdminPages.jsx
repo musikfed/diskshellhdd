@@ -1736,10 +1736,9 @@ function CommanderInspector({ preview, archive, remoteOrigin }) {
 }
 
 export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceViewState = {}, patchViewState, viewId = 'default' }) {
-  const viewKey = name => `diskshell:view:${viewId}:${name}`
   const makePane = (side) => ({
     sourceType: 'local',
-    path: workspaceViewState[`file${side}Path`] || sessionStorage.getItem(viewKey(`file${side}Path`)) || 'F:\\',
+    path: workspaceViewState[`file${side}Path`] || sessionStorage.getItem(`diskshell:view:${viewId}:file${side}Path`) || 'F:\\',
     data: null,
     selected: null,
     selectedPaths: [],
@@ -1762,25 +1761,25 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
   const [left, setLeft] = useState(() => makePane('Left'))
   const [right, setRight] = useState(() => makePane('Right'))
   const [activeSide, setActiveSide] = useState(
-    () => (workspaceViewState.commanderActiveSide || sessionStorage.getItem(viewKey('commanderActiveSide'))) === 'right' ? 'right' : 'left',
+    () => (workspaceViewState.commanderActiveSide || sessionStorage.getItem(`diskshell:view:${viewId}:commanderActiveSide`)) === 'right' ? 'right' : 'left',
   )
   const [roots, setRoots] = useState([])
   const [connections, setConnections] = useState([])
   const [jobId, setJobId] = useState(
-    workspaceViewState.commanderJobId || sessionStorage.getItem(viewKey('commanderJobId')) || '',
+    workspaceViewState.commanderJobId || sessionStorage.getItem(`diskshell:view:${viewId}:commanderJobId`) || '',
   )
   const [job, setJob] = useState(null)
   const [smartTransfer, setSmartTransfer] = useState(
     () => workspaceViewState.commanderSmartFolders != null
       ? Boolean(workspaceViewState.commanderSmartFolders)
-      : sessionStorage.getItem(viewKey('commanderSmartFolders')) === '1',
+      : sessionStorage.getItem(`diskshell:view:${viewId}:commanderSmartFolders`) === '1',
   )
   const [smartHint, setSmartHint] = useState(null)
   const [preview, setPreview] = useState(null)
   const [archive, setArchive] = useState(null)
   const [remoteOrigin, setRemoteOrigin] = useState('')
   const [archiveFormat, setArchiveFormat] = useState(
-    () => workspaceViewState.commanderArchiveFormat || sessionStorage.getItem(viewKey('commanderArchiveFormat')) || 'zip',
+    () => workspaceViewState.commanderArchiveFormat || sessionStorage.getItem(`diskshell:view:${viewId}:commanderArchiveFormat`) || 'zip',
   )
   const [fileWrite, setFileWrite] = useState(null)
   const [pendingConflict, setPendingConflict] = useState(null)
@@ -1837,13 +1836,13 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
       if (side === 'left') {
         setLeft(next)
         if (next.sourceType === 'local') {
-          sessionStorage.setItem(viewKey('fileLeftPath'), data.path)
+          sessionStorage.setItem(`diskshell:view:${viewId}:fileLeftPath`, data.path)
           patchViewState?.({ fileLeftPath: data.path })
         }
       } else {
         setRight(next)
         if (next.sourceType === 'local') {
-          sessionStorage.setItem(viewKey('fileRightPath'), data.path)
+          sessionStorage.setItem(`diskshell:view:${viewId}:fileRightPath`, data.path)
           patchViewState?.({ fileRightPath: data.path })
         }
       }
@@ -1978,21 +1977,21 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
   }, [roots]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    sessionStorage.setItem(viewKey('commanderActiveSide'), activeSide)
+    sessionStorage.setItem(`diskshell:view:${viewId}:commanderActiveSide`, activeSide)
     patchViewState?.({ commanderActiveSide: activeSide })
   }, [activeSide, patchViewState])
   useEffect(() => {
-    sessionStorage.setItem(viewKey('commanderSmartFolders'), smartTransfer ? '1' : '0')
+    sessionStorage.setItem(`diskshell:view:${viewId}:commanderSmartFolders`, smartTransfer ? '1' : '0')
     patchViewState?.({ commanderSmartFolders: smartTransfer })
   }, [smartTransfer, patchViewState])
   useEffect(() => {
-    sessionStorage.setItem(viewKey('commanderArchiveFormat'), archiveFormat)
+    sessionStorage.setItem(`diskshell:view:${viewId}:commanderArchiveFormat`, archiveFormat)
     patchViewState?.({ commanderArchiveFormat: archiveFormat })
   }, [archiveFormat, patchViewState])
 
   useEffect(() => {
     if (!jobId) return undefined
-    sessionStorage.setItem(viewKey('commanderJobId'), jobId)
+    sessionStorage.setItem(`diskshell:view:${viewId}:commanderJobId`, jobId)
     patchViewState?.({ commanderJobId: jobId })
     let stopped = false
     const poll = async () => {
@@ -2001,14 +2000,14 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
         if (stopped) return
         setJob(next)
         if (terminal.has(next.status)) {
-          sessionStorage.removeItem(viewKey('commanderJobId'))
+          sessionStorage.removeItem(`diskshell:view:${viewId}:commanderJobId`)
           patchViewState?.({ commanderJobId: null })
           setJobId('')
           await Promise.all([load('left', left.path), load('right', right.path)])
         }
       } catch (e) {
         if (!stopped) {
-          sessionStorage.removeItem(viewKey('commanderJobId'))
+          sessionStorage.removeItem(`diskshell:view:${viewId}:commanderJobId`)
           patchViewState?.({ commanderJobId: null })
           setJobId('')
           setError(e.message)

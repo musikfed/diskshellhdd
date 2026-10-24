@@ -106,14 +106,8 @@ def test_subject_reanalysis_replaces_same_model_tags(tmp_path, monkeypatch):
     assert len(subjects.search_subjects(scan_id, "new")) == 2
 
 
-def test_subject_capabilities_are_local_only(monkeypatch, tmp_path):
-    model = tmp_path / "classifier.onnx"
-    labels = tmp_path / "labels.txt"
-    model.write_bytes(b"model")
-    labels.write_text("cat\ndog\n", encoding="utf-8")
-    monkeypatch.setattr(subjects.settings, "image_classifier_model", str(model))
-    monkeypatch.setattr(subjects.settings, "image_classifier_labels", str(labels))
-
+def test_subject_capabilities_are_local_only():
     caps = subjects.capabilities()
     assert caps["cloud"] is False
     assert caps["mode"] == "whole_image_classification"
+    assert caps["engine"] == "ONNX whole-image subject/object tagger"

@@ -73,6 +73,10 @@ function Safety({ health }) {
   </div>
 }
 
+function viewCacheKey(viewId, name) {
+  return `diskshell:view:${viewId}:${name}`
+}
+
 function createViewId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -95,7 +99,6 @@ export default function App() {
     }
     return value
   })
-  const cacheKey = name => `diskshell:view:${viewId}:${name}`
   const [page, setPage] = useState(detached ? requestedView : 'dashboard')
   const [workspaceReady, setWorkspaceReady] = useState(false)
   const [restoreNotice, setRestoreNotice] = useState('')
@@ -139,22 +142,22 @@ export default function App() {
         setActiveVolume(String(state.active_volume || ''))
         setScanId(String(state.scan_id || ''))
         setWorkspaceViewState(state.view_state || {})
-        sessionStorage.setItem(cacheKey('viewState'), JSON.stringify(state.view_state || {}))
+        sessionStorage.setItem(viewCacheKey(viewId, 'viewState'), JSON.stringify(state.view_state || {}))
         setRestoreNotice(`↩ Восстановлено: ${NAV.find(item => item[0] === nextPage)?.[2] || nextPage}`)
         timer = setTimeout(() => {
           if (!stopped) setRestoreNotice('')
         }, 5000)
       } catch {
         if (stopped) return
-        const cachedPage = sessionStorage.getItem(cacheKey('activePage'))
+        const cachedPage = sessionStorage.getItem(viewCacheKey(viewId, 'activePage'))
         setPage(detached
           ? requestedView
           : NAV.some(([id]) => id === cachedPage) ? cachedPage : 'dashboard')
-        setActiveVolume(sessionStorage.getItem(cacheKey('activeVolume')) || '')
-        setScanId(sessionStorage.getItem(cacheKey('scanId')) || '')
+        setActiveVolume(sessionStorage.getItem(viewCacheKey(viewId, 'activeVolume')) || '')
+        setScanId(sessionStorage.getItem(viewCacheKey(viewId, 'scanId')) || '')
         try {
           setWorkspaceViewState(JSON.parse(
-            sessionStorage.getItem(cacheKey('viewState')) || '{}',
+            sessionStorage.getItem(viewCacheKey(viewId, 'viewState')) || '{}',
           ))
         } catch {
           setWorkspaceViewState({})
@@ -197,7 +200,7 @@ export default function App() {
   }, [])
   useEffect(() => {
     if (!workspaceReady) return
-    sessionStorage.setItem(cacheKey('activePage'), page)
+    sessionStorage.setItem(viewCacheKey(viewId, 'activePage'), page)
     setError('')
     api('/api/ui-state', {
       method: 'PATCH',
@@ -238,14 +241,14 @@ export default function App() {
 
   useEffect(() => {
     const key = `pageScroll:${page}`
-    const fallback = Number(sessionStorage.getItem(cacheKey(key)) || 0)
+    const fallback = Number(sessionStorage.getItem(viewCacheKey(viewId, key)) || 0)
     const saved = Number(workspaceViewState[key] ?? fallback)
     const restore = requestAnimationFrame(() => {
       window.scrollTo(0, Number.isFinite(saved) ? saved : 0)
     })
     const save = () => {
       const value = Math.round(window.scrollY)
-      sessionStorage.setItem(cacheKey(key), String(value))
+      sessionStorage.setItem(viewCacheKey(viewId, key), String(value))
       patchViewState({ [key]: value })
     }
     return () => {
@@ -255,8 +258,8 @@ export default function App() {
   }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!workspaceReady) return
-    if (activeVolume) sessionStorage.setItem(cacheKey('activeVolume'), activeVolume)
-    else sessionStorage.removeItem(cacheKey('activeVolume'))
+    if (activeVolume) sessionStorage.setItem(viewCacheKey(viewId, 'activeVolume'), activeVolume)
+    else sessionStorage.removeItem(viewCacheKey(viewId, 'activeVolume'))
     api('/api/ui-state', {
       method: 'PATCH',
       body: JSON.stringify({
@@ -269,8 +272,8 @@ export default function App() {
   }, [activeVolume, workspaceReady, viewId, detached])
   useEffect(() => {
     if (!workspaceReady) return
-    if (scanId) sessionStorage.setItem(cacheKey('scanId'), scanId)
-    else sessionStorage.removeItem(cacheKey('scanId'))
+    if (scanId) sessionStorage.setItem(viewCacheKey(viewId, 'scanId'), scanId)
+    else sessionStorage.removeItem(viewCacheKey(viewId, 'scanId'))
     api('/api/ui-state', {
       method: 'PATCH',
       body: JSON.stringify({

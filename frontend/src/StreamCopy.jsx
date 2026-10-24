@@ -155,44 +155,15 @@ export default function StreamCopy({ health, setError, refreshHealth, viewId, wo
         }
       }
 
-      if (!recovered) {
-        try {
-          const value = await api('/api/streamcopy/jobs?active=1&limit=1')
-          recovered = Array.isArray(value.jobs) ? value.jobs[0] : null
-        } catch (e) {
-          if (!stopped) setError(e.message)
-        }
-      }
-
       if (recovered) {
         sessionStorage.setItem(streamKey(viewId, 'activeJobId'), recovered.id)
         sessionStorage.setItem(streamKey(viewId, 'lastJobId'), recovered.id)
         adopt(recovered)
       } else {
+        // Do not adopt an arbitrary backend job from another browser view.
+        // A view reconnects only to the job id persisted for this view.
         sessionStorage.removeItem(streamKey(viewId, 'activeJobId'))
-        const lastJobId = sessionStorage.getItem(streamKey(viewId, 'lastJobId'))
-        if (lastJobId) {
-          try {
-            recovered = await api(`/api/streamcopy/jobs/${lastJobId}`)
-          } catch (e) {
-            if (e.status === 404) sessionStorage.removeItem(streamKey(viewId, 'lastJobId'))
-            else if (!stopped) setError(e.message)
-          }
-        }
-
-        if (!recovered) {
-          try {
-            const value = await api('/api/streamcopy/jobs?limit=1')
-            recovered = Array.isArray(value.jobs) ? value.jobs[0] : null
-          } catch (e) {
-            if (!stopped) setError(e.message)
-          }
-        }
-
-        if (recovered) {
-          sessionStorage.setItem(streamKey(viewId, 'lastJobId'), recovered.id)
-          adopt(recovered)
-        }
+        patchViewState?.({ streamcopyJobId: null })
       }
 
       if (!stopped) setRestoringJob(false)
@@ -282,6 +253,8 @@ export default function StreamCopy({ health, setError, refreshHealth, viewId, wo
     orderingMode,
     verifyMode,
     deleteSourceAfterVerify,
+    viewId,
+    patchViewState,
   ])
 
   useEffect(() => {

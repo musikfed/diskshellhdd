@@ -21,6 +21,7 @@ from backend.api.streamcopy import bp as streamcopy_bp
 from backend.api.ui_state import bp as ui_state_bp
 from backend.api.vault import bp as vault_bp
 from backend.config import settings
+from backend.commander.jobs import start_commander_recovery_manager
 from backend.core.database import init_database
 from backend.core.logging_setup import configure_logging, get_logger, log_event
 from backend.core.storage_watch import start_storage_event_watcher
@@ -30,7 +31,7 @@ from backend.streamcopy.jobs import start_streamcopy_recovery_manager
 from backend.vault.service import vault_write_state
 
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 
 
 def create_app() -> Flask:
@@ -148,6 +149,7 @@ def main() -> None:
     init_database()
     ensure_defaults()
     start_streamcopy_recovery_manager()
+    start_commander_recovery_manager()
     start_storage_event_watcher()
     log_event(
         "backend.started",

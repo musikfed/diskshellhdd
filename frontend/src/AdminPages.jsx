@@ -1758,7 +1758,9 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
   )
   const [roots, setRoots] = useState([])
   const [connections, setConnections] = useState([])
-  const [jobId, setJobId] = useState(localStorage.getItem('commanderJobId') || '')
+  const [jobId, setJobId] = useState(
+    workspaceViewState.commanderJobId || localStorage.getItem('commanderJobId') || '',
+  )
   const [job, setJob] = useState(null)
   const [smartTransfer, setSmartTransfer] = useState(
     () => workspaceViewState.commanderSmartFolders != null
@@ -1938,6 +1940,17 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
     refreshMeta()
     load('left', left.path)
     load('right', right.path)
+    if (!jobId) {
+      api('/api/commander/jobs?active=1&limit=1')
+        .then(value => {
+          const active = Array.isArray(value.jobs) ? value.jobs[0] : null
+          if (active?.id) {
+            setJob(active)
+            setJobId(active.id)
+          }
+        })
+        .catch(() => {})
+    }
     const timer = setInterval(refreshMeta, 3000)
     return () => clearInterval(timer)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1970,6 +1983,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
   useEffect(() => {
     if (!jobId) return undefined
     localStorage.setItem('commanderJobId', jobId)
+    patchViewState?.({ commanderJobId: jobId })
     let stopped = false
     const poll = async () => {
       try {
@@ -1978,12 +1992,14 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
         setJob(next)
         if (terminal.has(next.status)) {
           localStorage.removeItem('commanderJobId')
+          patchViewState?.({ commanderJobId: null })
           setJobId('')
           await Promise.all([load('left', left.path), load('right', right.path)])
         }
       } catch (e) {
         if (!stopped) {
           localStorage.removeItem('commanderJobId')
+          patchViewState?.({ commanderJobId: null })
           setJobId('')
           setError(e.message)
         }

@@ -198,6 +198,7 @@ class RemoteEntry:
     is_dir: bool
     size: int
     modified_ns: int | None = None
+    is_symlink: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -206,6 +207,7 @@ class RemoteEntry:
             "is_dir": self.is_dir,
             "size": self.size,
             "modified_ns": self.modified_ns,
+            "is_symlink": self.is_symlink,
         }
 
 
@@ -396,6 +398,7 @@ class SFTPSession(RemoteSession):
         for attr in attributes:
             child = posixpath.join(normalized, attr.filename)
             is_dir = statmod.S_ISDIR(attr.st_mode)
+            is_symlink = statmod.S_ISLNK(attr.st_mode)
             mtime = getattr(attr, "st_mtime", None)
             items.append(
                 RemoteEntry(
@@ -404,6 +407,7 @@ class SFTPSession(RemoteSession):
                     is_dir,
                     0 if is_dir else int(getattr(attr, "st_size", 0) or 0),
                     int(mtime * 1_000_000_000) if mtime else None,
+                    is_symlink,
                 )
             )
         items.sort(key=lambda row: (not row.is_dir, row.name.casefold()))

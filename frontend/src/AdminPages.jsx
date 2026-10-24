@@ -1735,10 +1735,11 @@ function CommanderInspector({ preview, archive, remoteOrigin }) {
   </Panel>
 }
 
-export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceViewState = {}, patchViewState }) {
+export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceViewState = {}, patchViewState, viewId = 'default' }) {
+  const viewKey = name => `diskshell:view:${viewId}:${name}`
   const makePane = (side) => ({
     sourceType: 'local',
-    path: workspaceViewState[`file${side}Path`] || localStorage.getItem(`file${side}Path`) || 'F:\\',
+    path: workspaceViewState[`file${side}Path`] || sessionStorage.getItem(viewKey(`file${side}Path`)) || 'F:\\',
     data: null,
     selected: null,
     selectedPaths: [],
@@ -1761,28 +1762,30 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
   const [left, setLeft] = useState(() => makePane('Left'))
   const [right, setRight] = useState(() => makePane('Right'))
   const [activeSide, setActiveSide] = useState(
-    () => (workspaceViewState.commanderActiveSide || localStorage.getItem('commanderActiveSide')) === 'right' ? 'right' : 'left',
+    () => (workspaceViewState.commanderActiveSide || sessionStorage.getItem(viewKey('commanderActiveSide'))) === 'right' ? 'right' : 'left',
   )
   const [roots, setRoots] = useState([])
   const [connections, setConnections] = useState([])
   const [jobId, setJobId] = useState(
-    workspaceViewState.commanderJobId || localStorage.getItem('commanderJobId') || '',
+    workspaceViewState.commanderJobId || sessionStorage.getItem(viewKey('commanderJobId')) || '',
   )
   const [job, setJob] = useState(null)
   const [smartTransfer, setSmartTransfer] = useState(
     () => workspaceViewState.commanderSmartFolders != null
       ? Boolean(workspaceViewState.commanderSmartFolders)
-      : localStorage.getItem('commanderSmartFolders') === '1',
+      : sessionStorage.getItem(viewKey('commanderSmartFolders')) === '1',
   )
   const [smartHint, setSmartHint] = useState(null)
   const [preview, setPreview] = useState(null)
   const [archive, setArchive] = useState(null)
   const [remoteOrigin, setRemoteOrigin] = useState('')
   const [archiveFormat, setArchiveFormat] = useState(
-    () => workspaceViewState.commanderArchiveFormat || localStorage.getItem('commanderArchiveFormat') || 'zip',
+    () => workspaceViewState.commanderArchiveFormat || sessionStorage.getItem(viewKey('commanderArchiveFormat')) || 'zip',
   )
   const [fileWrite, setFileWrite] = useState(null)
   const [pendingConflict, setPendingConflict] = useState(null)
+  const [transferPreparing, setTransferPreparing] = useState(false)
+  const [transferPreparingLabel, setTransferPreparingLabel] = useState('')
 
   const terminal = useMemo(() => new Set(['completed', 'failed', 'cancelled']), [])
   const activePane = activeSide === 'left' ? left : right
@@ -1834,13 +1837,13 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
       if (side === 'left') {
         setLeft(next)
         if (next.sourceType === 'local') {
-          localStorage.setItem('fileLeftPath', data.path)
+          sessionStorage.setItem(viewKey('fileLeftPath'), data.path)
           patchViewState?.({ fileLeftPath: data.path })
         }
       } else {
         setRight(next)
         if (next.sourceType === 'local') {
-          localStorage.setItem('fileRightPath', data.path)
+          sessionStorage.setItem(viewKey('fileRightPath'), data.path)
           patchViewState?.({ fileRightPath: data.path })
         }
       }
@@ -1975,21 +1978,21 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
   }, [roots]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    localStorage.setItem('commanderActiveSide', activeSide)
+    sessionStorage.setItem(viewKey('commanderActiveSide'), activeSide)
     patchViewState?.({ commanderActiveSide: activeSide })
   }, [activeSide, patchViewState])
   useEffect(() => {
-    localStorage.setItem('commanderSmartFolders', smartTransfer ? '1' : '0')
+    sessionStorage.setItem(viewKey('commanderSmartFolders'), smartTransfer ? '1' : '0')
     patchViewState?.({ commanderSmartFolders: smartTransfer })
   }, [smartTransfer, patchViewState])
   useEffect(() => {
-    localStorage.setItem('commanderArchiveFormat', archiveFormat)
+    sessionStorage.setItem(viewKey('commanderArchiveFormat'), archiveFormat)
     patchViewState?.({ commanderArchiveFormat: archiveFormat })
   }, [archiveFormat, patchViewState])
 
   useEffect(() => {
     if (!jobId) return undefined
-    localStorage.setItem('commanderJobId', jobId)
+    sessionStorage.setItem(viewKey('commanderJobId'), jobId)
     patchViewState?.({ commanderJobId: jobId })
     let stopped = false
     const poll = async () => {
@@ -1998,14 +2001,14 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
         if (stopped) return
         setJob(next)
         if (terminal.has(next.status)) {
-          localStorage.removeItem('commanderJobId')
+          sessionStorage.removeItem(viewKey('commanderJobId'))
           patchViewState?.({ commanderJobId: null })
           setJobId('')
           await Promise.all([load('left', left.path), load('right', right.path)])
         }
       } catch (e) {
         if (!stopped) {
-          localStorage.removeItem('commanderJobId')
+          sessionStorage.removeItem(viewKey('commanderJobId'))
           patchViewState?.({ commanderJobId: null })
           setJobId('')
           setError(e.message)
@@ -2070,6 +2073,13 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
   }
 
   async function submitTransferRequest(request, conflictPolicy = 'ask') {
+    const remoteSource = (request.transfers || []).some(item => item.source?.kind === 'remote')
+    setTransferPreparing(true)
+    setTransferPreparingLabel(
+      remoteSource
+        ? 'SFTP: строю manifest удалённого дерева и проверяю destination…'
+        : 'Готовлю persistent Commander job…',
+    )
     try {
       const value = await api('/api/commander/jobs', {
         method: 'POST',
@@ -2088,6 +2098,9 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
         return null
       }
       throw e
+    } finally {
+      setTransferPreparing(false)
+      setTransferPreparingLabel('')
     }
   }
 
@@ -2354,7 +2367,7 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
     } catch (e) { setError(e.message) }
   }
 
-  const busy = Boolean(jobId && job && !terminal.has(job.status))
+  const busy = transferPreparing || Boolean(jobId && job && !terminal.has(job.status))
   const fileWritesAllowed = Boolean(fileWrite?.allowed)
   const leftSelection = paneSelectedItems(left)
   const rightSelection = paneSelectedItems(right)
@@ -2550,7 +2563,12 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
     </Panel>}
 
     <Panel title="Commander transfer job">
-      {!job && <p className="muted">F5/F6 use one batch background job for all selected local/SFTP/FTP items. Stop keeps the incomplete target so it can be continued later; already completed batch items remain complete.</p>}
+      {transferPreparing && <div className="warning">
+        <b>Preparing transfer…</b>
+        <span>{transferPreparingLabel}</span>
+        <small>Для remote directory F5 сначала один раз читает дерево по SFTP. После создания job копирование уже принадлежит backend и не зависит от этой вкладки.</small>
+      </div>}
+      {!job && !transferPreparing && <p className="muted">F5/F6 use one batch background job for all selected local/SFTP/FTP items. Stop keeps the incomplete target so it can be continued later; already completed batch items remain complete.</p>}
       {job && <>
         <div className="metrics">
           <Metric label="Operation" value={job.operation} />

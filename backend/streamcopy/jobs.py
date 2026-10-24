@@ -28,6 +28,8 @@ ENDPOINT_RECHECK_SECONDS = 3.0
 LEASE_SECONDS = 15.0
 LEASE_HEARTBEAT_SECONDS = 3.0
 RECOVERY_POLL_SECONDS = 3.0
+MICRO_FILE_MAX_BYTES = 1 * 1024 * 1024
+MICRO_BATCH_MAX_FILES = 512
 
 _INSTANCE_ID = uuid.uuid4().hex
 _lock = threading.RLock()
@@ -140,7 +142,16 @@ def stream_profile(
             else "Drive cache sizes were not provided."
         ),
         "transport_note": transport_note,
-        "ordering": "persistent manifest / sequential items / one producer + one consumer",
+        "ordering": (
+            "persistent manifest / microfile frames in manifest order / "
+            "large files sequential"
+        ),
+        "microfile_batching": True,
+        "microfile_max_bytes": MICRO_FILE_MAX_BYTES,
+        "microfile_max_mib": MICRO_FILE_MAX_BYTES / (1024 * 1024),
+        "micro_frame_bytes": chunk_mib * 1024 * 1024,
+        "micro_frame_mib": chunk_mib,
+        "micro_batch_max_files": MICRO_BATCH_MAX_FILES,
         "checkpoint_mib": CHECKPOINT_BYTES // (1024 * 1024),
         "experimental": True,
     }
@@ -787,6 +798,174 @@ def _copy_item(
             raise
 
 
+def _copy_micro_batch(
+    job_id: str,
+    batch: list[dict[str, Any]],
+    cancel: threading.Event,
+    lease_lost: threading.Event,
+) -> None:
+    if len(batch) < 2:
+        for item in batch:
+            _copy_item(job_id, item, cancel, lease_lost)
+        return
+
+    job = _load_job(job_id)
+    frame_bytes = int(job["profile"].get("micro_frame_bytes") or job["profile"]["chunk_bytes"])
+    frame_queue: queue.Queue[tuple[str, Any]] = queue.Queue(
+        maxsize=int(job["profile"]["queue_depth"])
+    )
+    producer_stop = threading.Event()
+    producer_error: list[BaseException] = []
+
+    def put_frame(frame: list[tuple[dict[str, Any], bytes]]) -> None:
+        while not producer_stop.is_set():
+            try:
+                frame_queue.put(("frame", frame), timeout=0.2)
+                return
+            except queue.Full:
+                _control_check(cancel, lease_lost)
+
+    def producer() -> None:
+        frame: list[tuple[dict[str, Any], bytes]] = []
+        frame_size = 0
+        try:
+            for original in batch:
+                _control_check(cancel, lease_lost)
+                item = journal.get_item(job_id, int(original["item_index"]))
+                if item["status"] != "pending":
+                    continue
+                source = Path(item["source_path"])
+                if not _source_stat_matches(item):
+                    raise StreamCopySourceChanged(f"Source changed: {source}")
+                with source.open("rb", buffering=0) as source_stream:
+                    data = source_stream.read()
+                if len(data) != int(item["size"]):
+                    raise OSError(
+                        f"Microfile read length mismatch for {source}: "
+                        f"expected {item['size']}, got {len(data)}"
+                    )
+                if frame and frame_size + len(data) > frame_bytes:
+                    put_frame(frame)
+                    frame = []
+                    frame_size = 0
+                frame.append((item, data))
+                frame_size += len(data)
+            if frame:
+                put_frame(frame)
+        except BaseException as exc:  # noqa: BLE001
+            producer_error.append(exc)
+        finally:
+            while not producer_stop.is_set():
+                try:
+                    frame_queue.put(("done", None), timeout=0.2)
+                    break
+                except queue.Full:
+                    continue
+
+    thread = threading.Thread(
+        target=producer,
+        daemon=True,
+        name=f"streamcopy-micro-producer-{job_id[:8]}",
+    )
+    thread.start()
+
+    consumed_frames = 0
+    try:
+        while True:
+            _control_check(cancel, lease_lost)
+            try:
+                kind, payload = frame_queue.get(timeout=0.5)
+            except queue.Empty:
+                if thread.is_alive():
+                    continue
+                kind, payload = ("done", None)
+            if kind == "done":
+                break
+            consumed_frames += 1
+            for item, data in payload:
+                _control_check(cancel, lease_lost)
+                item_index = int(item["item_index"])
+                current = journal.get_item(job_id, item_index)
+                if current["status"] in {"completed", "skipped"}:
+                    continue
+
+                source = Path(current["source_path"])
+                target = Path(current["target_path"])
+                partial = Path(current["partial_path"])
+                if target.exists() or partial.exists():
+                    raise OSError(
+                        f"Microbatch encountered existing target/partial: {target}"
+                    )
+
+                target.parent.mkdir(parents=True, exist_ok=True)
+                journal.update_item(job_id, item_index, status="in_progress", error=None)
+                _persist_job(
+                    job_id,
+                    status="running",
+                    current_item_index=item_index,
+                    current_path=str(source),
+                    error=None,
+                )
+
+                with partial.open("xb", buffering=0) as destination_stream:
+                    written = destination_stream.write(data)
+                    if written != len(data):
+                        raise OSError(
+                            f"Short microfile write: expected {len(data)}, wrote {written}"
+                        )
+                    destination_stream.flush()
+                    os.fsync(destination_stream.fileno())
+
+                summary = journal.summarize_items(job_id)
+                _progress_ram(
+                    job_id,
+                    int(summary["completed_bytes"]),
+                    len(data),
+                    str(source),
+                )
+                _publish_completed_item(
+                    job_id,
+                    current,
+                    _load_job(job_id),
+                    source=source,
+                    target=target,
+                    partial=partial,
+                )
+    finally:
+        producer_stop.set()
+        thread.join(timeout=3)
+
+    if producer_error:
+        raise producer_error[0]
+
+    log_event(
+        "streamcopy.microbatch",
+        job_id=job_id,
+        files=len(batch),
+        frames=consumed_frames,
+        frame_bytes=frame_bytes,
+    )
+
+
+def _micro_batch_candidates(
+    job_id: str,
+    items: list[dict[str, Any]],
+    start: int,
+    threshold: int,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in items[start : start + MICRO_BATCH_MAX_FILES]:
+        current = journal.get_item(job_id, int(item["item_index"]))
+        if current["status"] != "pending":
+            break
+        if int(current["size"]) > int(threshold):
+            break
+        if Path(current["target_path"]).exists() or Path(current["partial_path"]).exists():
+            break
+        result.append(current)
+    return result
+
+
 def _cleanup_deleted_source_tree(job: dict[str, Any]) -> None:
     if not job.get("delete_source_after_verify"):
         return
@@ -858,9 +1037,39 @@ def _run_job(job_id: str) -> None:
                     raise
 
         _persist_job(job_id, status="recovering", error=None)
-        for item in items:
+        index = 0
+        threshold = int(
+            _load_job(job_id)["profile"].get("microfile_max_bytes")
+            or MICRO_FILE_MAX_BYTES
+        )
+        while index < len(items):
             _control_check(cancel, lease_lost)
-            _copy_item(job_id, item, cancel, lease_lost)
+            current = journal.get_item(job_id, int(items[index]["item_index"]))
+            batch = _micro_batch_candidates(job_id, items, index, threshold)
+            if len(batch) >= 2:
+                try:
+                    _copy_micro_batch(job_id, batch, cancel, lease_lost)
+                except (StreamCopyCancelled, StreamCopyLeaseLost):
+                    raise
+                except BaseException as exc:  # noqa: BLE001
+                    current_job = _load_job(job_id)
+                    if any(
+                        not state["available"]
+                        for state in _endpoint_states(current_job)
+                    ):
+                        _wait_for_endpoints(job_id, cancel, lease_lost)
+                    log_warning(
+                        "streamcopy.microbatch_fallback",
+                        job_id=job_id,
+                        files=len(batch),
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    for item in batch:
+                        _copy_item(job_id, item, cancel, lease_lost)
+                index += len(batch)
+                continue
+            _copy_item(job_id, current, cancel, lease_lost)
+            index += 1
 
         job = _load_job(job_id)
         _cleanup_deleted_source_tree(job)

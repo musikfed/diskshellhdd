@@ -972,6 +972,7 @@ def start_commander_batch_job(
             else "commander_transfer"
         ),
         "operation": op,
+        "status": "queued",
         "source": _public_endpoint(first["source"]),
         "destination": _public_endpoint(first["destination"]),
         "transfers": [

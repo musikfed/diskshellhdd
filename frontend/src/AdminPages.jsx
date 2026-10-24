@@ -1949,17 +1949,9 @@ export function FilesAdmin({ health, scanId, setError, refreshHealth, workspaceV
     refreshMeta()
     load('left', left.path)
     load('right', right.path)
-    if (!jobId) {
-      api('/api/commander/jobs?active=1&limit=1')
-        .then(value => {
-          const active = Array.isArray(value.jobs) ? value.jobs[0] : null
-          if (active?.id) {
-            setJob(active)
-            setJobId(active.id)
-          }
-        })
-        .catch(() => {})
-    }
+    // Do not auto-adopt an unrelated active Commander job here.
+    // Each browser view restores only its own persisted commanderJobId.
+    // Other backend jobs keep running independently and must not make this view busy.
     const timer = setInterval(refreshMeta, 3000)
     return () => clearInterval(timer)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps

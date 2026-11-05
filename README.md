@@ -308,4 +308,3 @@ See [docs/RELEASE_0.8.7.md](docs/RELEASE_0.8.7.md).
 
 [**Architecture, translations and contact**](docs/showcase/README.md)
 
-![diskshellhdd workflow](docs/showcase/overview.svg)

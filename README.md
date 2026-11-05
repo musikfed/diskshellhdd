@@ -302,3 +302,10 @@ SFTP tree operations now use link-safe metadata and skip symbolic links while wa
 Obsolete global browser-state persistence for these admin jobs was removed; per-view session cache remains only as a fallback to backend workspace state.
 
 See [docs/RELEASE_0.8.7.md](docs/RELEASE_0.8.7.md).
+
+
+## Project showcase · Презентация · 11 languages
+
+[**Architecture, translations and contact**](docs/showcase/README.md)
+
+![diskshellhdd workflow](docs/showcase/overview.svg)

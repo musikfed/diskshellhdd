@@ -1,0 +1,49 @@
+name: Real frontend build and UI screenshot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - frontend/**
+      - .github/workflows/real-ui-preview.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  capture-source-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Compile the actual React/Vite frontend
+        working-directory: frontend
+        run: |
+          npm install --no-audit --no-fund
+          npm run build -- --base=/
+      - name: Install actual browser for screenshot
+        run: |
+          npx --yes playwright@1.58.2 install --with-deps chromium
+      - name: Render compiled frontend without backend or credentials
+        run: |
+          mkdir -p docs/screenshots
+          (cd frontend && npm run preview -- --host 127.0.0.1 --port 4173) > /tmp/diskshell-preview.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4173/ >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:4173/ >/dev/null
+          npx --yes playwright@1.58.2 screenshot --browser chromium --viewport-size="1440,900" --wait-for-timeout=3000 http://127.0.0.1:4173/ docs/screenshots/frontend-code-preview.png
+      - name: Save only generated screenshot (no private data)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots/frontend-code-preview.png
+          if ! git diff --cached --quiet; then
+            git commit -m "docs(ui): capture actual compiled DiskShell frontend without backend"
+            git push
+          fi
